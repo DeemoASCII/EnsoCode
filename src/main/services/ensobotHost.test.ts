@@ -325,6 +325,48 @@ describe('ensobot host', () => {
       sessionId: 'session-1',
     });
   });
+
+  it('群里的话马上记在房间里，没点名就不叫醒', async () => {
+    const { host, calls } = harness({ ready: false });
+    const created = await host.createRoom({ name: '小队', memberIds: [A, B] });
+    expect(created.ok).toBe(true);
+    const sent = await host.postRoom({
+      roomId: created.roomId ?? '',
+      text: '大家看看',
+      deliveryId: 'r1',
+    });
+    expect(sent).toMatchObject({ ok: true, disposition: 'silent' });
+    expect(host.snapshot().roomMessages.map((message) => message.text)).toEqual(['大家看看']);
+    expect(calls.filter((call) => call.startsWith('prompt:') || call.startsWith('steer:'))).toEqual(
+      []
+    );
+  });
+
+  it('群里点名才叫醒那一个人，回话出现在房间里，不写进私聊', async () => {
+    const { host, calls, sessionId } = harness();
+    const created = await host.createRoom({ name: '小队', memberIds: [A, B] });
+    const sent = await host.postRoom({
+      roomId: created.roomId ?? '',
+      text: '@北北 看一下',
+      deliveryId: 'r2',
+    });
+    expect(sent.ok).toBe(true);
+    expect(host.snapshot().roomMessages[0]?.mentions).toEqual([B]);
+    expect(host.snapshot().bubbles).toEqual([]);
+    const prompts = calls.filter((call) => call.startsWith('prompt:') || call.startsWith('steer:'));
+    expect(prompts).toHaveLength(1);
+    expect(prompts[0]).toContain('不是用户本人');
+    host.observe({
+      type: 'ensobot-bubble',
+      identity: { sessionId: sessionId() },
+      text: '我看了',
+      deliveryId: 'speak-1',
+    });
+    const room = host.snapshot().roomMessages;
+    expect(room.map((message) => message.text)).toEqual(['@北北 看一下', '我看了']);
+    expect(room[1]?.authorKind).toBe('bot');
+    expect(host.snapshot().board.some((note) => note.text === '我看了')).toBe(false);
+  });
 });
 
 function harnessDeps(): EnsobotHostDeps {

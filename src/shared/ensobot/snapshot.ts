@@ -1,4 +1,6 @@
+import type { CircleCrop } from '../characterCard';
 import type { EnsobotTask } from './queue';
+import type { EnsobotRoom } from './rooms';
 
 export interface EnsobotBubble {
   seq: number;
@@ -34,6 +36,19 @@ export interface EnsobotCardFace {
   coordinator: boolean;
   bare: boolean;
   previewUrl: string;
+  width: number;
+  height: number;
+  crop: CircleCrop | null;
+}
+
+export interface EnsobotRoomMessage {
+  seq: number;
+  roomId: string;
+  deliveryId: string;
+  authorId: string;
+  authorKind: 'human' | 'bot';
+  text: string;
+  mentions: string[];
 }
 
 export interface EnsobotSnapshot {
@@ -41,6 +56,8 @@ export interface EnsobotSnapshot {
   cards: EnsobotCardFace[];
   bubbles: EnsobotBubble[];
   board: EnsobotBoardNote[];
+  groups: EnsobotRoom[];
+  roomMessages: EnsobotRoomMessage[];
   tasks: EnsobotTask[];
   workspace: EnsobotWorkspaceView;
   notices: EnsobotNotice[];
@@ -50,6 +67,7 @@ export interface EnsobotActionResult {
   ok: boolean;
   error?: string;
   disposition?: string;
+  roomId?: string;
 }
 
 /** 过期的 seq 丢掉。同一条 deliveryId 的气泡只留第一次。 */

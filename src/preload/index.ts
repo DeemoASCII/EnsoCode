@@ -1120,6 +1120,13 @@ const electronAPI = {
       mentions: string[];
       deliveryId: string;
     }): Promise<EnsobotActionResult> => ipcRenderer.invoke(IPC_CHANNELS.ENSOBOT_BOARD, input),
+    createRoom: (input: { name: string; memberIds: string[] }): Promise<EnsobotActionResult> =>
+      ipcRenderer.invoke(IPC_CHANNELS.ENSOBOT_ROOM_CREATE, input),
+    sendRoom: (input: {
+      roomId: string;
+      text: string;
+      deliveryId: string;
+    }): Promise<EnsobotActionResult> => ipcRenderer.invoke(IPC_CHANNELS.ENSOBOT_ROOM_SEND, input),
     claim: (input: { taskId: string; cardId: string }): Promise<EnsobotActionResult> =>
       ipcRenderer.invoke(IPC_CHANNELS.ENSOBOT_CLAIM, input),
     enqueue: (input: {

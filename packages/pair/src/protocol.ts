@@ -138,6 +138,8 @@ export type PhoneToHost =
       retarget?: boolean;
     }
   | { type: 'ensobot-board'; text: string; mentions: string[]; deliveryId: string }
+  | { type: 'ensobot-room-create'; name: string; memberIds: string[] }
+  | { type: 'ensobot-room-send'; roomId: string; text: string; deliveryId: string }
   | { type: 'ensobot-claim'; taskId: string; cardId: string }
   | { type: 'ensobot-enqueue'; cardId: string; title: string; check: string }
   | { type: 'ensobot-workspace'; projectId?: string | null; sessionId?: string | null };
@@ -181,6 +183,8 @@ export const PHONE_COMMAND_TYPES = [
   'voice-cancel',
   'ensobot-send',
   'ensobot-board',
+  'ensobot-room-create',
+  'ensobot-room-send',
   'ensobot-claim',
   'ensobot-enqueue',
   'ensobot-workspace',
@@ -371,5 +375,6 @@ export type HostToPhone =
       ok: boolean;
       error?: string;
       disposition?: string;
+      roomId?: string;
     }
   | { type: 'ensobot-snapshot'; snapshot: unknown };

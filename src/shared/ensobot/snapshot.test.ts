@@ -14,6 +14,8 @@ function snap(seq: number, deliveryIds: string[]): EnsobotSnapshot {
       authorKind: 'human',
     })),
     board: [],
+    groups: [],
+    roomMessages: [],
     tasks: [],
     workspace: { projectId: null, projectName: null, sessionId: null },
     notices: [],

@@ -365,6 +365,8 @@ export const IPC_PRODUCT_COVERAGE = {
   ENSOBOT_CARDS_DELETE: excluded('EnsoBot character card delete. Not an Enso agent capability.'),
   ENSOBOT_SEND: excluded('EnsoBot private chat send. Not an Enso agent capability.'),
   ENSOBOT_BOARD: excluded('EnsoBot message board post. Not an Enso agent capability.'),
+  ENSOBOT_ROOM_CREATE: excluded('EnsoBot group room create. Not an Enso agent capability.'),
+  ENSOBOT_ROOM_SEND: excluded('EnsoBot group room send. Not an Enso agent capability.'),
   ENSOBOT_CLAIM: excluded('EnsoBot task claim. Not an Enso agent capability.'),
   ENSOBOT_ENQUEUE: excluded('EnsoBot task enqueue. Not an Enso agent capability.'),
   ENSOBOT_WORKSPACE: excluded('EnsoBot shared workspace selection. Not an Enso agent capability.'),

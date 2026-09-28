@@ -13,11 +13,18 @@ import {
   serializeQueue,
   wakeOneWaiter,
 } from '@shared/ensobot/queue';
+import {
+  type EnsobotRoom,
+  mentionsInText,
+  parseRoomDocument,
+  planRoom,
+} from '@shared/ensobot/rooms';
 import type {
   EnsobotActionResult,
   EnsobotBoardNote,
   EnsobotBubble,
   EnsobotNotice,
+  EnsobotRoomMessage,
   EnsobotSnapshot,
   EnsobotWorkspaceView,
 } from '@shared/ensobot/snapshot';
@@ -69,6 +76,8 @@ interface Runtime {
   ready: boolean;
   running: boolean;
   retrying: boolean;
+  /** 最近一次把话送进这个人，是从哪个群房间来的。私聊会清掉。 */
+  speakRoomId?: string;
   providerId?: string;
   modelId?: string;
   fellBack?: boolean;
@@ -80,15 +89,17 @@ interface PendingDelivery {
   cardId: string;
   text: string;
   retarget: boolean;
-  surface: 'chat' | 'board';
+  surface: 'chat' | 'board' | 'room';
+  roomId?: string;
   taskId?: string;
 }
 
 interface LogLine {
   seq: number;
-  kind: 'bubble' | 'board';
+  kind: 'bubble' | 'board' | 'room';
   deliveryId?: string;
   cardId?: string;
+  roomId?: string;
   lane?: EnsobotLane;
   text?: string;
   authorKind?: 'human' | 'bot';
@@ -109,6 +120,14 @@ export interface EnsobotHost {
   postBoard(input: {
     text: string;
     mentions: string[];
+    deliveryId: string;
+    authorId?: string;
+    authorKind?: 'human' | 'bot';
+  }): Promise<EnsobotActionResult>;
+  createRoom(input: { name: string; memberIds: string[] }): Promise<EnsobotActionResult>;
+  postRoom(input: {
+    roomId: string;
+    text: string;
     deliveryId: string;
     authorId?: string;
     authorKind?: 'human' | 'bot';
@@ -139,6 +158,7 @@ export function createEnsobotHost(root: string, deps: EnsobotHostDeps): EnsobotH
   mkdirSync(root, { recursive: true });
   const queueFile = path.join(root, 'queue.jsonl');
   const logFile = path.join(root, 'log.jsonl');
+  const groupsFile = path.join(root, 'groups.json');
   const workspaceFile = path.join(root, 'workspace.json');
   const runtimeFile = path.join(root, 'sessions.json');
   const pendingFile = path.join(root, 'pending.json');
@@ -146,6 +166,7 @@ export function createEnsobotHost(root: string, deps: EnsobotHostDeps): EnsobotH
 
   let tasks = loadTasks(queueFile);
   let lines = loadLog(logFile);
+  let groups = loadGroups(groupsFile);
   let workspace = loadWorkspace(workspaceFile);
   const runtimes = loadRuntimes(runtimeFile);
   let pending = loadPending(pendingFile);
@@ -154,7 +175,8 @@ export function createEnsobotHost(root: string, deps: EnsobotHostDeps): EnsobotH
   let notices: EnsobotNotice[] = [];
   const seen = new Set<string>();
   for (const line of lines) {
-    if (line.kind === 'bubble' && line.deliveryId) seen.add(line.deliveryId);
+    if ((line.kind === 'bubble' || line.kind === 'room') && line.deliveryId)
+      seen.add(line.deliveryId);
   }
   for (const item of pending) seen.add(item.deliveryId);
   const tails = new Map<string, Promise<void>>();
@@ -194,6 +216,7 @@ export function createEnsobotHost(root: string, deps: EnsobotHostDeps): EnsobotH
   const persist = (): void => {
     writeFileSync(queueFile, serializeQueue(tasks));
     writeFileSync(logFile, lines.map((line) => JSON.stringify(line)).join('\n'));
+    writeFileSync(groupsFile, JSON.stringify(groups));
     writeFileSync(workspaceFile, JSON.stringify(workspace));
     writeFileSync(runtimeFile, JSON.stringify(runtimes));
     writeFileSync(pendingFile, JSON.stringify(pending));
@@ -212,6 +235,9 @@ export function createEnsobotHost(root: string, deps: EnsobotHostDeps): EnsobotH
           coordinator: summary.card?.role.coordinator === true,
           bare: summary.bare,
           previewUrl: summary.previewUrl,
+          width: summary.width,
+          height: summary.height,
+          crop: summary.card?.crop ?? null,
         },
       ];
     }),
@@ -240,6 +266,29 @@ export function createEnsobotHost(root: string, deps: EnsobotHostDeps): EnsobotH
           text: line.text,
           mentions: line.mentions ?? [],
         } satisfies EnsobotBoardNote,
+      ];
+    }),
+    groups: groups.map((room) => ({ ...room, memberIds: [...room.memberIds] })),
+    roomMessages: lines.flatMap((line) => {
+      if (
+        line.kind !== 'room' ||
+        !line.roomId ||
+        !line.text ||
+        !line.deliveryId ||
+        !line.authorId
+      ) {
+        return [];
+      }
+      return [
+        {
+          seq: line.seq,
+          roomId: line.roomId,
+          deliveryId: line.deliveryId,
+          authorId: line.authorId,
+          authorKind: line.authorKind === 'bot' ? 'bot' : 'human',
+          text: line.text,
+          mentions: line.mentions ?? [],
+        } satisfies EnsobotRoomMessage,
       ];
     }),
     tasks: tasks.map((task) => ({ ...task })),
@@ -522,7 +571,9 @@ export function createEnsobotHost(root: string, deps: EnsobotHostDeps): EnsobotH
     lane: 'human' | 'bot';
     deliveryId: string;
     retarget: boolean;
-    surface: 'chat' | 'board';
+    surface: 'chat' | 'board' | 'room';
+    roomId?: string;
+    echo?: boolean;
   }): Promise<EnsobotActionResult> => {
     const runtime = runtimeOf(input.cardId);
     const plan = planInterjection({
@@ -541,15 +592,19 @@ export function createEnsobotHost(root: string, deps: EnsobotHostDeps): EnsobotH
     const spawned = await ensureSpawn(input.cardId);
     if (!spawned.ok) return { ok: false, error: spawned.error };
     seen.add(input.deliveryId);
-    lines.push({
-      seq: bump(),
-      kind: 'bubble',
-      deliveryId: input.deliveryId,
-      cardId: input.cardId,
-      lane: input.lane,
-      text: input.text.trim(),
-      authorKind: input.lane === 'bot' ? 'bot' : 'human',
-    });
+    if (input.surface === 'room' && input.roomId) runtime.speakRoomId = input.roomId;
+    if (input.surface === 'chat') runtime.speakRoomId = undefined;
+    if (input.echo !== false) {
+      lines.push({
+        seq: bump(),
+        kind: 'bubble',
+        deliveryId: input.deliveryId,
+        cardId: input.cardId,
+        lane: input.lane,
+        text: input.text.trim(),
+        authorKind: input.lane === 'bot' ? 'bot' : 'human',
+      });
+    }
     pending.push({
       deliveryId: input.deliveryId,
       lane: input.lane,
@@ -557,6 +612,7 @@ export function createEnsobotHost(root: string, deps: EnsobotHostDeps): EnsobotH
       text: input.text,
       retarget: input.retarget,
       surface: input.surface,
+      ...(input.roomId ? { roomId: input.roomId } : {}),
     });
     const flushed = await flushCard(input.cardId);
     if (flushed.failed === input.deliveryId) {
@@ -631,6 +687,80 @@ export function createEnsobotHost(root: string, deps: EnsobotHostDeps): EnsobotH
         ? { ok: false, error: 'send-failed', disposition: 'partial' }
         : { ok: true, disposition: 'sent' };
     },
+    createRoom: async (input) => {
+      const planned = planRoom({
+        id: deps.uuid(),
+        name: input.name,
+        memberIds: input.memberIds,
+        knownIds: deps.listCardIds(),
+      });
+      if (!planned.ok) return { ok: false, error: planned.error };
+      groups = [...groups.filter((room) => room.id !== planned.room.id), planned.room];
+      bump();
+      persist();
+      publish();
+      return { ok: true, disposition: 'saved', roomId: planned.room.id };
+    },
+    postRoom: async (input) => {
+      const room = groups.find((item) => item.id === input.roomId);
+      if (!room) return { ok: false, error: 'not-found' };
+      const text = input.text.trim();
+      if (!text) return { ok: false, error: 'empty' };
+      if (input.text.length > 8_000) return { ok: false, error: 'too-long' };
+      if (!input.deliveryId || seen.has(input.deliveryId)) {
+        return { ok: false, error: input.deliveryId ? 'duplicate' : 'empty' };
+      }
+      const members = room.memberIds.map((id) => ({
+        id,
+        name: cardData(id)?.persona.name?.trim() || id.slice(0, 8),
+      }));
+      const wake = decideBoardWake({
+        text,
+        mentions: mentionsInText(text, members),
+        knownIds: room.memberIds,
+        facts: {
+          taskChanged: false,
+          humanAsked: (input.authorKind ?? 'human') === 'human',
+          idle: false,
+        },
+      });
+      seen.add(input.deliveryId);
+      lines.push({
+        seq: bump(),
+        kind: 'room',
+        deliveryId: input.deliveryId,
+        roomId: room.id,
+        authorId: input.authorId ?? 'human',
+        authorKind: input.authorKind ?? 'human',
+        text,
+        mentions: wake.notify,
+      });
+      notices = wake.allowSpeech
+        ? []
+        : wake.notify.map((cardId) => ({ cardId, text: '没有新事实，所以不发言' }));
+      persist();
+      publish();
+      if (!wake.allowSpeech) return { ok: true, disposition: 'silent', roomId: room.id };
+      let failed = 0;
+      for (const cardId of wake.notify) {
+        const result = await chain(cardId, () =>
+          submitBody({
+            cardId,
+            text: `群「${room.name}」里有人点了你：\n${text}`,
+            lane: 'bot',
+            deliveryId: `${input.deliveryId}:${cardId}`,
+            retarget: false,
+            surface: 'room',
+            roomId: room.id,
+            echo: false,
+          })
+        );
+        if (!result.ok) failed += 1;
+      }
+      return failed > 0
+        ? { ok: true, disposition: 'partial', roomId: room.id }
+        : { ok: true, disposition: 'sent', roomId: room.id };
+    },
     enqueueTask: async (input) => {
       const title = input.title.trim();
       const check = input.check.trim();
@@ -697,6 +827,19 @@ export function createEnsobotHost(root: string, deps: EnsobotHostDeps): EnsobotH
             lines.push({
               seq: bump(),
               kind: 'board',
+              authorId: cardId,
+              authorKind: 'bot',
+              text: event.text,
+              mentions: [],
+            });
+          }
+          const spokenRoom = runtimes[cardId]?.speakRoomId;
+          if (spokenRoom) {
+            lines.push({
+              seq: bump(),
+              kind: 'room',
+              roomId: spokenRoom,
+              deliveryId: `${event.deliveryId}:room`,
               authorId: cardId,
               authorKind: 'bot',
               text: event.text,
@@ -847,7 +990,13 @@ function loadLog(file: string): LogLine[] {
       if (!trimmed) continue;
       try {
         const parsed = JSON.parse(trimmed) as LogLine;
-        if (parsed && (parsed.kind === 'bubble' || parsed.kind === 'board') && parsed.seq > 0) {
+        if (
+          parsed &&
+          parsed.seq > 0 &&
+          (parsed.kind === 'bubble' ||
+            parsed.kind === 'board' ||
+            (parsed.kind === 'room' && typeof parsed.roomId === 'string'))
+        ) {
           lines.push(parsed);
         }
       } catch {
@@ -855,6 +1004,14 @@ function loadLog(file: string): LogLine[] {
       }
     }
     return lines;
+  } catch {
+    return [];
+  }
+}
+
+function loadGroups(file: string): EnsobotRoom[] {
+  try {
+    return parseRoomDocument(readFileSync(file, 'utf8'));
   } catch {
     return [];
   }

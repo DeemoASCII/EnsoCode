@@ -99,7 +99,7 @@ export function Onboarding() {
       desc: t('Import skills from Claude Code, Codex or Cursor'),
       count: skills.length,
       onImport: () => setImportKind('skill'),
-      importLabel: t('Scan and import'),
+      importLabel: t('Scan then import files'),
     },
     mcp: {
       icon: Plug,
@@ -107,7 +107,7 @@ export function Onboarding() {
       desc: t('Import MCP servers configured in local AI apps'),
       count: mcpServers.length,
       onImport: () => setImportKind('mcp'),
-      importLabel: t('Scan and import'),
+      importLabel: t('Scan then import files'),
     },
     instruction: {
       icon: Layers,
@@ -115,7 +115,7 @@ export function Onboarding() {
       desc: t('Import global instruction files configured in local AI tools'),
       count: instructions.length,
       onImport: () => setImportKind('instruction'),
-      importLabel: t('Scan and import'),
+      importLabel: t('Scan then import files'),
     },
   };
 

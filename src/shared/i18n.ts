@@ -284,7 +284,7 @@ export const zhTranslations: Record<string, string> = {
   'Sign in with a provider subscription, or import API providers from local AI apps':
     '使用订阅账号登录，或从本地 AI 应用导入 API 服务',
   'Import skills from Claude Code, Codex or Cursor': '从 Claude Code、Codex 或 Cursor 导入技能',
-  'Scan and import': '扫描并导入',
+  'Scan then import files': '扫描并导入',
   '{{count}} imported': '已导入 {{count}} 个',
   'All set': '全部就绪',
   'You can always import more from Settings later.': '之后随时可在设置里导入更多。',
@@ -1814,7 +1814,7 @@ export const zhTranslations: Record<string, string> = {
   'Only import packages you trust': '只导入你信任的配置包',
   'An imported package can change portable preferences and configuration. Skills and MCP servers may also run commands later when you use them. Previewing does not execute them; continue only if you trust the package.':
     '导入的配置包可以修改可移植偏好和配置。技能和 MCP 服务在之后使用时也可能运行命令。预览过程不会执行它们；请仅在信任配置包时继续。',
-  'Confirm configuration import': '确认导入配置',
+  'Confirm the configuration package': '确认导入配置',
   'This package can change portable preferences and configuration. Continue only if you trust this package.':
     '此配置包可以修改可移植偏好和配置。请仅在信任此配置包时继续。',
   'It includes skills or MCP servers that may execute commands when you use them.':
@@ -1822,7 +1822,7 @@ export const zhTranslations: Record<string, string> = {
   'Replace mode removes local-only items from transferred collections and overwrites included portable preferences. A complete backup will be created first.':
     '替换模式会删除迁移集合中此设备独有的条目，并覆盖包中包含的可移植偏好。替换前会先创建完整备份。',
   'Do you want to continue with this import?': '要继续导入吗？',
-  'Confirm import': '确认导入',
+  'Confirm importing': '确认导入',
   'Sensitive provider or MCP values were omitted; existing local values were preserved when available.':
     '敏感的模型服务或 MCP 配置值已省略；如本机已有对应值，则会保留。',
   'OAuth login state is not included; sign in again after import.':
@@ -2002,6 +2002,27 @@ export const zhTranslations: Record<string, string> = {
     '人物卡上的模型不可用，将改用默认模型',
   'No usable model': '没有可用模型',
   'Save card': '保存人物卡',
+  'Bot chats': '会话',
+  'New group chat': '新建群',
+  'Group name': '群名称',
+  'Create group': '建群',
+  'Direct messages': '私聊',
+  Groups: '群聊',
+  Profile: '资料',
+  Persona: '人设',
+  Duties: '职能',
+  'Type a message': '写一条消息',
+  'Message the group. Use @name so only the people you name speak.':
+    '发到群里。用 @名字 点名，没被点到的人不说话。',
+  'Pick a chat on the left, or start a group.': '从左边选一个私聊，或新建一个群。',
+  'Select at least two people.': '至少选两个人。',
+  'No bots yet. Import a picture to add one.': '还没有 bot。导入一张图，加一个。',
+  Members: '成员',
+  Radius: '半径',
+  Permissions: '权限',
+  'Close profile': '关闭资料',
+  'The message is in the room, but someone could not be woken.':
+    '话已经在房间里，有人这会儿没被叫醒。',
 };
 
 export function normalizeLocale(input?: string): Locale {

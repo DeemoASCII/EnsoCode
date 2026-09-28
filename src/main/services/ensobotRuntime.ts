@@ -145,6 +145,14 @@ export async function handleEnsobotGuestCommand(
         mentions: command.mentions,
         deliveryId: command.deliveryId,
       });
+    case 'ensobot-room-create':
+      return bot.createRoom({ name: command.name, memberIds: command.memberIds });
+    case 'ensobot-room-send':
+      return bot.postRoom({
+        roomId: command.roomId,
+        text: command.text,
+        deliveryId: command.deliveryId,
+      });
     case 'ensobot-claim':
       return bot.claim({ taskId: command.taskId, cardId: command.cardId });
     case 'ensobot-enqueue':

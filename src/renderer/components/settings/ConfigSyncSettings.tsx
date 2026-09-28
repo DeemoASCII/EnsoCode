@@ -782,7 +782,7 @@ function ImportConfirmationDialog({
         <AlertDialogHeader>
           <AlertDialogTitle className="flex items-start gap-2 text-base">
             <TriangleAlert className="mt-0.5 h-4 w-4 shrink-0 text-destructive" />
-            {t('Confirm configuration import')}
+            {t('Confirm the configuration package')}
           </AlertDialogTitle>
           <AlertDialogDescription className="space-y-2">
             <span className="block">
@@ -819,7 +819,7 @@ function ImportConfirmationDialog({
               onConfirm();
             }}
           >
-            {t('Confirm import')}
+            {t('Confirm importing')}
           </Button>
         </AlertDialogFooter>
       </AlertDialogPopup>

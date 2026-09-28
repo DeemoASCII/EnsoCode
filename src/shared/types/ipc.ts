@@ -32,6 +32,8 @@ export const IPC_CHANNELS = {
   ENSOBOT_CARDS_DELETE: 'ensobot:cards-delete',
   ENSOBOT_SEND: 'ensobot:send',
   ENSOBOT_BOARD: 'ensobot:board',
+  ENSOBOT_ROOM_CREATE: 'ensobot:room-create',
+  ENSOBOT_ROOM_SEND: 'ensobot:room-send',
   ENSOBOT_CLAIM: 'ensobot:claim',
   ENSOBOT_ENQUEUE: 'ensobot:enqueue',
   ENSOBOT_WORKSPACE: 'ensobot:workspace',

@@ -92,6 +92,33 @@ export function registerEnsobotHandlers(): void {
     return getEnsobotHost().postBoard({ text: input.text, mentions, deliveryId: input.deliveryId });
   });
 
+  ipcMain.handle(IPC_CHANNELS.ENSOBOT_ROOM_CREATE, (_event, raw: unknown) => {
+    const input = record(raw);
+    if (!input || typeof input.name !== 'string' || !Array.isArray(input.memberIds)) {
+      return { ok: false, error: 'bad-params' };
+    }
+    const memberIds = input.memberIds.filter((id): id is string => typeof id === 'string');
+    if (memberIds.length !== input.memberIds.length) return { ok: false, error: 'bad-params' };
+    return getEnsobotHost().createRoom({ name: input.name, memberIds });
+  });
+
+  ipcMain.handle(IPC_CHANNELS.ENSOBOT_ROOM_SEND, (_event, raw: unknown) => {
+    const input = record(raw);
+    if (
+      !input ||
+      typeof input.roomId !== 'string' ||
+      typeof input.text !== 'string' ||
+      typeof input.deliveryId !== 'string'
+    ) {
+      return { ok: false, error: 'bad-params' };
+    }
+    return getEnsobotHost().postRoom({
+      roomId: input.roomId,
+      text: input.text,
+      deliveryId: input.deliveryId,
+    });
+  });
+
   ipcMain.handle(IPC_CHANNELS.ENSOBOT_CLAIM, (_event, raw: unknown) => {
     const input = record(raw);
     if (!input || typeof input.taskId !== 'string' || typeof input.cardId !== 'string') {

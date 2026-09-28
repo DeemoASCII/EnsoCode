@@ -265,6 +265,29 @@ export function parsePhoneCommand(value: unknown): CommandCheck {
         return { ok: false, error: 'invalid deliveryId' };
       }
       return { ok: true, command: value as PhoneToHost };
+    case 'ensobot-room-create':
+      if (typeof v.name !== 'string' || v.name.trim().length === 0 || v.name.length > 80) {
+        return { ok: false, error: 'invalid name' };
+      }
+      if (
+        !Array.isArray(v.memberIds) ||
+        v.memberIds.length < 2 ||
+        v.memberIds.length > 32 ||
+        v.memberIds.some((id) => !isCharacterCardId(id))
+      ) {
+        return { ok: false, error: 'invalid members' };
+      }
+      return { ok: true, command: value as PhoneToHost };
+    case 'ensobot-room-send':
+      if (!isCharacterCardId(v.roomId)) return { ok: false, error: 'invalid roomId' };
+      if (typeof v.text !== 'string' || v.text.trim().length === 0) {
+        return { ok: false, error: 'empty message' };
+      }
+      if (v.text.length > 8_000) return { ok: false, error: 'text too long' };
+      if (!isStr(v.deliveryId) || v.deliveryId.length > 128) {
+        return { ok: false, error: 'invalid deliveryId' };
+      }
+      return { ok: true, command: value as PhoneToHost };
     case 'ensobot-claim':
       if (!isStr(v.taskId) || v.taskId.length > 128 || !isCharacterCardId(v.cardId)) {
         return { ok: false, error: 'invalid id' };

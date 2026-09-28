@@ -973,6 +973,8 @@ async function handleFrame(
     }
     case 'ensobot-send':
     case 'ensobot-board':
+    case 'ensobot-room-create':
+    case 'ensobot-room-send':
     case 'ensobot-claim':
     case 'ensobot-enqueue':
     case 'ensobot-workspace': {
@@ -983,6 +985,7 @@ async function handleFrame(
         ok: result.ok,
         ...(result.error ? { error: result.error } : {}),
         ...(result.disposition ? { disposition: result.disposition } : {}),
+        ...(result.roomId ? { roomId: result.roomId } : {}),
         ...('deliveryId' in command && typeof command.deliveryId === 'string'
           ? { deliveryId: command.deliveryId }
           : {}),
