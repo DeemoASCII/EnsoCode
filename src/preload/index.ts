@@ -16,6 +16,8 @@ import type {
   StartOauthResult,
   StartOauthWizardRequest,
 } from '@shared/capabilities/types';
+import type { CharacterCardData } from '@shared/characterCard';
+import type { EnsobotActionResult, EnsobotSnapshot } from '@shared/ensobot/snapshot';
 import type {
   ChatModelDto,
   DistillableSessionDto,
@@ -1044,6 +1046,7 @@ const electronAPI = {
       ipcRenderer.invoke(IPC_CHANNELS.WINDOW_SET_TRAFFIC_LIGHTS_VISIBLE, visible),
     openSettings: (link?: SettingsDeepLink): Promise<void> =>
       ipcRenderer.invoke(IPC_CHANNELS.WINDOW_OPEN_SETTINGS, link),
+    openEnsobot: (): Promise<void> => ipcRenderer.invoke(IPC_CHANNELS.WINDOW_OPEN_ENSOBOT),
     onSettingsDeepLink: (callback: (link: SettingsDeepLink) => void): (() => void) => {
       const listener = (_: unknown, link: SettingsDeepLink) => callback(link);
       ipcRenderer.on(IPC_CHANNELS.SETTINGS_DEEP_LINK, listener);
@@ -1075,6 +1078,59 @@ const electronAPI = {
       ipcRenderer.on(IPC_CHANNELS.WINDOW_FULLSCREEN_CHANGED, listener);
       return () => ipcRenderer.removeListener(IPC_CHANNELS.WINDOW_FULLSCREEN_CHANGED, listener);
     },
+  },
+
+  ensobot: {
+    getState: (): Promise<EnsobotSnapshot> => ipcRenderer.invoke(IPC_CHANNELS.ENSOBOT_STATE_GET),
+    onChanged: (callback: (snapshot: EnsobotSnapshot) => void): (() => void) => {
+      const listener = (_: unknown, snapshot: EnsobotSnapshot) => callback(snapshot);
+      ipcRenderer.on(IPC_CHANNELS.ENSOBOT_CHANGED, listener);
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.ENSOBOT_CHANGED, listener);
+    },
+    listCards: (): Promise<{
+      cards: {
+        id: string;
+        previewUrl: string;
+        bare: boolean;
+        width: number;
+        height: number;
+        card: CharacterCardData | null;
+      }[];
+      errors: { name: string; error: string }[];
+    }> => ipcRenderer.invoke(IPC_CHANNELS.ENSOBOT_CARDS_LIST),
+    importCard: (): Promise<{ ok: boolean; cardId?: string; error?: string }> =>
+      ipcRenderer.invoke(IPC_CHANNELS.ENSOBOT_CARDS_IMPORT),
+    updateCard: (
+      id: string,
+      card: CharacterCardData
+    ): Promise<{ ok: boolean; error?: string; cardId?: string }> =>
+      ipcRenderer.invoke(IPC_CHANNELS.ENSOBOT_CARDS_UPDATE, id, card),
+    exportCard: (id: string): Promise<{ ok: boolean; error?: string; cardId?: string }> =>
+      ipcRenderer.invoke(IPC_CHANNELS.ENSOBOT_CARDS_EXPORT, id),
+    deleteCard: (id: string): Promise<{ ok: boolean; error?: string; cardId?: string }> =>
+      ipcRenderer.invoke(IPC_CHANNELS.ENSOBOT_CARDS_DELETE, id),
+    send: (input: {
+      cardId: string;
+      text: string;
+      deliveryId: string;
+      retarget?: boolean;
+    }): Promise<EnsobotActionResult> => ipcRenderer.invoke(IPC_CHANNELS.ENSOBOT_SEND, input),
+    postBoard: (input: {
+      text: string;
+      mentions: string[];
+      deliveryId: string;
+    }): Promise<EnsobotActionResult> => ipcRenderer.invoke(IPC_CHANNELS.ENSOBOT_BOARD, input),
+    claim: (input: { taskId: string; cardId: string }): Promise<EnsobotActionResult> =>
+      ipcRenderer.invoke(IPC_CHANNELS.ENSOBOT_CLAIM, input),
+    enqueue: (input: {
+      cardId: string;
+      title: string;
+      check: string;
+    }): Promise<EnsobotActionResult> => ipcRenderer.invoke(IPC_CHANNELS.ENSOBOT_ENQUEUE, input),
+    setWorkspace: (input: {
+      projectId: string | null;
+      sessionId: string | null;
+    }): Promise<EnsobotActionResult> => ipcRenderer.invoke(IPC_CHANNELS.ENSOBOT_WORKSPACE, input),
   },
   btw: {
     prompt: (request: BtwPromptRequest): Promise<BtwPromptResult> =>

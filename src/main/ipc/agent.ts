@@ -95,6 +95,7 @@ import { pickBrowserFileRoot, setBrowserFileRootResolver } from '../services/bro
 import { browserHost } from '../services/browserHost';
 import { chatModelsRoot } from '../services/chatModels';
 import { reloadConversation } from '../services/conversationReload';
+import { observeEnsobotWorkerEvent } from '../services/ensobotRuntime';
 import { searchFiles } from '../services/fileSearch';
 import { createLocalComplete, memoryCompleteFromSettings } from '../services/llama/chat';
 import {
@@ -906,6 +907,7 @@ export function registerAgentHandlers(): void {
       return;
     dispatchService?.observe(workerEvent);
     agentService?.observe(workerEvent);
+    observeEnsobotWorkerEvent(workerEvent);
     if (workerEvent.type === 'turn-completed' || workerEvent.type === 'turn-failed') {
       const file = agentSessionIndex.sessionFile(workerEvent.identity);
       if (file) {

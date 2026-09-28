@@ -62,6 +62,7 @@ export default defineConfig({
         input: {
           index: path.resolve(__dirname, 'src/renderer/index.html'),
           settings: path.resolve(__dirname, 'src/renderer/settings.html'),
+          ensobot: path.resolve(__dirname, 'src/renderer/ensobot.html'),
         },
       },
     },

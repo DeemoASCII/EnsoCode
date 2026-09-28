@@ -538,6 +538,8 @@ export function spawnSession(
     rolePrompt?: string;
     extraDisabledTools?: readonly string[];
     omitDispatchTools?: boolean;
+    ensobotSpeak?: boolean;
+    ensobotCoordinator?: boolean;
   }
 ): { ok: boolean; error?: string } {
   if (request.resumeFile && !existsSync(request.resumeFile)) {
@@ -637,6 +639,8 @@ export function spawnSession(
     ...(remote ? { remote } : {}),
     ...(options?.rolePrompt ? { rolePrompt: options.rolePrompt } : {}),
     ...(systemPrompt.content ? { systemPrompt: systemPrompt.content } : {}),
+    ...(options?.ensobotSpeak ? { ensobotSpeak: true } : {}),
+    ...(options?.ensobotCoordinator ? { ensobotCoordinator: true } : {}),
   });
   if (sent.ok) {
     rememberParentToolProfile(identity.sessionId, {
@@ -810,7 +814,8 @@ export function promptSession(
   identity: SessionIdentity,
   text: string,
   images?: AttachedImage[],
-  deliveryId?: string
+  deliveryId?: string,
+  options?: { ensobot?: boolean }
 ): { ok: boolean; error?: string } {
   return sendAgentCommand({
     type: 'prompt',
@@ -818,6 +823,7 @@ export function promptSession(
     text,
     ...(images?.length ? { images } : {}),
     ...(deliveryId ? { deliveryId } : {}),
+    ...(options?.ensobot ? { ensobot: true } : {}),
   });
 }
 
@@ -825,7 +831,8 @@ export function steerSession(
   identity: SessionIdentity,
   text: string,
   images?: AttachedImage[],
-  deliveryId?: string
+  deliveryId?: string,
+  options?: { ensobot?: boolean }
 ): { ok: boolean; error?: string } {
   return sendAgentCommand({
     type: 'steer',
@@ -833,6 +840,7 @@ export function steerSession(
     text,
     ...(images?.length ? { images } : {}),
     ...(deliveryId ? { deliveryId } : {}),
+    ...(options?.ensobot ? { ensobot: true } : {}),
   });
 }
 

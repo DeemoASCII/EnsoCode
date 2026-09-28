@@ -128,7 +128,19 @@ export type PhoneToHost =
    */
   | { type: 'voice-chunk'; requestId: string; index: number; data: string; last?: true }
   /** 放弃录音：host 丢弃该 requestId 的识别会话，不再回 voice-result */
-  | { type: 'voice-cancel'; requestId: string };
+  | { type: 'voice-cancel'; requestId: string }
+  /** EnsoBot 私聊。只带人物卡 id，不带磁盘路径。 */
+  | {
+      type: 'ensobot-send';
+      cardId: string;
+      text: string;
+      deliveryId: string;
+      retarget?: boolean;
+    }
+  | { type: 'ensobot-board'; text: string; mentions: string[]; deliveryId: string }
+  | { type: 'ensobot-claim'; taskId: string; cardId: string }
+  | { type: 'ensobot-enqueue'; cardId: string; title: string; check: string }
+  | { type: 'ensobot-workspace'; projectId?: string | null; sessionId?: string | null };
 
 /** 手机命令白名单：main 只接受这些 type，其余（set-approval-mode、设置写入等）拒绝 */
 export const PHONE_COMMAND_TYPES = [
@@ -167,6 +179,11 @@ export const PHONE_COMMAND_TYPES = [
   'probe',
   'voice-chunk',
   'voice-cancel',
+  'ensobot-send',
+  'ensobot-board',
+  'ensobot-claim',
+  'ensobot-enqueue',
+  'ensobot-workspace',
 ] as const satisfies readonly PhoneToHost['type'][];
 
 export function isPhoneCommand(value: unknown): value is PhoneToHost {
@@ -346,4 +363,13 @@ export type HostToPhone =
   /** 识别中间结果（整句覆盖，不是增量）；correcting = 已定稿、正在纠错 */
   | { type: 'voice-partial'; requestId: string; text: string; correcting?: true }
   /** voice-chunk 的应答；error 为 SpeechErrorCode，未知值按 failed 处理 */
-  | { type: 'voice-result'; requestId: string; text?: string; error?: string };
+  | { type: 'voice-result'; requestId: string; text?: string; error?: string }
+  /** EnsoBot 命令的业务回执。传输层的 { ok } 不算收下。 */
+  | {
+      type: 'ensobot-result';
+      deliveryId?: string;
+      ok: boolean;
+      error?: string;
+      disposition?: string;
+    }
+  | { type: 'ensobot-snapshot'; snapshot: unknown };

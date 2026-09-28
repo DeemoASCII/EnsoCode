@@ -17,6 +17,7 @@ import {
   shouldQuitOnWindowAllClosed,
 } from './services/appServerMode';
 import { browserHost } from './services/browserHost';
+import { registerEnsobotCardProtocol } from './services/ensobotCardProtocol';
 import { releaseLocalChatSlot } from './services/llama/chat';
 import { disposeLlamaRuntime, llamaRuntimeActive } from './services/llama/runtime';
 import {
@@ -115,6 +116,7 @@ if (!gotTheLock) {
     });
     // 协议处理器要赶在窗口加载内容之前注册（local-image:// 资源依赖它）。
     registerLocalImageProtocolHandler();
+    registerEnsobotCardProtocol();
     const persisted = readSettings()?.['enso-settings'] as
       | { state?: { proxyMode?: unknown; customProxyUrl?: unknown; autoUpdate?: boolean } }
       | undefined;

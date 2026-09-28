@@ -23,6 +23,7 @@ import {
   getWindowWebContents,
   sendToWindow,
 } from '../windows/createAppWindow';
+import { getEnsobotWindow } from '../windows/EnsobotWindow';
 import { createMainWindow, getMainWindow, isMainWindowAlive } from '../windows/MainWindow';
 import { getSettingsWindow } from '../windows/SettingsWindow';
 import { allowAppQuit, bypassNextCloseConfirm } from './appCloseConfirm';
@@ -186,6 +187,8 @@ export async function enterServerMode(): Promise<void> {
   refreshPowerKeepAlive();
   const settings = getSettingsWindow();
   if (settings && !settings.isDestroyed()) settings.close();
+  const ensobot = getEnsobotWindow();
+  if (ensobot && !ensobot.isDestroyed()) ensobot.close();
   ensureTray();
   await browserHost.hibernateAll();
   const win = getMainWindow();

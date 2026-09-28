@@ -11,22 +11,25 @@ import {
 } from '../services/pairGuest';
 import { parseGuestOutbound } from '../services/pairGuestPolicy';
 import { getWindowWebContents, sendToAllWindows, sendToWindow } from '../windows/createAppWindow';
+import { isEnsobotWebContents } from '../windows/EnsobotWindow';
 import { isMainWebContents } from '../windows/MainWindow';
 
 /**
  * 「连接到节点」：本机作为 guest 连别的 EnsoCode 桌面。
  * 主窗口 UI 跑在独立的顶层 WebContentsView 里，`win.webContents` 是没有 preload 监听的空壳；
  * 推送一律走 sendToWindow / getWindowWebContents，否则渲染层收不到状态与下行帧。
+ * 会话帧和 NODES_SEND 只放行主窗口与 EnsoBot 的 UI webContents，设置窗排除。
  */
 export function registerNodesHandlers(): void {
   setNodesStatusListener((status) => {
     sendToAllWindows(IPC_CHANNELS.NODES_STATUS_CHANGED, status);
   });
-  // 下行帧只给主窗口：设置窗口不渲染会话
+  // 下行帧给主窗口和 EnsoBot 的 UI webContents。设置窗不渲染会话，继续排除。
   setNodesMessageListener((message) => {
     for (const win of BrowserWindow.getAllWindows()) {
       if (win.isDestroyed()) continue;
-      if (!isMainWebContents(getWindowWebContents(win).id)) continue;
+      const contentsId = getWindowWebContents(win).id;
+      if (!isMainWebContents(contentsId) && !isEnsobotWebContents(contentsId)) continue;
       sendToWindow(win, IPC_CHANNELS.NODES_MESSAGE, message);
     }
   });
@@ -47,8 +50,8 @@ export function registerNodesHandlers(): void {
     return renameNode(nodeId, label);
   });
   ipcMain.handle(IPC_CHANNELS.NODES_SEND, (event, nodeId: unknown, command: unknown) => {
-    if (!isMainWebContents(event.sender.id)) {
-      return { ok: false, error: 'Only MainWindow can talk to nodes.' };
+    if (!isMainWebContents(event.sender.id) && !isEnsobotWebContents(event.sender.id)) {
+      return { ok: false, error: 'Only the main window and EnsoBot can talk to nodes.' };
     }
     if (typeof nodeId !== 'string' || !nodeId) return { ok: false, error: 'invalid nodeId' };
     const parsed = parseGuestOutbound(command);

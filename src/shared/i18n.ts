@@ -1953,6 +1953,55 @@ export const zhTranslations: Record<string, string> = {
     '将删除约 {{size}} 的对话记录、工具输出和隔离 worktree，无法恢复。',
   'Open, running and waiting conversations are skipped.':
     '当前打开、运行中和等待处理的会话会跳过。',
+  EnsoBot: 'EnsoBot',
+  'Open EnsoBot': '打开 EnsoBot',
+  'Private chat': '私聊',
+  'Message board': '公共留言板',
+  'Shared workspace': '公共工作区',
+  'Pick a character, or import a picture, to start a private chat.':
+    '选一个角色，或导入一张图，开始私聊。',
+  'The board is empty. A note only wakes the people you name.':
+    '留言板还是空的。只有被你点到名的人才会被叫醒。',
+  'Pick a project or an existing session. Tasks wait their turn, and the same folder has one writer.':
+    '选一个项目或已有会话。任务会排队，同一个目录同时只让一个人写。',
+  Character: '角色',
+  Coordinator: '协调',
+  'No messages yet.': '还没有消息。',
+  You: '你',
+  Bot: '机器人',
+  'Say something to this character': '对这个角色说一句',
+  'Replace the goal': '换掉原来的目标',
+  'No notes yet.': '还没有留言。',
+  'Write on the board': '写到留言板上',
+  Post: '贴上',
+  'No tasks yet.': '还没有任务。',
+  'Using the default model': '模型缺失，已改用默认模型',
+  Claim: '认领',
+  Task: '任务',
+  'Check text that must show up in tool output': '做完时工具输出里必须出现的检查文字',
+  'Queue task': '加入队列',
+  'Add a project from the main window first.': '先在主窗口里加一个项目。',
+  'No shared project': '不选项目',
+  'No session': '不选会话',
+  'No project selected': '还没选项目',
+  'Import picture': '导入图片',
+  'Export PNG': '导出 PNG',
+  'Delete card': '删除人物卡',
+  'Some card files could not be read. The rest of the list is still here.':
+    '有的人物卡读不出来，其余的还在列表里。',
+  'Circle crop uses source pixels. The file keeps the whole picture.':
+    '圆形裁切用的是原图像素。文件里仍保留整张图。',
+  Personality: '性格',
+  'Character setting': '人物设定',
+  Duty: '职责',
+  'Coordinator: assign work, do not edit the shared workspace':
+    '协调者：只分派，不改公共工作区里的文件',
+  Concurrency: '同时能做几件',
+  'Using the card model': '使用人物卡上的模型',
+  'Card model is missing, so this falls back to the default':
+    '人物卡上的模型不可用，将改用默认模型',
+  'No usable model': '没有可用模型',
+  'Save card': '保存人物卡',
 };
 
 export function normalizeLocale(input?: string): Locale {

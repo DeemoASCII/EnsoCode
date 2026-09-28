@@ -38,6 +38,21 @@ export const session = {
     resolveProxy: async () => 'DIRECT',
   },
 };
+export const dialog = {
+  showOpenDialog: async () => ({ canceled: true, filePaths: [] as string[] }),
+  showSaveDialog: async () => ({ canceled: true, filePath: undefined as string | undefined }),
+};
+export const protocol = {
+  registerSchemesAsPrivileged: () => {},
+  handle: () => {},
+};
+export const nativeImage = {
+  createFromBuffer: () => ({
+    isEmpty: () => true,
+    getSize: () => ({ width: 0, height: 0 }),
+    toPNG: () => Buffer.alloc(0),
+  }),
+};
 export const Menu = { buildFromTemplate: () => ({ popup: () => {} }) };
 export const screen = {
   on: () => {},
@@ -58,6 +73,9 @@ export default {
   safeStorage,
   shell,
   net,
+  dialog,
+  protocol,
+  nativeImage,
   WebContentsView,
   session,
   Menu,

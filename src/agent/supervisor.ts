@@ -22,6 +22,8 @@ import {
   type SessionIdentity,
 } from '@shared/builtinAgents';
 import { type CompactStrategy, resolveCompactStrategy } from '@shared/compactStrategy';
+import { ensobotSteerAction } from '@shared/ensobot/interject';
+import { ENSOBOT_WRITE_TOOL_NAMES } from '@shared/ensobot/speak';
 import { DEFAULT_MAX_ACTIVE_COWORKERS } from '@shared/maxActiveCoworkers';
 import {
   findCatalogModelById,
@@ -118,6 +120,7 @@ import { CURSOR_PROVIDER_ID, loadCursorProvider } from './cursor/loadProvider';
 import { attachCursorBridgeToSession, isCursorModel } from './cursor/sessionBridge';
 import { resolveCustomModelCompat, selectCatalogEntryForCompat } from './customModelCompat';
 import { createNormalizedEditTool } from './editTool';
+import { createEnsobotSayTool } from './ensobotSpeak';
 import { ENSO_SYSTEM_PROMPT } from './ensoPrompt';
 import { EnsoSafeJournal } from './ensoSafeJournal';
 import { createExploreFoldState, createExploreFoldTools } from './exploreFold';
@@ -1000,7 +1003,9 @@ export class SessionSupervisor {
           command.rolePrompt,
           command.systemPrompt,
           command.rtkEnabled,
-          command.planMode
+          command.planMode,
+          command.ensobotSpeak === true,
+          command.ensobotCoordinator === true
         );
         return;
       case 'spawn-child':
@@ -1083,6 +1088,10 @@ export class SessionSupervisor {
       }
       case 'prompt': {
         const managed = this.must(command.identity);
+        if (command.ensobot && this.deferEnsobot(managed, 'prompt')) {
+          this.emitEnsobotDeferred(managed, command.deliveryId);
+          return;
+        }
         managed.plan?.supersede();
         const images = command.images?.map((image) => ({ type: 'image' as const, ...image }));
         if (await this.interruptRetryIfAny(managed)) {
@@ -1109,6 +1118,10 @@ export class SessionSupervisor {
       }
       case 'steer': {
         const managed = this.must(command.identity);
+        if (command.ensobot && this.deferEnsobot(managed, 'steer')) {
+          this.emitEnsobotDeferred(managed, command.deliveryId);
+          return;
+        }
         managed.plan?.supersede();
         const images = command.images?.map((image) => ({ type: 'image' as const, ...image }));
         // 重试倒计时期间 renderer 看到的仍是 running 会发 steer：此时没有活轮可插，
@@ -1446,7 +1459,9 @@ export class SessionSupervisor {
     rolePrompt?: string,
     systemPrompt?: string,
     rtkEnabled = true,
-    planMode?: boolean
+    planMode?: boolean,
+    ensobotSpeak = false,
+    ensobotCoordinator = false
   ): Promise<void> {
     const sessionId = identity.sessionId;
     const sessionEditMode = resolveEditMode(requestedEditMode, hashlineEditEnabled);
@@ -2071,9 +2086,12 @@ export class SessionSupervisor {
     const readonlyAgentTypes = new Set(
       agentTypes.filter((type) => type.tools === 'readonly').map((type) => type.name)
     );
-    const catalogTools = toolEnabled('plan')
+    const gatedTools = toolEnabled('plan')
       ? sessionTools.map((tool) => withPlanGate(tool, { host: planHost, readonlyAgentTypes }))
       : sessionTools;
+    const catalogTools = ensobotCoordinator
+      ? gatedTools.filter((tool) => !ENSOBOT_WRITE_TOOL_NAMES.has(tool.name))
+      : gatedTools;
     catalogRef.current = catalogTools;
     const customTools = decorateSessionTools(
       [
@@ -2087,9 +2105,24 @@ export class SessionSupervisor {
               }),
             ]
           : []),
+        ...(ensobotSpeak
+          ? [
+              createEnsobotSayTool((text, deliveryId) => {
+                const managed = managedRef ?? this.sessions.get(sessionId);
+                if (!managed) return;
+                this.options.emit({
+                  type: 'ensobot-bubble',
+                  identity: managed.identity,
+                  seq: ++managed.seq,
+                  text,
+                  deliveryId,
+                });
+              }),
+            ]
+          : []),
       ],
       { reminders, runaway, budget }
-    );
+    ).filter((tool) => !ensobotCoordinator || !ENSOBOT_WRITE_TOOL_NAMES.has(tool.name));
 
     const { session } = await createAgentSession({
       cwd,
@@ -3190,6 +3223,23 @@ export class SessionSupervisor {
     }
     managed.messages = projected;
     managed.timings.length = projected.length;
+  }
+
+  /** EnsoBot 插话不走主界面的「打断重试、新开一轮」。 */
+  private deferEnsobot(managed: ManagedSession, kind: 'prompt' | 'steer'): boolean {
+    const retrying = managed.session.isRetrying;
+    const running = managed.status === 'running' && !retrying;
+    if (kind === 'prompt') return retrying;
+    return ensobotSteerAction({ running, retrying }) === 'defer';
+  }
+
+  private emitEnsobotDeferred(managed: ManagedSession, deliveryId?: string): void {
+    this.options.emit({
+      type: 'ensobot-interject-deferred',
+      identity: managed.identity,
+      seq: ++managed.seq,
+      ...(deliveryId ? { deliveryId } : {}),
+    });
   }
 
   /** 重试倒计时中则打断并等待本轮收尾；返回是否发生了打断（用户输入接管重试） */

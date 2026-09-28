@@ -508,6 +508,9 @@ export class PairClient {
           this.probeSentAt = null;
         }
         break;
+      case 'ensobot-result':
+      case 'ensobot-snapshot':
+        break;
       case 'history': {
         // 上滑分页应答：只并入消息，不动 status/审批（那些以尾窗快照为准）
         if (!this.historyPending.has(payload.sessionId)) break;

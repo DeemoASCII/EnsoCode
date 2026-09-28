@@ -50,6 +50,9 @@ vi.mock('./services/localImageProtocol', () => ({
   registerLocalImageProtocolHandler: vi.fn(),
   registerLocalImageSchemePrivileges: vi.fn(),
 }));
+vi.mock('./services/ensobotCardProtocol', () => ({
+  registerEnsobotCardProtocol: vi.fn(),
+}));
 vi.mock('./services/appMenu', () => ({ installAppMenu: vi.fn() }));
 vi.mock('./services/pairHost', () => ({
   startPairHost: vi.fn(() => mocks.order.push('pair')),

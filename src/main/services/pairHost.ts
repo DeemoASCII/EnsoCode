@@ -809,6 +809,20 @@ async function handleFrame(
   }
   const parsed = parsePhoneCommand(payload);
   if (!parsed.ok) {
+    const type =
+      payload && typeof payload === 'object' ? (payload as { type?: unknown }).type : undefined;
+    if (typeof type === 'string' && type.startsWith('ensobot-')) {
+      const deliveryId =
+        payload && typeof payload === 'object'
+          ? (payload as { deliveryId?: unknown }).deliveryId
+          : undefined;
+      publishEnsobotFrame({
+        type: 'ensobot-result',
+        ok: false,
+        error: parsed.error,
+        ...(typeof deliveryId === 'string' ? { deliveryId } : {}),
+      });
+    }
     console.warn(`[pair] command rejected: ${parsed.error}`);
     return;
   }
@@ -955,6 +969,24 @@ async function handleFrame(
         // 定稿可能耗时数秒，不能卡住本连接的收帧队列
         void replyVoiceResult(conn, result.requestId, result.result, generation, ioEpoch);
       }
+      break;
+    }
+    case 'ensobot-send':
+    case 'ensobot-board':
+    case 'ensobot-claim':
+    case 'ensobot-enqueue':
+    case 'ensobot-workspace': {
+      const { handleEnsobotGuestCommand } = await import('./ensobotRuntime');
+      const result = await handleEnsobotGuestCommand(command);
+      publishEnsobotFrame({
+        type: 'ensobot-result',
+        ok: result.ok,
+        ...(result.error ? { error: result.error } : {}),
+        ...(result.disposition ? { disposition: result.disposition } : {}),
+        ...('deliveryId' in command && typeof command.deliveryId === 'string'
+          ? { deliveryId: command.deliveryId }
+          : {}),
+      });
       break;
     }
     case 'voice-cancel':
@@ -1318,6 +1350,15 @@ function forwardSnapshot(event: RendererAgentEvent): void {
 }
 
 /** agentHost 事件出口：所有会话事件先入日志，再按订阅规则下发。 */
+export function publishEnsobotFrame(
+  frame: Extract<HostToPhone, { type: 'ensobot-result' | 'ensobot-snapshot' }>
+): void {
+  for (const conn of connections.values()) {
+    if (conn.closed) continue;
+    void send(conn, frame);
+  }
+}
+
 export function forwardAgentEvent(event: RendererAgentEvent): void {
   runningTaskIds = applyPairPowerTaskEvent(runningTaskIds, event);
   syncPowerBlocker();

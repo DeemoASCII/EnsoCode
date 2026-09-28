@@ -1,6 +1,7 @@
 import { createReadStream } from 'node:fs';
 import { readFile, stat } from 'node:fs/promises';
 import { Readable } from 'node:stream';
+import { CHARACTER_CARD_SCHEME } from '@shared/characterCard';
 import {
   isMediaPath,
   isVideoPath,
@@ -47,6 +48,16 @@ export function registerLocalImageSchemePrivileges(): void {
         corsEnabled: true,
         bypassCSP: true,
         stream: true,
+      },
+    },
+    {
+      scheme: CHARACTER_CARD_SCHEME,
+      privileges: {
+        standard: true,
+        secure: true,
+        supportFetchAPI: true,
+        corsEnabled: true,
+        bypassCSP: true,
       },
     },
   ]);

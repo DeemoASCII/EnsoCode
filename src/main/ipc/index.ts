@@ -7,6 +7,7 @@ import { registerBtwHandlers } from './btw';
 import { registerCapabilityHandlers } from './capabilities';
 import { registerChangesHandlers } from './changes';
 import { registerConfigSyncHandlers } from './configSync';
+import { registerEnsobotHandlers } from './ensobot';
 import { registerFileHandlers } from './files';
 import { registerFilesWorkspaceHandlers } from './filesWorkspace';
 import { registerGitHandlers } from './git';
@@ -57,6 +58,7 @@ export function registerIpcHandlers(): void {
   registerBtwHandlers();
   registerAppBadgeHandlers();
   registerSpeechHandlers();
+  registerEnsobotHandlers();
 
   // 所有新建窗口自动挂载状态事件
   app.on('browser-window-created', (_, win) => {

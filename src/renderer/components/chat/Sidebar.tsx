@@ -22,6 +22,7 @@ import { AnimatePresence, motion } from 'framer-motion';
 import {
   Archive,
   ArchiveRestore,
+  Bot,
   ChevronRight,
   CircleAlert,
   Ellipsis,
@@ -754,6 +755,15 @@ export function Sidebar({ width, collapsed, onToggleCollapse, onOpenSearch }: Si
           </button>
           <button
             type="button"
+            onClick={() => window.electronAPI.window.openEnsobot()}
+            className={ICON_BUTTON_CLASS}
+            title={t('Open EnsoBot')}
+            aria-label={t('Open EnsoBot')}
+          >
+            <Bot className="h-4 w-4" />
+          </button>
+          <button
+            type="button"
             onClick={() => window.electronAPI.window.openSettings()}
             className={ICON_BUTTON_CLASS}
             title={t('Settings')}
@@ -1399,6 +1409,15 @@ export function Sidebar({ width, collapsed, onToggleCollapse, onOpenSearch }: Si
               title={t('Ask Enso')}
             >
               <Sparkles className="h-4 w-4" />
+            </button>
+            <button
+              type="button"
+              onClick={() => window.electronAPI.window.openEnsobot()}
+              className={ICON_BUTTON_CLASS}
+              title={t('Open EnsoBot')}
+              aria-label={t('Open EnsoBot')}
+            >
+              <Bot className="h-4 w-4" />
             </button>
             <button
               type="button"

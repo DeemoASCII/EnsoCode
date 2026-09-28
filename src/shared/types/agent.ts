@@ -967,6 +967,10 @@ export type AgentCommand =
       systemPrompt?: string;
       /** 期望的 Plan 模式；与会话 jsonl 折叠结果不同时由 worker 追加切换条目 */
       planMode?: boolean;
+      /** EnsoBot 工人：挂上只发气泡、不结束回合的说话工具 */
+      ensobotSpeak?: boolean;
+      /** EnsoBot 协调者：工具表去掉写工作区的工具 */
+      ensobotCoordinator?: boolean;
     }
   | {
       type: 'spawn-child';
@@ -1018,6 +1022,8 @@ export type AgentCommand =
       images?: AttachedImage[];
       /** renderer 乐观回显的投递标识；worker 在对应 user 消息上屏后以 delivery-settled 回执 */
       deliveryId?: string;
+      /** EnsoBot 插话：重试倒计时不打断，没有活轮的 steer 先排着 */
+      ensobot?: boolean;
     }
   | { type: 'set-model'; identity: SessionIdentity; model: SpawnModelConfig }
   | { type: 'set-thinking'; identity: SessionIdentity; level: ThinkingLevel }
@@ -1385,6 +1391,19 @@ export type AgentWorkerEvent =
       requestId: string;
     }
   | { type: 'delivery-settled'; identity: SessionIdentity; seq: number; deliveryId: string }
+  | {
+      type: 'ensobot-bubble';
+      identity: SessionIdentity;
+      seq: number;
+      text: string;
+      deliveryId: string;
+    }
+  | {
+      type: 'ensobot-interject-deferred';
+      identity: SessionIdentity;
+      seq: number;
+      deliveryId?: string;
+    }
   | { type: 'status'; identity: SessionIdentity; seq: number; status: NodeStatus; error?: string }
   | {
       type: 'message-upsert';
@@ -2537,6 +2556,8 @@ export function parseAgentCommand(value: unknown): AgentCommand | null {
           'rolePrompt',
           'systemPrompt',
           'planMode',
+          'ensobotSpeak',
+          'ensobotCoordinator',
         ]) ||
         !parseSessionIdentity(value.identity) ||
         typeof value.cwd !== 'string' ||
@@ -2545,6 +2566,8 @@ export function parseAgentCommand(value: unknown): AgentCommand | null {
         (value.loadHarnessAssets !== undefined && typeof value.loadHarnessAssets !== 'boolean') ||
         (value.rtkEnabled !== undefined && typeof value.rtkEnabled !== 'boolean') ||
         (value.planMode !== undefined && typeof value.planMode !== 'boolean') ||
+        (value.ensobotSpeak !== undefined && typeof value.ensobotSpeak !== 'boolean') ||
+        (value.ensobotCoordinator !== undefined && typeof value.ensobotCoordinator !== 'boolean') ||
         (value.windowsLocalShell !== undefined &&
           !(WINDOWS_LOCAL_SHELLS as readonly string[]).includes(
             value.windowsLocalShell as string
@@ -2688,12 +2711,13 @@ export function parseAgentCommand(value: unknown): AgentCommand | null {
     case 'prompt':
     case 'steer': {
       const images = value.images === undefined ? [] : parseAttachedImages(value.images);
-      return hasOnlyKeys(value, ['type', 'identity', 'text', 'images', 'deliveryId']) &&
+      return hasOnlyKeys(value, ['type', 'identity', 'text', 'images', 'deliveryId', 'ensobot']) &&
         parseAnySessionIdentity(value.identity) &&
         typeof value.text === 'string' &&
         images !== null &&
         (value.text.length > 0 || images.length > 0) &&
-        (value.deliveryId === undefined || isDeliveryId(value.deliveryId))
+        (value.deliveryId === undefined || isDeliveryId(value.deliveryId)) &&
+        (value.ensobot === undefined || typeof value.ensobot === 'boolean')
         ? (value as unknown as AgentCommand)
         : null;
     }
@@ -3077,6 +3101,17 @@ export function parseAgentWorkerEvent(value: unknown): AgentWorkerEvent | null {
     case 'delivery-settled':
       return hasExactKeys(value, ['type', 'identity', 'seq', 'deliveryId']) &&
         isDeliveryId(value.deliveryId)
+        ? (value as unknown as AgentWorkerEvent)
+        : null;
+    case 'ensobot-bubble':
+      return hasExactKeys(value, ['type', 'identity', 'seq', 'text', 'deliveryId']) &&
+        typeof value.text === 'string' &&
+        isDeliveryId(value.deliveryId)
+        ? (value as unknown as AgentWorkerEvent)
+        : null;
+    case 'ensobot-interject-deferred':
+      return hasOnlyKeys(value, ['type', 'identity', 'seq', 'deliveryId']) &&
+        (value.deliveryId === undefined || isDeliveryId(value.deliveryId))
         ? (value as unknown as AgentWorkerEvent)
         : null;
     case 'status':

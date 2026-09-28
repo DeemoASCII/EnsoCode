@@ -3,6 +3,7 @@ import { parseAgentSummonRequest } from '@shared/types/mentions';
 import { BrowserWindow, dialog, ipcMain, Menu } from 'electron';
 import { agentTypeRegistrySnapshot } from '../services/agentHost';
 import { sendToWindow, TRAFFIC_LIGHT_POSITION } from '../windows/createAppWindow';
+import { openEnsobotWindow } from '../windows/EnsobotWindow';
 import { focusMainWindow } from '../windows/MainWindow';
 import { openSettingsWindow } from '../windows/SettingsWindow';
 import { parseOpenSettingsRequest } from './searchAnything';
@@ -76,6 +77,10 @@ export function registerWindowHandlers(): void {
   });
 
   let pendingDeepLink: ReturnType<typeof parseOpenSettingsRequest> = null;
+
+  ipcMain.handle(IPC_CHANNELS.WINDOW_OPEN_ENSOBOT, () => {
+    openEnsobotWindow();
+  });
 
   ipcMain.handle(IPC_CHANNELS.WINDOW_OPEN_SETTINGS, (_event, raw: unknown) => {
     const link = parseOpenSettingsRequest(raw);

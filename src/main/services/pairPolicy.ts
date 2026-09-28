@@ -5,6 +5,7 @@ import {
   VOICE_CHUNK_MAX_CHARS,
   VOICE_CHUNK_MAX_INDEX,
 } from '@enso/pair';
+import { isCharacterCardId } from '@shared/characterCard';
 import { takeSnapshotTail } from '@shared/snapshotTail';
 import { THINKING_LEVELS } from '@shared/types/agent';
 
@@ -233,6 +234,57 @@ export function parsePhoneCommand(value: unknown): CommandCheck {
     case 'voice-cancel':
       if (!isStr(v.requestId) || v.requestId.length > 64) {
         return { ok: false, error: 'invalid requestId' };
+      }
+      return { ok: true, command: value as PhoneToHost };
+    case 'ensobot-send':
+      if (!isCharacterCardId(v.cardId)) return { ok: false, error: 'invalid cardId' };
+      if (typeof v.text !== 'string' || v.text.trim().length === 0) {
+        return { ok: false, error: 'empty message' };
+      }
+      if (v.text.length > 8_000) return { ok: false, error: 'text too long' };
+      if (!isStr(v.deliveryId) || v.deliveryId.length > 128) {
+        return { ok: false, error: 'invalid deliveryId' };
+      }
+      if (v.retarget !== undefined && typeof v.retarget !== 'boolean') {
+        return { ok: false, error: 'invalid retarget' };
+      }
+      return { ok: true, command: value as PhoneToHost };
+    case 'ensobot-board':
+      if (typeof v.text !== 'string' || v.text.trim().length === 0) {
+        return { ok: false, error: 'empty message' };
+      }
+      if (v.text.length > 8_000) return { ok: false, error: 'text too long' };
+      if (
+        !Array.isArray(v.mentions) ||
+        v.mentions.length > 32 ||
+        v.mentions.some((id) => typeof id !== 'string' || id.length > 80)
+      ) {
+        return { ok: false, error: 'invalid mentions' };
+      }
+      if (!isStr(v.deliveryId) || v.deliveryId.length > 128) {
+        return { ok: false, error: 'invalid deliveryId' };
+      }
+      return { ok: true, command: value as PhoneToHost };
+    case 'ensobot-claim':
+      if (!isStr(v.taskId) || v.taskId.length > 128 || !isCharacterCardId(v.cardId)) {
+        return { ok: false, error: 'invalid id' };
+      }
+      return { ok: true, command: value as PhoneToHost };
+    case 'ensobot-enqueue':
+      if (!isCharacterCardId(v.cardId)) return { ok: false, error: 'invalid cardId' };
+      if (typeof v.title !== 'string' || v.title.trim().length === 0 || v.title.length > 500) {
+        return { ok: false, error: 'invalid title' };
+      }
+      if (typeof v.check !== 'string' || v.check.trim().length === 0 || v.check.length > 500) {
+        return { ok: false, error: 'invalid check' };
+      }
+      return { ok: true, command: value as PhoneToHost };
+    case 'ensobot-workspace':
+      if (v.projectId != null && (typeof v.projectId !== 'string' || v.projectId.length > 128)) {
+        return { ok: false, error: 'invalid projectId' };
+      }
+      if (v.sessionId != null && (typeof v.sessionId !== 'string' || v.sessionId.length > 128)) {
+        return { ok: false, error: 'invalid sessionId' };
       }
       return { ok: true, command: value as PhoneToHost };
     default:
