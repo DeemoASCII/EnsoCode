@@ -46,3 +46,6 @@ __pycache__/
 resources/rtk/*/rtk
 resources/rtk/*/rtk.exe
 resources/rtk/*/rtk.tmp-*
+
+# EnsoBot 参考源码（浅克隆，不入库）
+references/
