@@ -269,6 +269,62 @@ export function resolveChatModel(input: {
   };
 }
 
+export type EnsobotModelDecision =
+  | { kind: 'card'; providerId: string; modelId: string }
+  | { kind: 'default'; providerId: string; modelId: string; fellBack: true }
+  | ({ kind: 'oauth-blocked' } & OauthCredentialBlock)
+  | { kind: 'unavailable'; reason: 'no-usable-model' };
+
+/**
+ * 卡上的模型能用就用卡上的。明确不可用才沿现有默认链往下找，并记下已回默认。
+ * 钥匙还在加载或 OAuth 还不明时，把原因交回去，不偷偷换号。
+ */
+export function resolveEnsobotModel(input: {
+  cardModel: DefaultModelRef | null;
+  defaultModel: DefaultModelRef | null;
+  projectDefaultModel?: DefaultModelRef | null;
+  groupDefaultModel?: DefaultModelRef | null;
+  providers: readonly ModelProvider[];
+  credentials: ModelCredentialContext;
+}): EnsobotModelDecision {
+  const cardUsability = modelUsability(input.cardModel, input.providers, input.credentials);
+  if (cardUsability === 'usable' && input.cardModel) {
+    return {
+      kind: 'card',
+      providerId: input.cardModel.providerId,
+      modelId: input.cardModel.modelId,
+    };
+  }
+  if (isOauthUnknown(cardUsability)) {
+    const blocked = oauthCredentialBlock(input.credentials);
+    if (blocked) return { kind: 'oauth-blocked', ...blocked };
+  }
+  const resolved = resolveChatModel({
+    defaultModel: input.defaultModel,
+    projectDefaultModel: input.projectDefaultModel,
+    groupDefaultModel: input.groupDefaultModel,
+    providers: input.providers,
+    credentials: input.credentials,
+  });
+  if (resolved.providerId && resolved.modelId) {
+    return {
+      kind: 'default',
+      providerId: resolved.providerId,
+      modelId: resolved.modelId,
+      fellBack: true,
+    };
+  }
+  if ('reason' in resolved && resolved.reason !== 'no-usable-model') {
+    return {
+      kind: 'oauth-blocked',
+      reason: resolved.reason,
+      suggestedAction: resolved.suggestedAction,
+      ...(resolved.credentialError ? { credentialError: resolved.credentialError } : {}),
+    };
+  }
+  return { kind: 'unavailable', reason: 'no-usable-model' };
+}
+
 /** 确定可用候选优先；只有没有可用项且确有 OAuth 未知候选时才 defer。 */
 export function sanitizeDefaultModel(state: DefaultModelState): SanitizeDefaultModelResult {
   if (!state.defaultModel) {

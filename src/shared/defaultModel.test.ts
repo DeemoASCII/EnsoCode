@@ -5,6 +5,7 @@ import {
   modelUsability,
   resolveChatModel,
   resolveChatReasoning,
+  resolveEnsobotModel,
   sanitizeDefaultModel,
 } from './defaultModel';
 import type { ModelProvider } from './types';
@@ -323,5 +324,59 @@ describe('defaultApprovalMode', () => {
     expect(
       defaultApprovalMode({ providerId: 'p', modelId: 'gone' }, providers, ready(), 'assistant')
     ).toBe('full');
+  });
+});
+
+describe('resolveEnsobotModel', () => {
+  const credentials = ready();
+
+  it('卡上的模型能用就用卡上的，不改成默认', () => {
+    expect(
+      resolveEnsobotModel({
+        cardModel: { providerId: 'card', modelId: 'own' },
+        defaultModel: { providerId: 'fallback', modelId: 'next' },
+        providers: [provider('card', ['own']), provider('fallback', ['next'])],
+        credentials,
+      })
+    ).toEqual({ kind: 'card', providerId: 'card', modelId: 'own' });
+  });
+
+  it('缺模型、关掉的模型、没钥匙时回默认，任务不因此失败', () => {
+    const providers = [
+      provider('card', ['gone'], { models: [{ id: 'off', enabled: false }] }),
+      provider('fallback', ['next']),
+    ];
+    const base = {
+      defaultModel: { providerId: 'fallback', modelId: 'next' },
+      providers: [provider('card', ['m'], { apiKey: '' }), provider('fallback', ['next'])],
+      credentials,
+    };
+    expect(
+      resolveEnsobotModel({ ...base, cardModel: { providerId: 'card', modelId: 'missing' } })
+    ).toEqual({ kind: 'default', providerId: 'fallback', modelId: 'next', fellBack: true });
+    expect(
+      resolveEnsobotModel({
+        cardModel: { providerId: 'card', modelId: 'off' },
+        defaultModel: { providerId: 'fallback', modelId: 'next' },
+        providers,
+        credentials,
+      })
+    ).toEqual({ kind: 'default', providerId: 'fallback', modelId: 'next', fellBack: true });
+    expect(
+      resolveEnsobotModel({ ...base, cardModel: { providerId: 'card', modelId: 'm' } })
+    ).toEqual({ kind: 'default', providerId: 'fallback', modelId: 'next', fellBack: true });
+  });
+
+  it('OAuth 还在加载时不换成另一个号', () => {
+    const decision = resolveEnsobotModel({
+      cardModel: { providerId: 'oauth', modelId: 'm' },
+      defaultModel: { providerId: 'api', modelId: 'm' },
+      providers: [oauthProvider('oauth', 'anthropic', ['m']), provider('api', ['m'])],
+      credentials: { oauthCredentials: { status: 'loading' } },
+    });
+    expect(decision).toMatchObject({
+      kind: 'oauth-blocked',
+      reason: 'oauth-credentials-loading',
+    });
   });
 });
