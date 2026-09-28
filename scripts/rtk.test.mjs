@@ -90,7 +90,16 @@ test('bounds a stalled download with an abort timeout', async () => {
         downloadTimeoutMs: 5,
         fetchImpl: async (_url, { signal }) =>
           new Promise((_resolve, reject) => {
-            signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+            // 真下载会占住事件循环。AbortSignal.timeout 的计时器不会，假下载得自己留一个。
+            const hold = setTimeout(() => {}, 1_000);
+            signal.addEventListener(
+              'abort',
+              () => {
+                clearTimeout(hold);
+                reject(signal.reason);
+              },
+              { once: true }
+            );
           }),
       }),
       /Timed out downloading RTK.*after 5ms/
