@@ -460,7 +460,9 @@ describe('IPC 入参收窄', () => {
 
   it('查不存在的账号额度直接返回 error，不发网络请求', async () => {
     const { getOauthAccountUsage } = await import('./oauthProviders');
-    const fetchSpy = vi.spyOn(globalThis, 'fetch');
+    // fetch 已由 beforeAll 设为共享 vi.fn；spyOn 会保留前面用例的调用记录。
+    // 只统计本次未知账号查询期间的请求，仍然要求零新请求。
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockClear();
     const usage = await getOauthAccountUsage('anthropic#9');
     expect(usage).toEqual({
       key: 'anthropic#9',
