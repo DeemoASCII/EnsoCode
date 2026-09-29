@@ -357,6 +357,7 @@ export const IPC_PRODUCT_COVERAGE = {
   WINDOW_OPEN_SETTINGS: surfaces('window.open-settings'),
   WINDOW_OPEN_ENSOBOT: excluded('Opens the EnsoBot window. Not an Enso agent capability.'),
   ENSOBOT_STATE_GET: excluded('EnsoBot window projection. Not an Enso agent capability.'),
+  ENSOBOT_RESPOND: excluded('Human-only EnsoBot approval/ask response. Never an agent capability.'),
   ENSOBOT_CHANGED: excluded('EnsoBot window projection event.'),
   ENSOBOT_CARDS_LIST: excluded('EnsoBot character card list. Not an Enso agent capability.'),
   ENSOBOT_CARDS_IMPORT: excluded('EnsoBot character card import. Not an Enso agent capability.'),

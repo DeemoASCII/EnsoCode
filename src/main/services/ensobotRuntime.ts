@@ -1,8 +1,10 @@
 import { mkdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import type { PhoneToHost } from '@enso/pair';
+import type { SessionIdentity } from '@shared/builtinAgents';
 import type { EnsobotModelDecision } from '@shared/defaultModel';
 import { resolveEnsobotModel } from '@shared/defaultModel';
+import { parseEnsobotResponse } from '@shared/ensobot/interaction';
 import type { EnsobotActionResult } from '@shared/ensobot/snapshot';
 import { IPC_CHANNELS, type ModelProvider, type Project, type ProjectGroup } from '@shared/types';
 import type { AgentWorkerEvent } from '@shared/types/agent';
@@ -13,11 +15,14 @@ import {
   isAgentWorkerReady,
   promptSession,
   readSettingsState,
+  respondApproval,
+  respondAsk,
   spawnSession,
   steerSession,
 } from './agentHost';
 import { type CardStore, createCharacterCardStore } from './characterCards';
 import { createEnsobotHost, type EnsobotHost } from './ensobotHost';
+import { createEnsobotInteractions } from './ensobotInteractions';
 import { readStoredOauthCredentialKeys } from './oauthProviders';
 
 let cards: CardStore | null = null;
@@ -103,14 +108,59 @@ export function getEnsobotHost(): EnsobotHost {
           publishEnsobotFrame({ type: 'ensobot-snapshot', snapshot });
         });
       },
+      interactions: () => getInteractions().snapshot(),
     });
   }
   return host;
 }
 
+// Main 提供索引权威关系；不按 sessionId 字符串前缀猜子会话的所属人物卡。
+let sessionRoot: (identity: SessionIdentity) => SessionIdentity | undefined = () => undefined;
+export function setEnsobotSessionRootResolver(resolve: typeof sessionRoot): void {
+  sessionRoot = resolve;
+}
+let interactions: ReturnType<typeof createEnsobotInteractions> | undefined;
+function getInteractions() {
+  interactions ??= createEnsobotInteractions({
+    ownerOf: (identity) => {
+      const bot = getEnsobotHost();
+      const direct = bot.ownerOfSession(identity);
+      if (direct) return direct;
+      const root = sessionRoot(identity);
+      return root ? bot.ownerOfSession(root) : undefined;
+    },
+    workerReady: isAgentWorkerReady,
+    approve: respondApproval,
+    answer: respondAsk,
+    uuid: () => crypto.randomUUID(),
+    changed: () => getEnsobotHost().touch(),
+  });
+  return interactions;
+}
+export function respondEnsobotInteraction(raw: unknown): EnsobotActionResult {
+  const input = parseEnsobotResponse(raw);
+  return input ? getInteractions().respond(input) : { ok: false, error: 'bad-params' };
+}
+
 export function observeEnsobotWorkerEvent(
   event: AgentWorkerEvent | { type: 'worker-exited' }
 ): void {
+  switch (event.type) {
+    case 'approval-request':
+    case 'approval-resolved':
+    case 'ask-request':
+    case 'ask-resolved':
+    case 'snapshot':
+    case 'worker-exited':
+    case 'parent-ended':
+    case 'parent-rejected':
+    case 'child-ended':
+    case 'child-rejected':
+    case 'coworker-update':
+    case 'turn-completed':
+    case 'turn-failed':
+      getInteractions().observe(event);
+  }
   if (
     event.type !== 'worker-exited' &&
     event.type !== 'ensobot-bubble' &&
@@ -139,6 +189,8 @@ export async function handleEnsobotGuestCommand(
 ): Promise<EnsobotActionResult> {
   const bot = getEnsobotHost();
   switch (command.type) {
+    case 'ensobot-respond':
+      return respondEnsobotInteraction(command.response);
     case 'ensobot-send':
       return bot.submitUtterance({
         cardId: command.cardId,

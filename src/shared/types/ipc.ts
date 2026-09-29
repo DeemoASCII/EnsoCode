@@ -24,6 +24,7 @@ export const IPC_CHANNELS = {
   WINDOW_OPEN_SETTINGS: 'window:open-settings',
   WINDOW_OPEN_ENSOBOT: 'window:open-ensobot',
   ENSOBOT_STATE_GET: 'ensobot:state-get',
+  ENSOBOT_RESPOND: 'ensobot:respond',
   ENSOBOT_CHANGED: 'ensobot:changed',
   ENSOBOT_CARDS_LIST: 'ensobot:cards-list',
   ENSOBOT_CARDS_IMPORT: 'ensobot:cards-import',

@@ -24,6 +24,7 @@ import { cn } from '@/lib/utils';
 import { useRemoteNodesStore } from '@/stores/remoteNodes';
 import { CharacterCardDialog } from './CharacterCardDialog';
 import { Board, ChatPane, GroupDialog } from './EnsobotChat';
+import { EnsobotInteractions } from './EnsobotInteractions';
 import { CirclePhoto, EmptyState, SurfaceHeader, TaskStatus } from './EnsobotPrimitives';
 import { EnsobotWorkspace } from './EnsobotWorkspace';
 import { type ChatSelection, lastPreview, reconcileChat } from './ensobotView';
@@ -336,6 +337,7 @@ function Desk({
         </div>
       </aside>
       <main className="flex min-h-0 min-w-0 flex-1 flex-col">
+        {snapshot && <EnsobotInteractions snapshot={snapshot} />}
         {error || loadError ? (
           <div
             role="alert"

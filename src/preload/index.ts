@@ -1081,6 +1081,9 @@ const electronAPI = {
   },
 
   ensobot: {
+    respond: (
+      response: import('@shared/ensobot/interaction').EnsobotResponse
+    ): Promise<EnsobotActionResult> => ipcRenderer.invoke(IPC_CHANNELS.ENSOBOT_RESPOND, response),
     getState: (): Promise<EnsobotSnapshot> => ipcRenderer.invoke(IPC_CHANNELS.ENSOBOT_STATE_GET),
     onChanged: (callback: (snapshot: EnsobotSnapshot) => void): (() => void) => {
       const listener = (_: unknown, snapshot: EnsobotSnapshot) => callback(snapshot);

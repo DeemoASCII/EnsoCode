@@ -138,6 +138,11 @@ export type PhoneToHost =
       retarget?: boolean;
     }
   | { type: 'ensobot-board'; text: string; mentions: string[]; deliveryId: string }
+  | {
+      type: 'ensobot-respond';
+      response: import('../../../src/shared/ensobot/interaction').EnsobotResponse;
+      deliveryId: string;
+    }
   | { type: 'ensobot-room-create'; name: string; memberIds: string[] }
   | { type: 'ensobot-room-send'; roomId: string; text: string; deliveryId: string }
   | { type: 'ensobot-claim'; taskId: string; cardId: string }

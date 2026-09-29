@@ -6,6 +6,7 @@ import {
   VOICE_CHUNK_MAX_INDEX,
 } from '@enso/pair';
 import { isCharacterCardId } from '@shared/characterCard';
+import { parseEnsobotResponse } from '@shared/ensobot/interaction';
 import { takeSnapshotTail } from '@shared/snapshotTail';
 import { THINKING_LEVELS } from '@shared/types/agent';
 
@@ -236,6 +237,12 @@ export function parsePhoneCommand(value: unknown): CommandCheck {
         return { ok: false, error: 'invalid requestId' };
       }
       return { ok: true, command: value as PhoneToHost };
+    case 'ensobot-respond': {
+      const response = parseEnsobotResponse(v.response);
+      if (!response || !isStr(v.deliveryId) || v.deliveryId.length > 128)
+        return { ok: false, error: 'invalid ensobot response' };
+      return { ok: true, command: { type: 'ensobot-respond', response, deliveryId: v.deliveryId } };
+    }
     case 'ensobot-send':
       if (!isCharacterCardId(v.cardId)) return { ok: false, error: 'invalid cardId' };
       if (typeof v.text !== 'string' || v.text.trim().length === 0) {

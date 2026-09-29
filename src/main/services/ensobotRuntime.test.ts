@@ -10,6 +10,9 @@ const mocks = vi.hoisted(() => ({
   deps: null as EnsobotHostDeps | null,
   spawn: vi.fn((..._args: unknown[]) => ({ ok: true })),
   prepare: vi.fn(async () => true),
+  approve: vi.fn(() => ({ ok: true })),
+  answer: vi.fn(() => ({ ok: true })),
+  owner: vi.fn(() => ({ cardId: '11111111-1111-4111-8111-111111111111', generation: 'g' })),
 }));
 vi.mock('electron', () => ({ app: { getPath: () => mocks.root } }));
 vi.mock('../windows/createAppWindow', () => ({ sendToAllWindows: vi.fn() }));
@@ -20,6 +23,8 @@ vi.mock('./agentHost', () => ({
   promptSession: vi.fn(),
   steerSession: vi.fn(),
   readSettingsState: () => ({}),
+  respondApproval: mocks.approve,
+  respondAsk: mocks.answer,
 }));
 vi.mock('./characterCards', () => ({
   createCharacterCardStore: () => ({ list: () => ({ cards: [] }) }),
@@ -28,7 +33,11 @@ vi.mock('./oauthProviders', () => ({ readStoredOauthCredentialKeys: async () => 
 vi.mock('./ensobotHost', () => ({
   createEnsobotHost: (_root: string, deps: EnsobotHostDeps) => {
     mocks.deps = deps;
-    return { observe: mocks.observe } as unknown as EnsobotHost;
+    return {
+      observe: mocks.observe,
+      ownerOfSession: mocks.owner,
+      touch: vi.fn(),
+    } as unknown as EnsobotHost;
   },
 }));
 let runtime: typeof import('./ensobotRuntime');
@@ -37,6 +46,8 @@ beforeEach(async () => {
   mocks.observe.mockClear();
   mocks.spawn.mockClear();
   mocks.prepare.mockClear();
+  mocks.approve.mockClear();
+  mocks.answer.mockClear();
   mocks.root = mkdtempSync(path.join(tmpdir(), 'ensobot-runtime-'));
   runtime = await import('./ensobotRuntime');
 });
@@ -83,4 +94,50 @@ it('恢复沿用 Main 保存的 sessionFile，同时具备按需重启 worker �
   });
   await mocks.deps!.prepareWorker?.();
   expect(mocks.prepare).toHaveBeenCalledOnce();
+});
+
+it('审批与提问通过真实运行器投影并经 guest 命令回应 worker，不采信调用方自选目标', async () => {
+  runtime.getEnsobotHost();
+  const identity = { sessionId: 's', generation: 'g' };
+  runtime.observeEnsobotWorkerEvent({
+    type: 'approval-request',
+    identity,
+    seq: 10,
+    request: { requestId: 'apr', tool: 'powershell', kind: 'command', summary: 'echo ok' },
+  });
+  runtime.observeEnsobotWorkerEvent({
+    type: 'ask-request',
+    identity,
+    seq: 11,
+    ask: { requestId: 'ask', question: '继续？' },
+  });
+  const pending = mocks.deps!.interactions!();
+  expect(pending.map((item) => item.kind)).toEqual(['approval', 'ask']);
+  const approval = pending[0];
+  const result = await runtime.handleEnsobotGuestCommand({
+    type: 'ensobot-respond',
+    deliveryId: 'receipt',
+    response: { id: approval.id, cardId: approval.cardId, kind: 'approval', decision: 'allow' },
+  });
+  expect(result.ok).toBe(true);
+  expect(mocks.approve).toHaveBeenCalledWith(identity, 'apr', 'allow');
+  const ask = pending[1];
+  expect(
+    runtime.respondEnsobotInteraction({
+      id: ask.id,
+      cardId: ask.cardId,
+      kind: 'ask',
+      answer: '继续',
+      sessionId: 'forged',
+    }).ok
+  ).toBe(true);
+  expect(mocks.answer).toHaveBeenCalledWith(identity, 'ask', '继续');
+  runtime.observeEnsobotWorkerEvent({
+    type: 'approval-resolved',
+    identity,
+    seq: 12,
+    requestId: 'apr',
+  });
+  runtime.observeEnsobotWorkerEvent({ type: 'ask-resolved', identity, seq: 13, requestId: 'ask' });
+  expect(mocks.deps!.interactions!()).toEqual([]);
 });

@@ -972,6 +972,7 @@ async function handleFrame(
       break;
     }
     case 'ensobot-send':
+    case 'ensobot-respond':
     case 'ensobot-board':
     case 'ensobot-room-create':
     case 'ensobot-room-send':

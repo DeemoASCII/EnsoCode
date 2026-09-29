@@ -1,8 +1,10 @@
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
+import type { SessionIdentity } from '@shared/builtinAgents';
 import { type CharacterCardData, type CharacterRole, EMPTY_ROLE } from '@shared/characterCard';
 import type { EnsobotModelDecision } from '@shared/defaultModel';
 import { decideBoardWake, idleLine } from '@shared/ensobot/board';
+import type { EnsobotInteraction } from '@shared/ensobot/interaction';
 import { ensobotSteerAction, planInterjection } from '@shared/ensobot/interject';
 import { acceptDelivery, type EnsobotLane, orderDeliveries } from '@shared/ensobot/lane';
 import {
@@ -69,6 +71,7 @@ export interface EnsobotHostDeps {
   listCardIds: () => string[];
   uuid: () => string;
   onChange?: (snapshot: EnsobotSnapshot) => void;
+  interactions?: () => EnsobotInteraction[];
 }
 
 interface Runtime {
@@ -115,6 +118,7 @@ interface LogLine {
 }
 
 export interface EnsobotHost {
+  ownerOfSession(identity: SessionIdentity): { cardId: string; generation: string } | undefined;
   snapshot(): EnsobotSnapshot;
   submitUtterance(input: {
     cardId: string;
@@ -256,6 +260,7 @@ export function createEnsobotHost(root: string, deps: EnsobotHostDeps): EnsobotH
 
   const view = (): EnsobotSnapshot => ({
     seq,
+    interactions: deps.interactions?.() ?? [],
     cards: deps.listCardIds().flatMap((id) => {
       const summary = deps.loadCard(id);
       if (!summary) return [];
@@ -710,6 +715,17 @@ export function createEnsobotHost(root: string, deps: EnsobotHostDeps): EnsobotH
   persist();
   return {
     snapshot: view,
+    ownerOfSession: (identity) => {
+      const entry = Object.entries(runtimes).find(
+        ([, runtime]) =>
+          runtime.spawned &&
+          runtime.sessionId === identity.sessionId &&
+          runtime.generation === identity.generation
+      );
+      return entry && deps.loadCard(entry[0])
+        ? { cardId: entry[0], generation: entry[1].generation }
+        : undefined;
+    },
     submitUtterance: (input) =>
       chain(input.cardId, () =>
         submitBody({

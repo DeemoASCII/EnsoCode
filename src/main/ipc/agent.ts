@@ -95,7 +95,10 @@ import { pickBrowserFileRoot, setBrowserFileRootResolver } from '../services/bro
 import { browserHost } from '../services/browserHost';
 import { chatModelsRoot } from '../services/chatModels';
 import { reloadConversation } from '../services/conversationReload';
-import { observeEnsobotWorkerEvent } from '../services/ensobotRuntime';
+import {
+  observeEnsobotWorkerEvent,
+  setEnsobotSessionRootResolver,
+} from '../services/ensobotRuntime';
 import { searchFiles } from '../services/fileSearch';
 import { createLocalComplete, memoryCompleteFromSettings } from '../services/llama/chat';
 import {
@@ -877,6 +880,17 @@ export function registerAgentHandlers(): void {
     },
   });
 
+  setEnsobotSessionRootResolver((identity) => {
+    const current = agentSessionIndex.currentIdentity(identity.sessionId);
+    if (
+      !current ||
+      current.generation !== identity.generation ||
+      !agentSessionIndex.isAlive(identity.sessionId)
+    )
+      return undefined;
+    const rootId = agentSessionIndex.workspaceRoot(identity.sessionId);
+    return agentSessionIndex.currentIdentity(rootId);
+  });
   setAgentEventListener((workerEvent) => {
     // MCP 旁路事件不属于任何会话：只转发到独立通道 / 落 token，不进 dispatch 与会话广播
     if (workerEvent.type === 'mcp-status') {

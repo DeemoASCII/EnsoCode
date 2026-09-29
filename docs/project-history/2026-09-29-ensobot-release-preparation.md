@@ -1,4 +1,4 @@
-# EnsoBot 0.0.1 发布准备（暂未发布）
+# EnsoBot 0.0.1 发布准备
 
 ## 范围与基线
 
@@ -29,12 +29,25 @@
 - 启动测试隔离 shell 探测并先收口上个用例的 deferred startup，避免未结束的 setImmediate 跨用例污染 worker 调用次数。
 - 最终标准 Linux 门禁 `pnpm typecheck && pnpm lint && pnpm test` 退出 0：547 文件通过、1 文件原有跳过；5974 用例通过、5 用例原有跳过。完整输出在本地 `temp/ensobot-linux-gate.log`。一次性 Linux 执行脚本已删除。该全绿结果不覆盖下面新发现、尚无长期测试的审批缺口。
 
-## 新发现的发布阻塞：审批/问答没有 EnsoBot 宿主
+## 审查时发现的发布阻塞：审批/问答没有 EnsoBot 宿主（后续已修复）
 
-**不能发布当前包。** 默认人物卡 `EMPTY_ROLE.approvalScope` 是 `supervised`，工具会实际停在 `ApprovalGate`；但 `observeEnsobotWorkerEvent` 的白名单不转交 `approval-request` / `ask-request`，EnsoBot snapshot 与界面也没有 pending 审批/问答及回应入口。普通工作台不会自动登记 Bot 的独立 session，不能充当其交互宿主。
+**该次审查不能发布当时的包。** 默认人物卡 `EMPTY_ROLE.approvalScope` 是 `supervised`，工具会实际停在 `ApprovalGate`；但当时 `observeEnsobotWorkerEvent` 的白名单不转交 `approval-request` / `ask-request`，EnsoBot snapshot 与界面也没有 pending 审批/问答及回应入口。普通工作台不会自动登记 Bot 的独立 session，不能充当其交互宿主。
 
 两个一次性运行器复现测试分别输入真实类型的审批与问答事件，期望进入宿主，结果均为零调用（2/2 失败）；复现文件用完立即删除。该证据验证的是事件链路，不冒充真实模型端到端权限验收。此前两厂商工具验证使用 `full`，不能覆盖默认 supervised 行为。
 
 后续必修完整路径：worker 请求 → Main 按人物卡与当前 generation 建权威 pending → EnsoBot 本地/远端投影 → UI 允许/拒绝/回答 → typed IPC 或节点协议 → Main 校验卡、请求与代次 → worker；还须处理 resolve、重载、退出、重复回应、过期 generation，以及两厂商默认权限真机验收。不能仅扩大白名单、禁用 ask_user、隐藏审批档位或改为默认 full。
 
 本轮不推送发布标签、不创建 GitHub Release；安装包仅为本地验证产物，不代表可分发版本。
+
+## 后续审批/问答修复与验收
+
+- `ensobotInteractions.ts` 在 Main 内存持有请求和真实 worker identity，人物卡与根 generation 由宿主/AgentSessionIndex 确认；Renderer 只拿随机令牌与卡 id，不能指定执行会话或权限代次。
+- 新 typed IPC `ENSOBOT_RESPOND` 和节点协议 `ensobot-respond` 共用 `parseEnsobotResponse`。该回应通道不作为模型可调用 capability。
+- snapshot 携带 pending 交互，EnsoBot 所有页面顶部均可回应；复用 ApprovalBar / AskBar，不改默认 supervised，不靠普通 conversation store 接收 Bot 事件。
+- 相同回应幂等；冲突决定、错卡、旧代、代审中人工抢答、离线均拒绝。成功发送等待 worker resolved，传输失败保留请求可重试。worker 退出清空，进程冷启动不重放授权。
+- worker snapshot 可补漏，已 resolved 的请求不会被迟到 snapshot 复活；根/子会话序号独立，回应保留完整 child identity，不丢 parent/instance 信息。
+- 新增解析器、交互生命周期、运行器接线、远端解析回归；最终完整 Linux typecheck/lint/test 通过（550 文件、5983 项通过，5 项原有跳过）。Windows 独立 NSIS 重打包及原生模块冒烟通过。
+- 独立 userData / CDP 9777，inyx `claude-fable-5-1` 与 `gpt-6-astra` 两模型均采用 supervised。真实工具轨迹确认：允许后 `APPROVAL_PASS` / `ALLOW_FINAL` 才执行；拒绝结果为 `User denied this operation`，不出现 DENY_PROBE 命令输出；ask_user 获得「拒绝已确认」后均返回 `DENY_BRANCH_OK`。
+- 待审批时重载窗口，两请求 id 保持不变且重新出现；点击允许后两模型均返回 `ALLOW_FINAL_OK`，pending 清空。远端结构/投递有回归测试；两台物理节点互联仍未做专项验收。
+
+是否公开以本次 GitHub 发布工作流最终结果为准；本地测试通过不能替代平台打包和原生模块检查。

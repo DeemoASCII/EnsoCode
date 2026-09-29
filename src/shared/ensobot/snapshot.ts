@@ -1,4 +1,5 @@
 import type { CircleCrop } from '../characterCard';
+import type { EnsobotInteraction } from './interaction';
 import type { EnsobotTask } from './queue';
 import type { EnsobotRoom } from './rooms';
 
@@ -61,6 +62,8 @@ export interface EnsobotSnapshot {
   tasks: EnsobotTask[];
   workspace: EnsobotWorkspaceView;
   notices: EnsobotNotice[];
+  /** 可选以兼容旧节点；新宿主始终提供。刷新从 Main 重读，不在 Renderer 存权限状态。 */
+  interactions?: EnsobotInteraction[];
 }
 
 export interface EnsobotActionResult {

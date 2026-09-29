@@ -1,7 +1,11 @@
 import { readFileSync, writeFileSync } from 'node:fs';
 import { IPC_CHANNELS } from '@shared/types';
 import { BrowserWindow, dialog, ipcMain } from 'electron';
-import { getCharacterCardStore, getEnsobotHost } from '../services/ensobotRuntime';
+import {
+  getCharacterCardStore,
+  getEnsobotHost,
+  respondEnsobotInteraction,
+} from '../services/ensobotRuntime';
 
 export function registerEnsobotHandlers(): void {
   const senderWindow = (event: Electron.IpcMainInvokeEvent): BrowserWindow | null => {
@@ -10,6 +14,9 @@ export function registerEnsobotHandlers(): void {
   };
 
   ipcMain.handle(IPC_CHANNELS.ENSOBOT_STATE_GET, () => getEnsobotHost().snapshot());
+  ipcMain.handle(IPC_CHANNELS.ENSOBOT_RESPOND, (_event, raw: unknown) =>
+    respondEnsobotInteraction(raw)
+  );
 
   ipcMain.handle(IPC_CHANNELS.ENSOBOT_CARDS_LIST, () => getCharacterCardStore().list());
 
