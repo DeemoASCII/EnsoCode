@@ -374,6 +374,12 @@ html.bg-image-enabled [data-slot='composer'] {
   background-color: oklch(from var(--background) l c h / var(--bg-composer-alpha, 0.6));
 }
 
+/* 欢迎页建议卡片和工具详情卡片不再额外叠一层面板色，直接透出壁纸。 */
+html.bg-image-enabled [data-slot='welcome-suggestion'],
+html.bg-image-enabled [data-slot='tool-details'] {
+  background-color: transparent;
+}
+
 @keyframes settings-row-flash {
   0%, 100% { box-shadow: none; }
   25%, 75% { box-shadow: 0 0 0 2px var(--color-ring); }

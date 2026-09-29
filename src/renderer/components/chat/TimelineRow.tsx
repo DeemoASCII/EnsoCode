@@ -1384,7 +1384,10 @@ function ToolGroupRow({
   return (
     <>
       {head}
-      <div className="t-acc-reveal mt-1 mb-1.5 ml-[30px] overflow-hidden rounded-lg border border-border/70 bg-card text-sm shadow-xs">
+      <div
+        data-slot="tool-details"
+        className="t-acc-reveal mt-1 mb-1.5 ml-[30px] overflow-hidden rounded-lg border border-border/70 bg-card text-sm shadow-xs"
+      >
         {explore.goal && (
           <div className="border-b border-border/60 px-3 py-2">
             <div className="mb-0.5 text-[11px] text-muted-foreground">{t('Goal')}</div>
@@ -1702,7 +1705,10 @@ function ToolRow({ item }: { item: Extract<TimelineItem, { kind: 'tool' }> }) {
       </div>
       {expanded && expandable && (
         // 展开内容收进与工具名对齐的卡片，左侧留给时间线竖线
-        <div className="t-acc-reveal mt-1 mb-1.5 ml-[30px] overflow-hidden rounded-lg border border-border/70 bg-card shadow-xs">
+        <div
+          data-slot="tool-details"
+          className="t-acc-reveal mt-1 mb-1.5 ml-[30px] overflow-hidden rounded-lg border border-border/70 bg-card shadow-xs"
+        >
           {mcp && (
             <div className="truncate border-b border-border/60 px-3 py-1 font-mono text-[10px] text-muted-foreground">
               {mcp.server}.{mcp.tool}
