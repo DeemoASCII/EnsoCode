@@ -8,6 +8,7 @@ import {
   trayClickAction,
   trayIconCandidates,
 } from '@shared/appServerMode';
+import { PRODUCT } from '@shared/product';
 import { IPC_CHANNELS } from '@shared/types';
 import { app, ipcMain, Menu, nativeImage, Tray } from 'electron';
 import {
@@ -23,7 +24,7 @@ import {
   getWindowWebContents,
   sendToWindow,
 } from '../windows/createAppWindow';
-import { getEnsobotWindow } from '../windows/EnsobotWindow';
+import { getEnsobotWindow, openEnsobotWindow } from '../windows/EnsobotWindow';
 import { createMainWindow, getMainWindow, isMainWindowAlive } from '../windows/MainWindow';
 import { getSettingsWindow } from '../windows/SettingsWindow';
 import { allowAppQuit, bypassNextCloseConfirm } from './appCloseConfirm';
@@ -75,7 +76,8 @@ function trayIcon() {
 }
 
 function trayToggleLabel(zh: boolean): string {
-  if (trayClickAction(active) === 'show') return zh ? '打开 EnsoCode' : 'Show EnsoCode';
+  if (trayClickAction(active) === 'show')
+    return zh ? `打开 ${PRODUCT.name}` : `Show ${PRODUCT.name}`;
   return zh ? '最小化到托盘' : 'Minimize to tray';
 }
 
@@ -129,7 +131,7 @@ function rebuildTrayMenu(): void {
       },
     ])
   );
-  tray.setToolTip('EnsoCode');
+  tray.setToolTip(PRODUCT.name);
 }
 
 function handleTrayActivate(): void {
@@ -213,6 +215,7 @@ export function leaveServerMode(): void {
     win.show();
     win.focus();
   }
+  if (PRODUCT.slug === 'ensobot') openEnsobotWindow();
   ensureTray();
 }
 

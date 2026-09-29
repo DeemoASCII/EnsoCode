@@ -6,6 +6,8 @@ const mocks = vi.hoisted(() => ({
   isPackaged: false,
   appHandlers: new Map<string, (...args: unknown[]) => void>(),
   setPath: vi.fn(),
+  setName: vi.fn(),
+  openEnsobot: vi.fn(() => mocks.order.push('ensobot')),
   autoUpdaterInit: vi.fn(),
   startAgentWorker: vi.fn(() => mocks.order.push('worker')),
   createMainWindow: vi.fn(() => {
@@ -26,6 +28,7 @@ vi.mock('electron', () => ({
     getAppPath: () => '/app',
     getPath: (name: string) => (name === 'appData' ? '/system-app-data' : '/tmp'),
     setPath: mocks.setPath,
+    setName: mocks.setName,
     requestSingleInstanceLock: () => true,
     quit: vi.fn(),
     whenReady: () => Promise.resolve(),
@@ -74,6 +77,10 @@ vi.mock('./services/proxyConfig', () => ({
     whenReady: () => Promise.resolve(true),
   }),
 }));
+vi.mock('./services/shellPath', () => ({
+  seedProcessPath: vi.fn(),
+  hydrateShellPath: vi.fn(async () => undefined),
+}));
 vi.mock('./services/updater/AutoUpdater', () => ({
   autoUpdaterService: { init: mocks.autoUpdaterInit },
 }));
@@ -81,6 +88,7 @@ vi.mock('./windows/MainWindow', () => ({
   createMainWindow: mocks.createMainWindow,
   getMainWindow: vi.fn(() => null),
 }));
+vi.mock('./windows/EnsobotWindow', () => ({ openEnsobotWindow: mocks.openEnsobot }));
 vi.mock('./services/appServerMode', () => ({
   ensureTray: vi.fn(() => mocks.order.push('tray')),
   leaveServerMode: vi.fn(),
@@ -98,12 +106,17 @@ vi.mock('./services/trayToggleShortcut', () => ({
 
 const originalUserDataOverride = process.env.ENSO_USER_DATA_DIR;
 
-beforeEach(() => {
+beforeEach(async () => {
+  // 前一用例的 deferred startup 必须先收口，避免串入下一用例的 worker 计数。
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  vi.unstubAllGlobals();
   vi.resetModules();
   mocks.order.length = 0;
   mocks.appHandlers.clear();
   mocks.isPackaged = false;
   mocks.setPath.mockClear();
+  mocks.setName.mockClear();
+  mocks.openEnsobot.mockClear();
   mocks.startAgentWorker.mockClear();
   mocks.createMainWindow.mockClear();
   mocks.autoUpdaterInit.mockClear();
@@ -114,6 +127,7 @@ beforeEach(() => {
 });
 
 afterAll(() => {
+  vi.unstubAllGlobals();
   if (originalUserDataOverride === undefined) delete process.env.ENSO_USER_DATA_DIR;
   else process.env.ENSO_USER_DATA_DIR = originalUserDataOverride;
 });
@@ -152,6 +166,23 @@ describe('Main process diagnostics', () => {
 });
 
 describe('Main userData isolation', () => {
+  it('EnsoBot 打包身份固定为独立数据目录，并保留工作台且打开 Bot 窗口', async () => {
+    vi.stubGlobal('__ENSO_PRODUCT__', 'ensobot');
+    mocks.isPackaged = true;
+    process.env.ENSO_USER_DATA_DIR = '/tmp/must-not-be-used';
+    await import('./index');
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(mocks.setPath).toHaveBeenCalledWith(
+      'userData',
+      path.join('/system-app-data', 'ensobot')
+    );
+    expect(mocks.setName).toHaveBeenCalledWith('EnsoBot');
+    expect(mocks.createMainWindow).toHaveBeenCalledOnce();
+    expect(mocks.openEnsobot).toHaveBeenCalledOnce();
+    // Linux 打包分支还会异步探测登录 shell，不能把一次 setImmediate 当成 ready。
+    await vi.waitFor(() => expect(mocks.startAgentWorker).toHaveBeenCalledOnce());
+    expect(mocks.order.indexOf('window')).toBeLessThan(mocks.order.indexOf('worker'));
+  });
   it('uses ENSO_USER_DATA_DIR only in development when it is non-empty', async () => {
     process.env.ENSO_USER_DATA_DIR = '  ./temp/isolated-user-data  ';
     await import('./index');

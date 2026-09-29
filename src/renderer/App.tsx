@@ -7,6 +7,7 @@ import {
   useSensor,
   useSensors,
 } from '@dnd-kit/core';
+import { PRODUCT } from '@shared/product';
 import { FoldHorizontal, PanelRight, UnfoldHorizontal } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { BackgroundLayer } from '@/components/app/BackgroundLayer';
@@ -274,7 +275,7 @@ export default function App() {
       <BackgroundLayer />
       <OauthCredentialBootstrap />
       <TitleBar
-        title="EnsoCode"
+        title={PRODUCT.name}
         actions={
           <>
             <button

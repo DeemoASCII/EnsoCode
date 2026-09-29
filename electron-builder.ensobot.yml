@@ -1,0 +1,20 @@
+extends: ./electron-builder.yml
+appId: com.j3n5en.ensobot
+productName: EnsoBot
+extraMetadata:
+  name: ensobot
+  version: 0.0.1
+  description: EnsoBot - Private and group conversations with your AI team
+directories:
+  output: dist/ensobot
+  buildResources: build
+mac:
+  extendInfo:
+    NSMicrophoneUsageDescription: EnsoBot uses the microphone for voice input. Speech is transcribed locally on this Mac.
+generateUpdatesFilesForAllChannels: false
+# generic 只生成专属 ensobot*.yml；GitHub 资产由独立工作流统一上传，不走 v* 自动发布。
+publish:
+  - provider: generic
+    url: https://github.com/J3n5en/EnsoCode/releases/download/ensobot-v0.0.1/
+    channel: ensobot
+    useMultipleRangeRequest: false

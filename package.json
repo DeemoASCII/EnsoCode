@@ -14,6 +14,7 @@
     "predev": "pnpm rtk:prepare",
     "dev": "electron-vite dev",
     "build": "electron-vite build",
+    "build:ensobot": "node scripts/build-ensobot.mjs",
     "preview": "electron-vite preview",
     "build:mac": "pnpm build && electron-builder --mac",
     "build:win": "pnpm build && electron-builder --win",

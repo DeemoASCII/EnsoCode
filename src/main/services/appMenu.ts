@@ -1,6 +1,7 @@
+import { PRODUCT } from '@shared/product';
 import { Menu, type MenuItemConstructorOptions } from 'electron';
 
-export const APP_DISPLAY_NAME = 'EnsoCode';
+export const APP_DISPLAY_NAME = PRODUCT.name;
 
 /**
  * Electron 默认 appMenu 用 app.name（package.json name = enso-code）拼 About/Hide/Quit。

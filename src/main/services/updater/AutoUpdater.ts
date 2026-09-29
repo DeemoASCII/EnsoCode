@@ -1,11 +1,13 @@
 import { is } from '@electron-toolkit/utils';
+import { PRODUCT } from '@shared/product';
 import { IPC_CHANNELS } from '@shared/types';
 import type { UpdateStatus } from '@shared/types/updater';
 import { AUTO_RESTART_IDLE_MS } from '@shared/updater/idleRestart';
-import { app, BrowserWindow } from 'electron';
+import { app, BrowserWindow, net } from 'electron';
 import electronUpdater from 'electron-updater';
 import { flushSettings, writeTrayReenterAfterUpdate } from '../../ipc/settings';
 import { sendToWindow } from '../../windows/createAppWindow';
+import { selectEnsobotFeed } from './ensobotFeed';
 import { IdleRestartGate } from './idleRestartGate';
 import { currentIdleRestartObservation } from './idleRestartSnapshot';
 
@@ -110,9 +112,34 @@ class AutoUpdaterService {
     if (this.updateDownloaded) return;
     try {
       this.lastCheckTime = Date.now();
+      if (PRODUCT.slug === 'ensobot') {
+        this.sendStatus({ status: 'checking' });
+        const releases: unknown[] = [];
+        for (let page = 1; page <= 10; page++) {
+          const response = await net.fetch(
+            `https://api.github.com/repos/J3n5en/EnsoCode/releases?per_page=100&page=${page}`,
+            {
+              headers: { Accept: 'application/vnd.github+json' },
+              signal: AbortSignal.timeout(15_000),
+            }
+          );
+          if (!response.ok) throw new Error(`EnsoBot update check: HTTP ${response.status}`);
+          const batch: unknown = await response.json();
+          if (!Array.isArray(batch)) throw new Error('Invalid EnsoBot release response');
+          releases.push(...batch);
+          if (batch.length < 100) break;
+          if (page === 10) throw new Error('EnsoBot release listing exceeds safety limit');
+        }
+        autoUpdater.setFeedURL(selectEnsobotFeed(releases));
+        autoUpdater.allowDowngrade = false;
+      }
       await autoUpdater.checkForUpdates();
     } catch (error) {
       console.error('Failed to check for updates:', error);
+      this.sendStatus({
+        status: 'error',
+        error: error instanceof Error ? error.message : String(error),
+      });
     }
   }
 

@@ -2,7 +2,12 @@ import path from 'node:path';
 import tailwindcss from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react';
 import { defineConfig } from 'electron-vite';
+import ensobotRelease from './ensobot-release.json';
 import pkg from './package.json';
+import { productFor } from './src/shared/product';
+
+const product = productFor(process.env.ENSO_PRODUCT);
+const productDefine = { __ENSO_PRODUCT__: JSON.stringify(process.env.ENSO_PRODUCT ?? 'ensocode') };
 
 // 合并说明：dev 曾为手工 multi-input 显式复刻默认 external（nodeExternal）。
 // 本分支已改用 `?modulePath` 独立构建 agent worker、main 保持官方单入口，
@@ -14,6 +19,7 @@ const pairAlias = path.resolve(__dirname, 'packages/pair/src/index.ts');
 
 export default defineConfig({
   main: {
+    define: productDefine,
     build: {
       // Agent utilityProcess 走 `?modulePath` isolated build；Main 保持官方单入口，
       // 避免手工 multi-input 把无 export 的启动入口 tree-shake 成 0B facade。
@@ -44,7 +50,10 @@ export default defineConfig({
   renderer: {
     plugins: [react(), tailwindcss()],
     define: {
-      'import.meta.env.VITE_APP_VERSION': JSON.stringify(pkg.version),
+      ...productDefine,
+      'import.meta.env.VITE_APP_VERSION': JSON.stringify(
+        product.slug === 'ensobot' ? ensobotRelease.version : pkg.version
+      ),
     },
     resolve: {
       alias: {

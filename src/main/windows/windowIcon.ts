@@ -1,4 +1,5 @@
 import { join } from 'node:path';
+import { PRODUCT } from '@shared/product';
 
 /**
  * Windows taskbar/Shell wants a multi-size .ico (BMP frames ≤128 with AND mask).
@@ -9,7 +10,7 @@ export const WINDOW_ICON_FILE_WIN = 'icon.ico';
 export const WINDOW_ICON_FILE_LINUX = 'icon-win.png';
 
 /** Must match electron-builder.yml `appId` for installed builds. */
-export const WINDOWS_APP_USER_MODEL_ID = 'com.j3n5en.enso-code';
+export const WINDOWS_APP_USER_MODEL_ID = PRODUCT.appId;
 
 /**
  * Packaged Windows must NOT BrowserWindow.setIcon.
@@ -71,7 +72,7 @@ export function windowsTaskbarAppDetails(input: {
     appIconPath: exe,
     appIconIndex: 0,
     relaunchCommand: quoted,
-    relaunchDisplayName: input.displayName ?? 'EnsoCode',
+    relaunchDisplayName: input.displayName ?? PRODUCT.name,
   };
 }
 

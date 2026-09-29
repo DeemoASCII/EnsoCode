@@ -1,0 +1,178 @@
+name: EnsoBot Preview
+
+on:
+  push:
+    tags:
+      - 'ensobot-v*'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ensobot-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version-file: .nvmrc
+          package-manager-cache: false
+      - uses: pnpm/action-setup@v5
+      - run: pnpm install --frozen-lockfile
+      - name: Verify release identity
+        env:
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          import assert from 'node:assert/strict';
+          import { parse } from 'yaml';
+          const { version } = JSON.parse(fs.readFileSync('ensobot-release.json', 'utf8'));
+          assert.match(version, /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/);
+          const config = parse(fs.readFileSync('electron-builder.ensobot.yml', 'utf8'));
+          assert.equal(config.extraMetadata.version, version);
+          if (process.env.REF_TYPE === 'tag') assert.equal(process.env.REF_NAME, `ensobot-v${version}`);
+          NODE
+      - run: pnpm typecheck
+      - run: pnpm lint
+      - run: pnpm test
+      - run: pnpm build:ensobot
+        env:
+          NODE_OPTIONS: --max-old-space-size=4096
+      - uses: actions/upload-artifact@v6
+        with:
+          name: ensobot-app
+          path: out/
+          retention-days: 7
+
+  package:
+    needs: [verify]
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-2022
+            platform: win
+            arch: x64
+          - os: ubuntu-latest
+            platform: linux
+            arch: x64
+          - os: macos-15
+            platform: mac
+            arch: arm64
+          - os: macos-15
+            platform: mac
+            arch: x64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version-file: .nvmrc
+          package-manager-cache: false
+      - uses: pnpm/action-setup@v5
+      - name: Install target dependencies
+        run: pnpm install --frozen-lockfile --cpu=${{ matrix.arch }} --config.side-effects-cache=false
+        env:
+          npm_config_arch: ${{ matrix.arch }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/download-artifact@v7
+        with:
+          name: ensobot-app
+          path: out/
+      - name: Import Apple certificate
+        if: matrix.platform == 'mac'
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+        run: |
+          if [ -z "$APPLE_CERTIFICATE" ]; then exit 0; fi
+          KEYCHAIN_PATH=$RUNNER_TEMP/app-signing.keychain-db
+          KEYCHAIN_PASSWORD=$(openssl rand -base64 32)
+          echo "$APPLE_CERTIFICATE" | base64 --decode > $RUNNER_TEMP/certificate.p12
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security import $RUNNER_TEMP/certificate.p12 -P "$APPLE_CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+          security set-key-partition-list -S apple-tool:,apple: -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security list-keychain -d user -s "$KEYCHAIN_PATH"
+          rm $RUNNER_TEMP/certificate.p12
+      - name: Package isolated EnsoBot (never publish from builder)
+        run: pnpm exec electron-builder --config electron-builder.ensobot.yml --${{ matrix.platform }} --${{ matrix.arch }} --publish never
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      - name: Smoke test packaged natives
+        shell: bash
+        env:
+          PLATFORM: ${{ matrix.platform }}
+          ARCH: ${{ matrix.arch }}
+        run: |
+          set -euo pipefail
+          if [ "$PLATFORM" = win ]; then
+            ELECTRON_RUN_AS_NODE=1 dist/ensobot/win-unpacked/EnsoBot.exe scripts/smoke-packaged-natives.cjs dist/ensobot/win-unpacked/resources
+          elif [ "$PLATFORM" = linux ]; then
+            ELECTRON_RUN_AS_NODE=1 dist/ensobot/linux-unpacked/ensobot scripts/smoke-packaged-natives.cjs dist/ensobot/linux-unpacked/resources
+          else
+            if [ "$ARCH" = x64 ] && ! arch -x86_64 /usr/bin/true 2>/dev/null; then
+              sudo softwareupdate --install-rosetta --agree-to-license
+            fi
+            APP=$(find dist/ensobot -maxdepth 2 -name EnsoBot.app -type d | head -1)
+            ELECTRON_RUN_AS_NODE=1 "$APP/Contents/MacOS/EnsoBot" scripts/smoke-packaged-natives.cjs "$APP/Contents/Resources"
+          fi
+      - uses: actions/upload-artifact@v6
+        with:
+          name: ensobot-${{ matrix.platform }}-${{ matrix.arch }}
+          if-no-files-found: error
+          retention-days: 14
+          path: |
+            dist/ensobot/*.exe
+            dist/ensobot/*.dmg
+            dist/ensobot/*.zip
+            dist/ensobot/*.AppImage
+            dist/ensobot/*.deb
+            dist/ensobot/*.blockmap
+            dist/ensobot/ensobot*.yml
+
+  release:
+    needs: [package]
+    if: startsWith(github.ref, 'refs/tags/ensobot-v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v7
+        with:
+          pattern: ensobot-*-*
+          path: assets
+      - name: Merge Mac update metadata and checksum all assets
+        run: |
+          set -euo pipefail
+          mkdir release-assets
+          find assets -type f ! -name ensobot-mac.yml -exec cp {} release-assets/ \;
+          ARM=$(yq -o=json assets/ensobot-mac-arm64/ensobot-mac.yml)
+          X64=$(yq -o=json assets/ensobot-mac-x64/ensobot-mac.yml)
+          echo "$ARM" | jq --argjson x64 "$X64" '.files += $x64.files' | yq -P > release-assets/ensobot-mac.yml
+          test -f release-assets/ensobot.yml
+          test -f release-assets/ensobot-linux.yml
+          if find release-assets -name 'latest*.yml' | grep -q .; then exit 1; fi
+          cd release-assets
+          sha256sum * > SHA256SUMS.txt
+      - name: Publish EnsoBot prerelease without changing Latest
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          gh release create "$TAG" release-assets/* --verify-tag --prerelease --latest=false \
+            --title "EnsoBot ${TAG#ensobot-v} Preview" --notes-file docs/releases/ensobot-v0.0.1.md

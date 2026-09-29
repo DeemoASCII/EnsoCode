@@ -1,5 +1,6 @@
 import path from 'node:path';
 import { electronApp, optimizer } from '@electron-toolkit/utils';
+import { PRODUCT } from '@shared/product';
 import { app, type BrowserWindow } from 'electron';
 
 import { registerIpcHandlers } from './ipc';
@@ -42,6 +43,7 @@ import {
   stopTrayToggleShortcut,
   syncTrayToggleShortcut,
 } from './services/trayToggleShortcut';
+import { openEnsobotWindow } from './windows/EnsobotWindow';
 import { createMainWindow, getMainWindow } from './windows/MainWindow';
 import { applyWindowsChromiumSwitches } from './windows/win32Restore';
 import { resolveWindowsAppUserModelId } from './windows/windowIcon';
@@ -61,11 +63,12 @@ applyWindowsChromiumSwitches(app.commandLine);
 // dev 缺省隔离到 appData/enso-code-dev：与打包版彻底分离，避免单实例锁 /
 // Chromium profile 锁冲突（对齐 EnsoAI 的 dev profile 方案）。
 const developmentUserData = !app.isPackaged ? process.env.ENSO_USER_DATA_DIR?.trim() : undefined;
+if (PRODUCT.slug === 'ensobot') app.setName(PRODUCT.name);
 app.setPath(
   'userData',
   developmentUserData
     ? path.resolve(developmentUserData)
-    : path.join(app.getPath('appData'), app.isPackaged ? 'enso-code' : 'enso-code-dev')
+    : path.join(app.getPath('appData'), `${PRODUCT.slug}${app.isPackaged ? '' : '-dev'}`)
 );
 
 // 背景图媒体协议：特权 scheme 必须在 app ready 前登记
@@ -131,6 +134,8 @@ if (!gotTheLock) {
     syncSpeechFromSettings(persistedState);
     // UI shell 必须先创建并发起加载；Agent worker 初始化变重时不得阻塞 renderer spawn。
     const mainWindow = createMainWindow();
+    // 工作台仍负责项目、会话与浏览器；独立 EnsoBot 发行版前置聊天窗口。
+    if (PRODUCT.slug === 'ensobot') openEnsobotWindow();
     ensureTray();
     // 内嵌浏览器 guest view 挂主窗口（无头也要 viewport）；窗口重建后 getMainWindow 自动指向新窗
     browserHost.setHostWindow(getMainWindow);
