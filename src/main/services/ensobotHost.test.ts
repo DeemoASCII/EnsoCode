@@ -1,15 +1,20 @@
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import type { CharacterCardData } from '@shared/characterCard';
 import type { EnsobotModelDecision } from '@shared/defaultModel';
-import { describe, expect, it } from 'vitest';
+import { applyEnsobotSnapshot, type EnsobotSnapshot } from '@shared/ensobot/snapshot';
+import { afterEach, describe, expect, it } from 'vitest';
 import type { CardSummary } from './characterCards';
-import { createEnsobotHost, type EnsobotHostDeps } from './ensobotHost';
+import { createEnsobotHost, type EnsobotHostDeps, type EnsobotSpawnInput } from './ensobotHost';
 
 const A = '11111111-1111-4111-8111-111111111111';
 const B = '22222222-2222-4222-8222-222222222222';
 const SESSION = '33333333-3333-4333-8333-333333333333';
+const roots: string[] = [];
+afterEach(() => {
+  for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+});
 
 function personaCard(id: string, patch?: Partial<CharacterCardData['role']>): CharacterCardData {
   return {
@@ -47,11 +52,8 @@ function harness(options?: {
   model?: EnsobotModelDecision;
   cards?: CharacterCardData[];
 }) {
-  const root = path.join(
-    tmpdir(),
-    `ensobot-host-${Date.now()}-${Math.random().toString(16).slice(2)}`
-  );
-  mkdirSync(root, { recursive: true });
+  const root = mkdtempSync(path.join(tmpdir(), 'ensobot-host-'));
+  roots.push(root);
   const calls: string[] = [];
   const cards = new Map(
     (options?.cards ?? [personaCard(A), personaCard(B)]).map((card) => [card.id, card])
@@ -59,6 +61,8 @@ function harness(options?: {
   let workerReady = options?.ready ?? true;
   let spawnedSession = '';
   let seq = 0;
+  const snapshots: EnsobotSnapshot[] = [];
+  const spawns: EnsobotSpawnInput[] = [];
   const deps: EnsobotHostDeps = {
     workerReady: () => workerReady,
     steer: (input) => {
@@ -70,6 +74,7 @@ function harness(options?: {
       return { ok: true };
     },
     spawn: (input) => {
+      spawns.push(input);
       spawnedSession = input.sessionId;
       calls.push(`spawn:${input.coordinator}:${input.rolePrompt}`);
       return { ok: true, ready: options?.spawnReady ?? true };
@@ -89,12 +94,16 @@ function harness(options?: {
       seq += 1;
       return `00000000-0000-4000-8000-${String(seq).padStart(12, '0')}`;
     },
+    onChange: (snapshot) => snapshots.push(snapshot),
   };
   const host = createEnsobotHost(root, deps);
   return {
     host,
     calls,
     root,
+    deps,
+    snapshots,
+    spawns,
     setReady: (value: boolean) => {
       workerReady = value;
     },
@@ -103,6 +112,57 @@ function harness(options?: {
 }
 
 describe('ensobot host', () => {
+  it('非流式工具的最终成功结果也可通过检查，但仍等待轮次结束', async () => {
+    const { host, spawns } = harness();
+    await host.enqueueTask({ cardId: A, title: '非流式检查', check: 'PASS' });
+    host.observe({
+      type: 'message-upsert',
+      identity: spawns[0],
+      message: {
+        role: 'toolResult',
+        toolCallId: 'check',
+        isError: false,
+        content: [{ type: 'text', text: 'PASS' }],
+      },
+    });
+    expect(host.snapshot().tasks[0].status).toBe('doing');
+    host.observe({ type: 'turn-completed', identity: spawns[0] });
+    await host.whenIdle();
+    expect(host.snapshot().tasks[0].status).toBe('done');
+  });
+
+  it('工具最终报错会覆盖中途 PASS，不能通过任务检查', async () => {
+    const { host, spawns } = harness();
+    await host.enqueueTask({ cardId: A, title: '错误结果', check: 'PASS' });
+    host.observe({ type: 'tool-output', identity: spawns[0], toolCallId: 'check', output: 'PASS' });
+    host.observe({
+      type: 'message-upsert',
+      identity: spawns[0],
+      message: {
+        role: 'toolResult',
+        toolCallId: 'check',
+        isError: true,
+        content: [{ type: 'text', text: 'PASS then error' }],
+      },
+    });
+    host.observe({ type: 'turn-completed', identity: spawns[0] });
+    await host.whenIdle();
+    expect(host.snapshot().tasks[0].status).toBe('failed');
+  });
+
+  it('用户中断后的 completed 不能把已出现 PASS 的任务报成成功', async () => {
+    const { host, spawns } = harness();
+    await host.enqueueTask({ cardId: A, title: '中断任务', check: 'PASS' });
+    host.observe({ type: 'tool-output', identity: spawns[0], output: 'PASS' });
+    host.observe({
+      type: 'message-upsert',
+      identity: spawns[0],
+      message: { role: 'assistant', content: [], stopReason: 'aborted' },
+    });
+    host.observe({ type: 'turn-completed', identity: spawns[0] });
+    await host.whenIdle();
+    expect(host.snapshot().tasks[0].status).toBe('failed');
+  });
   it('工人不在线就拒绝，不留下气泡', async () => {
     const { host } = harness({ ready: false });
     const result = await host.submitUtterance({
@@ -265,6 +325,8 @@ describe('ensobot host', () => {
       identity: { sessionId: session },
       output: 'PASS',
     });
+    expect(host.snapshot().tasks[0]?.status).toBe('doing');
+    host.observe({ type: 'turn-completed', identity: { sessionId: session } });
     await host.whenIdle();
     expect(host.snapshot().tasks[0]?.status).toBe('done');
     expect(host.snapshot().board.some((note) => note.text === '我闲了')).toBe(true);
@@ -296,6 +358,7 @@ describe('ensobot host', () => {
 
   it('坏掉的队列行不会让剩下的任务消失', async () => {
     const root = path.join(tmpdir(), `ensobot-queue-${Date.now()}`);
+    roots.push(root);
     mkdirSync(root, { recursive: true });
     writeFileSync(
       path.join(root, 'queue.jsonl'),
@@ -365,7 +428,285 @@ describe('ensobot host', () => {
     const room = host.snapshot().roomMessages;
     expect(room.map((message) => message.text)).toEqual(['@北北 看一下', '我看了']);
     expect(room[1]?.authorKind).toBe('bot');
+    expect(host.snapshot().bubbles).toEqual([]);
     expect(host.snapshot().board.some((note) => note.text === '我看了')).toBe(false);
+  });
+
+  it('留言板回复按实际投递的来源返回，不依赖已清空的 pending，不污染私聊', async () => {
+    const { host, sessionId } = harness();
+    await host.postBoard({ text: '请看板', mentions: [A], deliveryId: 'board' });
+    host.observe({
+      type: 'ensobot-bubble',
+      identity: { sessionId: sessionId() },
+      text: '已看板',
+      deliveryId: 'reply',
+    });
+    expect(host.snapshot().board.map((note) => note.text)).toEqual(['请看板', '已看板']);
+    expect(host.snapshot().bubbles).toEqual([]);
+  });
+
+  it('私聊活轮期间群点名先排队，旧回复不泄露到群，收口后群回复不进入私聊', async () => {
+    const { host, calls, sessionId } = harness();
+    const room = await host.createRoom({ name: '小队', memberIds: [A, B] });
+    await host.submitUtterance({
+      cardId: A,
+      text: '私聊问题',
+      lane: 'human',
+      deliveryId: 'private',
+    });
+    await host.postRoom({ roomId: room.roomId!, text: '@阿宁 群问题', deliveryId: 'group' });
+    expect(calls.filter((call) => call.startsWith('steer:'))).toEqual([]);
+    host.observe({
+      type: 'ensobot-bubble',
+      identity: { sessionId: sessionId() },
+      text: '私聊回答',
+      deliveryId: 'private-reply',
+    });
+    expect(host.snapshot().roomMessages.map((message) => message.text)).toEqual(['@阿宁 群问题']);
+    host.observe({ type: 'turn-completed', identity: { sessionId: sessionId() } });
+    await host.whenIdle();
+    host.observe({
+      type: 'ensobot-bubble',
+      identity: { sessionId: sessionId() },
+      text: '群回答',
+      deliveryId: 'group-reply',
+    });
+    expect(host.snapshot().roomMessages.map((message) => message.text)).toEqual([
+      '@阿宁 群问题',
+      '群回答',
+    ]);
+    expect(host.snapshot().bubbles.map((message) => message.text)).toEqual([
+      '私聊问题',
+      '私聊回答',
+    ]);
+  });
+
+  it('两个群的点名不能互相覆盖回复目标', async () => {
+    const { host, sessionId } = harness();
+    const one = await host.createRoom({ name: '一群', memberIds: [A, B] });
+    const two = await host.createRoom({ name: '二群', memberIds: [A, B] });
+    await host.postRoom({ roomId: one.roomId!, text: '@阿宁 一', deliveryId: 'one' });
+    await host.postRoom({ roomId: two.roomId!, text: '@阿宁 二', deliveryId: 'two' });
+    host.observe({
+      type: 'ensobot-bubble',
+      identity: { sessionId: sessionId() },
+      text: '第一群回答',
+      deliveryId: 'reply-one',
+    });
+    expect(
+      host.snapshot().roomMessages.find((message) => message.text === '第一群回答')?.roomId
+    ).toBe(one.roomId);
+    host.observe({ type: 'turn-completed', identity: { sessionId: sessionId() } });
+    await host.whenIdle();
+    host.observe({
+      type: 'ensobot-bubble',
+      identity: { sessionId: sessionId() },
+      text: '第二群回答',
+      deliveryId: 'reply-two',
+    });
+    expect(
+      host.snapshot().roomMessages.find((message) => message.text === '第二群回答')?.roomId
+    ).toBe(two.roomId);
+  });
+
+  it('worker 延迟接收群点名后重投保留群来源与原文', async () => {
+    const { host, calls, sessionId } = harness();
+    const room = await host.createRoom({ name: '小队', memberIds: [A, B] });
+    await host.postRoom({ roomId: room.roomId!, text: '@阿宁 看一下', deliveryId: 'deferred' });
+    host.observe({
+      type: 'ensobot-interject-deferred',
+      identity: { sessionId: sessionId() },
+      deliveryId: `deferred:${A}`,
+    });
+    host.observe({ type: 'turn-completed', identity: { sessionId: sessionId() } });
+    await host.whenIdle();
+    expect(calls.filter((call) => call.startsWith('prompt:'))).toHaveLength(2);
+    host.observe({
+      type: 'ensobot-bubble',
+      identity: { sessionId: sessionId() },
+      text: '重新收到',
+      deliveryId: 'reply',
+    });
+    expect(host.snapshot().roomMessages.at(-1)?.text).toBe('重新收到');
+    expect(host.snapshot().bubbles).toEqual([]);
+  });
+
+  it('任务 doing 推送通过真实 renderer 的 seq 去重门，重建宿主不回退序号', async () => {
+    const { host, snapshots, root, deps } = harness();
+    await host.enqueueTask({ cardId: A, title: '执行', check: 'PASS' });
+    const projection = snapshots.reduce<EnsobotSnapshot | null>(applyEnsobotSnapshot, null);
+    expect(host.snapshot().tasks[0].status).toBe('doing');
+    expect(projection?.tasks[0].status).toBe('doing');
+    const restored = createEnsobotHost(root, deps);
+    expect(restored.snapshot().seq).toBeGreaterThan(host.snapshot().seq);
+  });
+
+  it('后台 prompt 发送失败后可重新认领，不能被去重标记永久吞掉', async () => {
+    const { host, deps, calls } = harness();
+    const prompt = deps.prompt;
+    deps.prompt = () => ({ ok: false });
+    await host.enqueueTask({ cardId: A, title: '重投', check: 'PASS' });
+    const task = host.snapshot().tasks[0];
+    expect(task.status).toBe('queued');
+    deps.prompt = prompt;
+    expect(await host.claim({ cardId: A, taskId: task.id })).toMatchObject({
+      ok: true,
+      disposition: 'doing',
+    });
+    expect(calls.filter((call) => call.startsWith('prompt:'))).toHaveLength(1);
+  });
+
+  it('检查命中仍保留目录锁，只有整轮成功结束才唤醒另一个写入任务', async () => {
+    const { host, calls } = harness();
+    await host.setWorkspace({ projectId: 'proj', sessionId: null });
+    await host.enqueueTask({ cardId: A, title: '先写', check: 'PASS' });
+    await host.enqueueTask({ cardId: B, title: '后写', check: 'PASS' });
+    const sessionId = host.snapshot().tasks[0].sessionId!;
+    host.observe({ type: 'tool-output', identity: { sessionId }, output: 'PASS' });
+    host.observe({ type: 'status', identity: { sessionId }, status: 'idle' });
+    await host.whenIdle();
+    expect(host.snapshot().tasks.map((task) => task.status)).toEqual([
+      'doing',
+      'waiting-directory',
+    ]);
+    expect(calls.filter((call) => call.startsWith('prompt:'))).toHaveLength(1);
+    host.observe({ type: 'turn-completed', identity: { sessionId } });
+    await host.whenIdle();
+    expect(host.snapshot().tasks.map((task) => task.status)).toEqual(['done', 'doing']);
+  });
+
+  it.each(['turn-failed', 'turn-completed'])(
+    '任务 %s 没通过检查时失败并释放目录，不能一直 doing',
+    async (type) => {
+      const { host } = harness();
+      await host.setWorkspace({ projectId: 'proj', sessionId: null });
+      await host.enqueueTask({ cardId: A, title: '失败', check: 'PASS' });
+      await host.enqueueTask({ cardId: B, title: '接着做', check: 'PASS' });
+      const sessionId = host.snapshot().tasks[0].sessionId!;
+      host.observe({
+        type: 'status',
+        identity: { sessionId },
+        status: type === 'turn-failed' ? 'failed' : 'idle',
+      });
+      host.observe({ type, identity: { sessionId } });
+      await host.whenIdle();
+      expect(host.snapshot().tasks.map((task) => task.status)).toEqual(['failed', 'doing']);
+      expect(host.snapshot().tasks[0].note).toBeTruthy();
+    }
+  );
+
+  it('工具输出曾通过但轮最终失败，不能报 done', async () => {
+    const { host, sessionId } = harness();
+    await host.enqueueTask({ cardId: A, title: '失败', check: 'PASS' });
+    host.observe({ type: 'tool-output', identity: { sessionId: sessionId() }, output: 'PASS' });
+    host.observe({ type: 'turn-failed', identity: { sessionId: sessionId() } });
+    await host.whenIdle();
+    expect(host.snapshot().tasks[0].status).toBe('failed');
+  });
+
+  it('后台只 claimed 等前台结束时，前台工具 PASS 不算后台完成', async () => {
+    const { host, sessionId } = harness();
+    await host.submitUtterance({ cardId: A, text: '前台问题', lane: 'human', deliveryId: 'front' });
+    await host.enqueueTask({ cardId: A, title: '后台任务', check: 'PASS' });
+    host.observe({ type: 'tool-output', identity: { sessionId: sessionId() }, output: 'PASS' });
+    host.observe({ type: 'turn-completed', identity: { sessionId: sessionId() } });
+    await host.whenIdle();
+    expect(host.snapshot().tasks[0].status).toBe('doing');
+    host.observe({ type: 'turn-completed', identity: { sessionId: sessionId() } });
+    await host.whenIdle();
+    expect(host.snapshot().tasks[0].status).toBe('failed');
+  });
+
+  it('重建宿主重新 spawn 并恢复权威会话文件，拒绝旧 generation 的回复', async () => {
+    const { host, root, deps, spawns } = harness();
+    await host.submitUtterance({
+      cardId: A,
+      text: '以前的话',
+      lane: 'human',
+      deliveryId: 'before',
+    });
+    const old = spawns[0];
+    host.observe({
+      type: 'parent-ready',
+      identity: old,
+      sessionFile: path.join(root, 'history.jsonl'),
+    });
+    await host.whenIdle();
+    const restored = createEnsobotHost(root, deps);
+    await restored.submitUtterance({ cardId: A, text: '继续', lane: 'human', deliveryId: 'after' });
+    expect(spawns).toHaveLength(2);
+    expect(spawns[1].resumeFile).toBe(path.join(root, 'history.jsonl'));
+    expect(spawns[1].generation).not.toBe(old.generation);
+    restored.observe({
+      type: 'ensobot-bubble',
+      identity: old,
+      text: '旧代回复',
+      deliveryId: 'stale',
+    });
+    expect(restored.snapshot().bubbles.some((bubble) => bubble.text === '旧代回复')).toBe(false);
+  });
+
+  it('worker 退出会结束活任务、解开目录并在再次发消息时恢复 session', async () => {
+    const { host, spawns } = harness();
+    await host.enqueueTask({ cardId: A, title: '进行中', check: 'PASS' });
+    host.observe({ type: 'worker-exited' });
+    expect(host.snapshot().tasks[0].status).toBe('failed');
+    await host.submitUtterance({
+      cardId: A,
+      text: '恢复',
+      lane: 'human',
+      deliveryId: 'after-exit',
+    });
+    expect(spawns).toHaveLength(2);
+    expect(spawns[1].generation).not.toBe(spawns[0].generation);
+    expect(host.snapshot().notices).toEqual([]);
+  });
+
+  it.each(['parent-ended', 'parent-rejected'])(
+    '%s 后不能一直使用已经消失的 session',
+    async (type) => {
+      const { host, spawns } = harness();
+      await host.submitUtterance({ cardId: A, text: '开始', lane: 'human', deliveryId: 'before' });
+      host.observe({ type, identity: spawns[0] });
+      await host.submitUtterance({
+        cardId: A,
+        text: '再次发送',
+        lane: 'human',
+        deliveryId: 'after',
+      });
+      expect(spawns).toHaveLength(2);
+      expect(spawns[1].generation).not.toBe(spawns[0].generation);
+    }
+  );
+
+  it('冷启动不能遗留 doing/claimed 目录占用，也不能自动重放已执行任务', async () => {
+    const { host, root, deps, calls } = harness();
+    await host.enqueueTask({ cardId: A, title: '已执行', check: 'PASS' });
+    const restored = createEnsobotHost(root, deps);
+    expect(restored.snapshot().tasks[0].status).toBe('failed');
+    expect(calls.filter((call) => call.startsWith('prompt:'))).toHaveLength(1);
+  });
+
+  it('worker 退出后下一次发送等待按需重启，不用用户去普通聊天唤醒', async () => {
+    const { host, deps, setReady, calls } = harness({ ready: false });
+    deps.prepareWorker = async () => {
+      setReady(true);
+      return true;
+    };
+    expect(
+      await host.submitUtterance({ cardId: A, text: '恢复', lane: 'human', deliveryId: 'recover' })
+    ).toMatchObject({ ok: true });
+    expect(calls.filter((call) => call.startsWith('prompt:'))).toHaveLength(1);
+  });
+
+  it('同聊天面 steer 被 worker 延迟后，保留投递用于重发', async () => {
+    const { host, calls, spawns } = harness();
+    await host.submitUtterance({ cardId: A, text: '前一轮', lane: 'human', deliveryId: 'first' });
+    await host.submitUtterance({ cardId: A, text: '补充', lane: 'human', deliveryId: 'follow' });
+    host.observe({ type: 'ensobot-interject-deferred', identity: spawns[0], deliveryId: 'follow' });
+    host.observe({ type: 'turn-completed', identity: spawns[0] });
+    await host.whenIdle();
+    expect(calls.filter((call) => call.startsWith('prompt:'))).toHaveLength(2);
   });
 });
 

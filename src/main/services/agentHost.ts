@@ -225,6 +225,27 @@ export function startAgentWorker(): void {
   });
 }
 
+/** EnsoBot 无普通会话 renderer 代为唤醒；只恢复曾退出的 worker，不抢首次环境初始化。 */
+export async function ensureAgentWorkerReady(): Promise<boolean> {
+  if (!worker && workerExited) startAgentWorker();
+  if (!worker) return false;
+  if (workerReady) return true;
+  const child = worker;
+  return new Promise((resolve) => {
+    const finish = (ready: boolean) => {
+      clearTimeout(timer);
+      child.removeListener('spawn', spawned);
+      child.removeListener('exit', exited);
+      resolve(ready);
+    };
+    const spawned = () => finish(worker === child && workerReady);
+    const exited = () => finish(false);
+    const timer = setTimeout(() => finish(false), 10_000);
+    child.once('spawn', spawned);
+    child.once('exit', exited);
+  });
+}
+
 export function stopAgentWorker(): void {
   workspaceLocks.failAll('agent worker stopped');
   worker?.kill();

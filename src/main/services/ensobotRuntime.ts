@@ -9,6 +9,7 @@ import type { AgentWorkerEvent } from '@shared/types/agent';
 import { app } from 'electron';
 import { sendToAllWindows } from '../windows/createAppWindow';
 import {
+  ensureAgentWorkerReady,
   isAgentWorkerReady,
   promptSession,
   readSettingsState,
@@ -37,6 +38,7 @@ export function getEnsobotHost(): EnsobotHost {
     const root = path.join(app.getPath('userData'), 'ensobot');
     host = createEnsobotHost(root, {
       workerReady: isAgentWorkerReady,
+      prepareWorker: ensureAgentWorkerReady,
       steer: (input) =>
         isAgentWorkerReady()
           ? steerSession(
@@ -67,6 +69,7 @@ export function getEnsobotHost(): EnsobotHost {
             providerId: input.providerId,
             modelId: input.modelId,
             approvalMode: input.approvalMode,
+            ...(input.resumeFile ? { resumeFile: input.resumeFile } : {}),
           },
           oauthKeys,
           undefined,
@@ -108,12 +111,17 @@ export function getEnsobotHost(): EnsobotHost {
 export function observeEnsobotWorkerEvent(
   event: AgentWorkerEvent | { type: 'worker-exited' }
 ): void {
-  if (event.type === 'worker-exited') return;
   if (
+    event.type !== 'worker-exited' &&
     event.type !== 'ensobot-bubble' &&
     event.type !== 'ensobot-interject-deferred' &&
     event.type !== 'parent-ready' &&
+    event.type !== 'parent-ended' &&
+    event.type !== 'parent-rejected' &&
     event.type !== 'turn-retry' &&
+    event.type !== 'turn-completed' &&
+    event.type !== 'turn-failed' &&
+    event.type !== 'message-upsert' &&
     event.type !== 'status' &&
     event.type !== 'tool-output'
   ) {
