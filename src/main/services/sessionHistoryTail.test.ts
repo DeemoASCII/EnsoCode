@@ -70,6 +70,19 @@ describe('projectParentHistoryPage', () => {
 });
 
 describe('projectParentHistoryTail', () => {
+  it('tail and page carry distinct persisted IDs even for identical user text', () => {
+    const branch = makeBranch(3, () => 'continue').map((entry, i) => ({
+      ...entry,
+      id: `entry-${i}`,
+    }));
+    expect(
+      projectParentHistoryTail(branch as never).messages.map((message) => message.entryId)
+    ).toEqual(['entry-0', 'entry-1', 'entry-2']);
+    expect(
+      projectParentHistoryPage(branch as never, 2).messages.map((message) => message.entryId)
+    ).toEqual(['entry-0', 'entry-1']);
+    expect(branch[0].message).not.toHaveProperty('entryId');
+  });
   it('projects and windows from the end', () => {
     const branch = [
       {

@@ -69,7 +69,7 @@ import type {
   SubagentModelOption,
   ThinkingLevel,
 } from '@shared/types/agent';
-import { parseAgentSessionCustomEntry } from '@shared/types/agent';
+import { parseAgentSessionCustomEntry, STALE_SESSION_ERROR } from '@shared/types/agent';
 import { type EditMode, resolveEditMode } from '@shared/types/editMode';
 import { providerIdOfAccountKey } from '@shared/types/oauthProviders';
 import type { WindowsLocalShell } from '@shared/windowsLocalShell';
@@ -92,7 +92,12 @@ import {
 } from './approvalReview';
 import { AskManager, createAskTool } from './ask';
 import { ensureAssistantUsage } from './assistantUsage';
-import { BackgroundTaskManager, createTaskTools, withBackground } from './backgroundTasks';
+import {
+  BackgroundTaskManager,
+  createTaskTools,
+  foregroundCommandTimeoutMs,
+  withBackground,
+} from './backgroundTasks';
 import { CheckpointManager, withCheckpoint } from './checkpoint/manager';
 import { createRemoteCheckpointHost } from './checkpoint/remoteHost';
 import {
@@ -1144,9 +1149,11 @@ export class SessionSupervisor {
         if (agent.state.messages.at(-1)?.role === 'assistant') return;
         ensureAssistantUsage(agent.state.messages as unknown[]);
         managed.currentTurnId = randomUUID();
-        void agent.continue().catch((error) => {
-          this.failTurn(managed, toErrorMessage(error));
-        });
+        // 裸 agent.continue 绕过 pi 的 _runAgentPrompt，不会发 agent_settled，需自行补发收口
+        void agent.continue().then(
+          () => this.onSessionEvent(managed, { type: 'agent_settled' }),
+          (error) => this.failTurn(managed, toErrorMessage(error))
+        );
         return;
       }
       case 'agent-control-result': {
@@ -1334,26 +1341,28 @@ export class SessionSupervisor {
       case 'rewind': {
         const managed = this.must(command.identity);
         if (managed.status === 'running') {
-          this.options.emit({
-            type: 'rewind-done',
-            identity: managed.identity,
-            seq: ++managed.seq,
-          });
+          this.rejectRewind(managed, command.restoreFiles);
           return;
         }
         const userEntries = managed.session.sessionManager
           .getBranch()
           .filter((entry) => entry.type === 'message' && entry.message.role === 'user');
-        const target = userEntries[userEntries.length - 1 - command.userIndexFromEnd];
+        const targetIndex =
+          command.entryId !== undefined
+            ? userEntries.findIndex((entry) => entry.id === command.entryId)
+            : userEntries.length - 1 - (command.userIndexFromEnd ?? -1);
+        const target = userEntries[targetIndex];
         if (target?.type !== 'message' || target.message.role !== 'user') {
-          this.options.emit({
-            type: 'rewind-done',
-            identity: managed.identity,
-            seq: ++managed.seq,
-          });
+          this.rejectRewind(managed, command.restoreFiles);
           return;
         }
-        this.truncateProjectionForRewind(managed, command.userIndexFromEnd);
+        if (command.entryId && !managed.messages.some((message) => message.entryId === target.id)) {
+          this.reconcileMessages(managed, this.transcript(managed));
+        }
+        this.truncateProjectionForRewind(
+          managed,
+          command.entryId ?? userEntries.length - 1 - targetIndex
+        );
         const restorePromise =
           command.restoreFiles && managed.checkpoints
             ? managed.checkpoints
@@ -1944,7 +1953,8 @@ export class SessionSupervisor {
           ...(safeJournal ? { safeJournal } : {}),
           modelRef: settingsModelRef(selectedModel),
           toolIds: subTools.map((tool) => tool.name),
-          proofToolIds: subTools
+          // Decorators clone tools; exclude MCP by identity before decoration.
+          proofToolIds: rawSubTools
             .filter((tool) => !typeMcpTools.includes(tool))
             .map((tool) => tool.name),
           ...(ensoApp ? { ensoApp } : {}),
@@ -2895,6 +2905,7 @@ export class SessionSupervisor {
         if (!managed.toolStartAt.has(event.toolCallId)) {
           const startedAt = Date.now();
           managed.toolStartAt.set(event.toolCallId, startedAt);
+          const timeoutMs = foregroundCommandTimeoutMs(event.toolName, event.args);
           this.options.emit({
             type: 'tool-output',
             identity: managed.identity,
@@ -2902,6 +2913,7 @@ export class SessionSupervisor {
             toolCallId: event.toolCallId,
             output: '',
             startedAt,
+            ...(timeoutMs === undefined ? {} : { deadlineAt: startedAt + timeoutMs }),
           });
         }
         return;
@@ -3191,15 +3203,36 @@ export class SessionSupervisor {
     }
   }
 
+  private rejectRewind(managed: ManagedSession, restoreFiles?: boolean): void {
+    this.options.emit({
+      type: 'rewind-done',
+      identity: managed.identity,
+      seq: ++managed.seq,
+      ...(restoreFiles ? { filesRestored: false } : {}),
+    });
+    // Clear the optimistic rewind before restoring the authoritative projection.
+    this.options.emit({
+      type: 'snapshot',
+      partial: true,
+      sessionId: managed.identity.sessionId,
+      sessions: this.snapshotSessions().filter((session) => session.identity === managed.identity),
+    });
+  }
+
   /** 纯回退是严格前缀：先裁投影，UI 不必等 navigateTree / 文件还原。 */
-  private truncateProjectionForRewind(managed: ManagedSession, userIndexFromEnd: number): void {
-    if (!Number.isInteger(userIndexFromEnd) || userIndexFromEnd < 0) return;
+  private truncateProjectionForRewind(managed: ManagedSession, anchor: string | number): void {
+    if (typeof anchor === 'number' && (!Number.isInteger(anchor) || anchor < 0)) return;
     const users: number[] = [];
     for (let i = 0; i < managed.messages.length; i++) {
       if (managed.messages[i]?.role === 'user') users.push(i);
     }
-    const keep = users[users.length - 1 - userIndexFromEnd];
-    if (keep === undefined || keep >= managed.messages.length) return;
+    const keep =
+      typeof anchor === 'string'
+        ? managed.messages.findIndex(
+            (message) => message.role === 'user' && message.entryId === anchor
+          )
+        : users[users.length - 1 - anchor];
+    if (keep === undefined || keep < 0 || keep >= managed.messages.length) return;
     managed.messages.length = keep;
     managed.timings.length = keep;
     this.options.emit({
@@ -3286,9 +3319,27 @@ export class SessionSupervisor {
   ): Promise<void> {
     const slot = { id: deliveryId ?? null };
     managed.promptDelivery = slot;
-    return managed.session.prompt(withPendingPlanNote(managed, text), options).finally(() => {
-      if (managed.promptDelivery === slot) managed.promptDelivery = undefined;
-    });
+    const trackedOptions = deliveryId
+      ? {
+          ...options,
+          preflightResult: (accepted: boolean) => {
+            if (!accepted && managed.promptDelivery === slot) {
+              this.options.emit({
+                type: 'delivery-rejected',
+                identity: managed.identity,
+                seq: ++managed.seq,
+                deliveryId,
+              });
+            }
+            options?.preflightResult?.(accepted);
+          },
+        }
+      : options;
+    return managed.session
+      .prompt(withPendingPlanNote(managed, text), trackedOptions)
+      .finally(() => {
+        if (managed.promptDelivery === slot) managed.promptDelivery = undefined;
+      });
   }
 
   private steerTracked(
@@ -3597,7 +3648,7 @@ export class SessionSupervisor {
   private must(identity: SessionIdentity): ManagedSession {
     const managed = this.sessions.get(identity.sessionId);
     if (!managed || !isSameGeneration(managed.identity, identity)) {
-      throw new Error(`unknown or stale session generation: ${identity.sessionId}`);
+      throw new Error(`${STALE_SESSION_ERROR}: ${identity.sessionId}`);
     }
     return managed;
   }

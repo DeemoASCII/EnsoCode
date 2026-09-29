@@ -20,14 +20,33 @@ export function transcriptMessages(
       break;
     }
   }
-  if (compactionIndex < 0) return contextMessages;
+  if (compactionIndex < 0) return withUserEntryIds(contextMessages, branch);
   const compaction = branch[compactionIndex] as Extract<SessionEntry, { type: 'compaction' }>;
   const keptIndex = compaction.firstKeptEntryId
     ? branch.findIndex((entry) => entry.id === compaction.firstKeptEntryId)
     : -1;
   const cut = keptIndex >= 0 && keptIndex < compactionIndex ? keptIndex : compactionIndex;
   const summarized = branch.slice(0, cut).flatMap(sessionEntryToContextMessages);
-  return stampCompactionFromHook([...summarized, ...contextMessages], branch);
+  return withUserEntryIds(
+    stampCompactionFromHook([...summarized, ...contextMessages], branch),
+    branch
+  );
+}
+
+/** Match source objects, never text: repeated prompts and unpersisted messages must not share an ID. */
+export function withUserEntryIds(messages: unknown[], branch: readonly SessionEntry[]): unknown[] {
+  const ids = new Map<unknown, string>();
+  for (const entry of branch) {
+    if (entry.type === 'message' && entry.message.role === 'user' && entry.id) {
+      ids.set(entry.message, entry.id);
+    }
+  }
+  return messages.map((message) => {
+    const entryId = ids.get(message);
+    return entryId && typeof message === 'object' && message !== null
+      ? { ...message, entryId }
+      : message;
+  });
 }
 
 function isMemoryFolded(details: unknown): boolean {

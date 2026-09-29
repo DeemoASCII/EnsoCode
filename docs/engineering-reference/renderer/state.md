@@ -136,7 +136,8 @@ user upsert 之后发 `delivery-settled`，reducer 按 id 收回。worker 里所
 - 生成心跳：新增非空 assistant `text` / `thinking`、新的工具结果、变化的非空 `tool-output`、变化的 write/edit 可见预览。
 - 不刷新：用户消息、空 assistant（含 Connection error）、空 thinking、静态 toolCall、越界 upsert、递增 seq 但可见内容不变的全量快照。
 - write/edit 必须复用时间线的 `extractWriteContent` / `extractEdits`；edit 比较 oldText/newText 对，不比较键顺序或多余 metadata；空 old/new 占位不算，删除算。
-- task/subagent/approval 等可见状态进展沿用独立事件处理。watchdog 只把等人（审批 / 提问）和 coworker spawning 当豁免；静默 bash、subagent、coworker 按 `lastOutputAt` 计时。父会话等 coworker 时心跳取自身与 running 子会话的较新值。
+- task/subagent/approval 等可见状态进展沿用独立事件处理。watchdog 只把等人（审批 / 提问）和 coworker spawning 当豁免；静默 subagent、coworker 及无截止时间的工具按 `lastOutputAt` 计时。父会话等 coworker 时心跳取自身与 running 子会话的较新值。
+- 前台 bash / powershell 有生效超时：worker 在工具起点的 `tool-output` 带 `deadlineAt`，renderer 记入 `toolDeadlineAt`，心跳取 `max(lastOutputAt, 未收口工具截止)`。静默长命令不被误杀，豁免有上限；不要改回无界的「有工具在跑就豁免」。
 
 越界 `message-upsert` 只推 `seq`。把丢弃的权威事件当成心跳，watchdog 会认为模型一直有输出。
 
@@ -149,7 +150,7 @@ partial `snapshot` 恢复后要和 `turn-completed` 一样先 `flushQueue` 再 `
 `snapshot` 不是新输出：同代连续 running 保留 `runStartedAt` / `lastOutputAt` 与未完成工具尾巴；
 首次/新代 running 以接收时间建立起点但不伪造输出。同代 idle/failed 结算 activeMs，显式清空时钟。
 **不能只省略时钟字段**：store 浅合并投影会保留旧值。新代/终态清空 toolOutputs，同轮快照清掉已完成工具的旧输出。
-toolResult upsert 落地时仍须删掉对应 `toolOutputs` / `toolStartedAt` key，避免 UI 残留已结束的流式尾巴。非空 `toolOutputs` 不再豁免 stall。
+toolResult upsert 落地时仍须删掉对应 `toolOutputs` / `toolStartedAt` / `toolDeadlineAt` key，避免 UI 残留已结束的流式尾巴、过期截止拖长计时。非空 `toolOutputs` 不再豁免 stall。
 
 回归测试必须覆盖重复内容 + 更大 seq、historyBaseIndex 尾窗、快照前后重复 tool-output，以及 `{...old, ...projection}` 清理行为。
 

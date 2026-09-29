@@ -218,12 +218,19 @@ describe('SessionSupervisor tool duration', () => {
       type: 'tool_execution_start',
       toolCallId: 'bash-1',
       toolName: 'bash',
+      args: { command: 'sleep 400', timeout: 900 },
     });
     const bashStart = events.find(
       (event): event is Extract<AgentWorkerEvent, { type: 'tool-output' }> =>
         event.type === 'tool-output' && event.toolCallId === 'bash-1'
     );
-    expect(bashStart).toMatchObject({ toolCallId: 'bash-1', startedAt: 1_000_000, output: '' });
+    // 前台命令带截止时间：renderer 的无输出巡检据此不误杀静默长命令
+    expect(bashStart).toMatchObject({
+      toolCallId: 'bash-1',
+      startedAt: 1_000_000,
+      deadlineAt: 1_900_000,
+      output: '',
+    });
 
     vi.setSystemTime(1_005_000);
     parentSession.messages.push(
@@ -247,6 +254,7 @@ describe('SessionSupervisor tool duration', () => {
         event.type === 'tool-output' && event.toolCallId === 'write-1'
     );
     expect(writeStart).toMatchObject({ toolCallId: 'write-1', startedAt: 1_005_000, output: '' });
+    expect(writeStart).not.toHaveProperty('deadlineAt');
 
     vi.setSystemTime(1_005_200);
     parentSession.messages.push(toolResult('write-1', 'write'));

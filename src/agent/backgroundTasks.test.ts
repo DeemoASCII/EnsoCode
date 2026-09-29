@@ -9,6 +9,7 @@ import {
   BackgroundTaskManager,
   createTaskTools,
   DEFAULT_FOREGROUND_BASH_TIMEOUT_SEC,
+  foregroundCommandTimeoutMs,
   resolveBackgroundLaunch,
   type TaskEvents,
   withBackground,
@@ -63,6 +64,23 @@ describe('withForegroundBashTimeout', () => {
       command: 'sleep 999',
       background: true,
     });
+  });
+});
+
+describe('foregroundCommandTimeoutMs', () => {
+  it('前台 bash / powershell 按实际生效的超时换算毫秒', () => {
+    expect(foregroundCommandTimeoutMs('bash', { command: 'sleep 400' })).toBe(
+      DEFAULT_FOREGROUND_BASH_TIMEOUT_SEC * 1000
+    );
+    expect(foregroundCommandTimeoutMs('powershell', { command: 'x', timeout: 30 })).toBe(30_000);
+  });
+
+  it('background、非命令工具与脏参数没有截止时间', () => {
+    expect(foregroundCommandTimeoutMs('bash', { command: 'x', background: true })).toBeUndefined();
+    expect(foregroundCommandTimeoutMs('read', { path: 'a' })).toBeUndefined();
+    expect(foregroundCommandTimeoutMs('bash', null)).toBe(
+      DEFAULT_FOREGROUND_BASH_TIMEOUT_SEC * 1000
+    );
   });
 });
 

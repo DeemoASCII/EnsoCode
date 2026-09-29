@@ -104,7 +104,7 @@ export function chatSurfaceBusy(conversation: {
   return needsHistoryHydration(conversation) || conversation.spawning;
 }
 
-/** 时间线脚点：running / 乐观未确认 = 生成中；冷会话 spawn / 空窗读历史 = 加载中 */
+/** 时间线脚点只反映运行态；未确认气泡不代表模型仍在生成。 */
 export function chatTimelineActivity(conversation: {
   started?: boolean;
   sessionFile?: string;
@@ -113,11 +113,7 @@ export function chatTimelineActivity(conversation: {
   status?: string;
   historyLoadAttempted?: boolean;
 }): 'working' | 'loading' | null {
-  if (
-    conversation.status === 'running' ||
-    conversation.messages.some((message) => message.optimistic)
-  )
-    return 'working';
+  if (conversation.status === 'running') return 'working';
   if (
     conversation.spawning ||
     needsHistoryHydration({

@@ -230,6 +230,28 @@ describe('SessionSupervisor terminal turn handling', () => {
     await supervisor.shutdown();
   });
 
+  it('手动重试走 agent.continue（pi 不发 agent_settled）：结束后仍收口为 idle', async () => {
+    const { events, supervisor, parentSession } = await spawn();
+    Object.assign(mocks.managers[0]!, {
+      buildSessionProjection: vi.fn(() => ({ entries: [] })),
+    });
+    parentSession.messages.push({ role: 'user', content: [{ type: 'text', text: 'hi' }] });
+    parentSession.agent.continue.mockImplementationOnce(async () => {
+      parentSession.emit({ type: 'agent_start' });
+      parentSession.messages.push({ role: 'assistant', content: [{ type: 'text', text: 'ok' }] });
+      parentSession.emit({ type: 'agent_end', willRetry: false });
+    });
+
+    supervisor.handleCommand({ type: 'retry', identity: parent });
+    await waitFor(events, 'turn-completed');
+    expect(parentSession.agent.continue).toHaveBeenCalledTimes(1);
+    expect(events.filter((event) => event.type === 'status').at(-1)).toMatchObject({
+      status: 'idle',
+    });
+
+    await supervisor.shutdown();
+  });
+
   it('agent_end 后 pi 续跑（排队消息/扩展续跑）：等 agent_settled 才收口，全程同一轮', async () => {
     const { events, supervisor, parentSession } = await spawn();
     parentSession.emit({ type: 'agent_start' });

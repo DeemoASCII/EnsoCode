@@ -9,6 +9,7 @@ import type {
 } from '@shared/types/agent';
 import type { ProjectedApplyPatchOutcome, ProjectedFileChange } from '@shared/types/fileChanges';
 import { unwrapMcpProxyCall } from '@/lib/mcpToolName';
+import type { TimelineMessage } from './reducer';
 
 /** edit 工具的单个替换块（pi edit 工具参数 edits[] 的元素） */
 export interface EditBlock {
@@ -24,6 +25,7 @@ export type TimelineItem =
       images: { data: string; mimeType: string }[];
       timestamp?: number;
       turnDurationMs?: number;
+      deliveryState?: 'pending' | 'rejected';
       collapsed?: boolean;
       canCollapse?: boolean;
       /** 本轮首个 assistant 回复的模型与时间，供回复身份头显示 */
@@ -740,7 +742,7 @@ function nestedPendingCount(
 }
 
 function buildMessageTimeline(
-  messages: ProjectedMessage[],
+  messages: TimelineMessage[],
   running: boolean,
   cwd?: string,
   toolOutputs?: Record<string, string>,
@@ -784,7 +786,7 @@ function buildMessageTimeline(
   // 分帧同步），不得标 running——否则 ToolRow 会把历史 diff 自动展开。
   let lastTurnIndex = -1;
   for (let i = messages.length - 1; i >= 0; i--) {
-    if (messages[i].role !== 'toolResult') {
+    if (!messages[i].optimistic && messages[i].role !== 'toolResult') {
       lastTurnIndex = i;
       break;
     }
@@ -796,9 +798,10 @@ function buildMessageTimeline(
   const nextTurnRole: (string | undefined)[] = new Array(messages.length);
   for (let i = messages.length - 1, seen: string | undefined; i >= 0; i--) {
     nextTurnRole[i] = seen;
-    if (messages[i].role !== 'toolResult') seen = messages[i].role;
+    if (!messages[i].optimistic && messages[i].role !== 'toolResult') seen = messages[i].role;
   }
-  const lastUserMessageIndex = messages.findLastIndex((m) => m.role === 'user');
+  const lastUserMessageIndex = messages.findLastIndex((m) => m.role === 'user' && !m.optimistic);
+  const lastMessageIndex = messages.findLastIndex((m) => !m.optimistic);
   // 整轮计时只累计模型请求与非交互工具的真实执行耗时；用户回答、审批、排队等空档不计。
   let turnActiveMs = 0;
   let turnSteps = 0;
@@ -806,8 +809,21 @@ function buildMessageTimeline(
   let turnHadAskUser = false;
   let currentTurnUserItem: Extract<TimelineItem, { kind: 'user' }> | undefined;
   messages.forEach((message, messageIndex) => {
-    const isLastMessage = messageIndex === messages.length - 1;
+    const isLastMessage = messageIndex === lastMessageIndex;
     const absIndex = historyBaseIndex + messageIndex;
+    // 本地气泡不是 worker 的新轮次，不能截断前一轮的计时、流式和工具状态。
+    if (message.role === 'user' && message.optimistic) {
+      items.push({
+        kind: 'user',
+        key: `${absIndex}`,
+        text: partText(message),
+        images: message.content.filter((part) => part.type === 'image'),
+        timestamp: message.timestamp,
+        canCollapse: false,
+        deliveryState: message.deliveryRejected ? 'rejected' : 'pending',
+      });
+      return;
+    }
     if (message.role === 'user') {
       turnUserTimestamp = message.timestamp;
       turnHadAskUser = false;
@@ -832,7 +848,7 @@ function buildMessageTimeline(
       }
       if (text || images.length > 0) {
         let next = messageIndex + 1;
-        while (messages[next]?.role === 'system') next++;
+        while (messages[next]?.role === 'system' || messages[next]?.optimistic) next++;
         const hasNextReply = next < messages.length && messages[next].role !== 'user';
         const isLastTurn = messageIndex === lastUserMessageIndex;
         const canCollapse = hasNextReply && !(running && isLastTurn);
@@ -1267,7 +1283,7 @@ export function completedEditWriteFingerprint(messages: readonly ProjectedMessag
 }
 
 export function buildTimeline(
-  messages: ProjectedMessage[],
+  messages: TimelineMessage[],
   running: boolean,
   customEntries: readonly AgentSessionCustomEntry[] = [],
   cwd?: string,
@@ -1316,7 +1332,27 @@ export function buildTimeline(
         ]
           .sort((left, right) => left.at - right.at || left.order - right.order)
           .map(({ item }) => item);
-  return appendCompactionChrome(merged, options?.compaction, options?.compactionNoticeAt);
+  // reducer 必须保持「权威前缀 + 乐观尾巴」。只移动展示行，保留绝对 key 和权威轮次顺序。
+  const localUsers = messageItems.filter((item) => item.kind === 'user' && item.deliveryState);
+  const ordered = localUsers.length
+    ? merged.filter((item) => !(item.kind === 'user' && item.deliveryState))
+    : merged;
+  for (const local of localUsers) {
+    const at = local.kind === 'user' ? local.timestamp : undefined;
+    const before =
+      at !== undefined && Number.isFinite(at)
+        ? ordered.findIndex(
+            (item) =>
+              item.kind === 'user' &&
+              !item.deliveryState &&
+              item.timestamp !== undefined &&
+              Number.isFinite(item.timestamp) &&
+              item.timestamp > at
+          )
+        : -1;
+    ordered.splice(before < 0 ? ordered.length : before, 0, local);
+  }
+  return appendCompactionChrome(ordered, options?.compaction, options?.compactionNoticeAt);
 }
 
 /** 折叠门槛：段内非 edit 工具数达到该值才收拢 */
@@ -1507,7 +1543,9 @@ export function foldTimeline(
   const compact = options.compact === true;
   const autoCollapse = options.autoCollapseCompletedTurns === true;
   const turnOverrides = options.turnOverrides;
-  const origLastUserIndex = items.findLastIndex((item) => item.kind === 'user');
+  const origLastUserIndex = items.findLastIndex(
+    (item) => item.kind === 'user' && !item.deliveryState
+  );
 
   // 第一步：轮次折叠。正在生成的最新一轮不折叠，确保实时输出可见；
   // 自动折叠只作用于历史轮次（最后一轮默认展开），显式操作优先于默认值。
@@ -1522,7 +1560,9 @@ export function foldTimeline(
         const isLastUser = idx === origLastUserIndex;
         const defaultCollapsed = autoCollapse && !isLastUser && item.canCollapse === true;
         const isCollapsed =
-          !(running && isLastUser) && (turnOverrides?.get(item.key) ?? defaultCollapsed);
+          !item.deliveryState &&
+          !(running && isLastUser) &&
+          (turnOverrides?.get(item.key) ?? defaultCollapsed);
         nextItems.push(isCollapsed ? { ...item, collapsed: true } : item);
         idx += 1;
         if (isCollapsed) {
@@ -1540,7 +1580,9 @@ export function foldTimeline(
     sourceItems = nextItems;
   }
   sourceItems = pairExploreFolds(sourceItems, expandedKeys, compact);
-  const lastUserIndex = sourceItems.findLastIndex((item) => item.kind === 'user');
+  const lastUserIndex = sourceItems.findLastIndex(
+    (item) => item.kind === 'user' && !item.deliveryState
+  );
   // 生成中只有最后一段正文之后的尾段仍在进行；被正文隔开的前段已完成，可立即折叠
   const liveFrom = Math.max(
     lastUserIndex,

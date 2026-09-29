@@ -212,19 +212,22 @@ describe('agent control tool protocol', () => {
     }
   });
 
-  it('delivery-settled 只接受精确 identity、seq 与 deliveryId', () => {
-    const event = { type: 'delivery-settled', identity: parent, seq: 3, deliveryId: 'delivery-1' };
-    expect(parseAgentWorkerEvent(event)).toEqual(event);
-    for (const patch of [
-      { identity: { sessionId: parent.sessionId } },
-      { seq: -1 },
-      { deliveryId: '' },
-      { deliveryId: 'x'.repeat(129) },
-      { extra: true },
-    ]) {
-      expect(parseAgentWorkerEvent({ ...event, ...patch })).toBeNull();
+  it.each(['delivery-settled', 'delivery-rejected'])(
+    '%s 只接受精确 identity、seq 与 deliveryId',
+    (type) => {
+      const event = { type, identity: parent, seq: 3, deliveryId: 'delivery-1' };
+      expect(parseAgentWorkerEvent(event)).toEqual(event);
+      for (const patch of [
+        { identity: { sessionId: parent.sessionId } },
+        { seq: -1 },
+        { deliveryId: '' },
+        { deliveryId: 'x'.repeat(129) },
+        { extra: true },
+      ]) {
+        expect(parseAgentWorkerEvent({ ...event, ...patch })).toBeNull();
+      }
     }
-  });
+  );
 
   it('formats branch background as quoted data, not a new task', () => {
     const note = workspaceBranchChangedNote('feature/branch');
@@ -494,6 +497,19 @@ describe('Main-owned source authority contracts', () => {
 });
 
 describe('parent/child commands', () => {
+  it('rewind accepts an exclusive persisted entry anchor and rejects ambiguous or dirty anchors', () => {
+    const command = { type: 'rewind', identity: parent, entryId: 'user-entry', restoreFiles: true };
+    expect(parseAgentCommand(command)).toEqual(command);
+    for (const entryId of ['', ' ', 1, null]) {
+      expect(parseAgentCommand({ ...command, entryId })).toBeNull();
+    }
+    expect(parseAgentCommand({ ...command, userIndexFromEnd: 0 })).toBeNull();
+    expect(parseAgentCommand({ ...command, userIndexFromEnd: '0' })).toBeNull();
+    expect(parseAgentCommand({ type: 'rewind', identity: parent })).toBeNull();
+    expect(
+      parseAgentCommand({ type: 'rewind', identity: parent, userIndexFromEnd: 0 })
+    ).not.toBeNull();
+  });
   it('spawn-parent 必须 exact generation；旧 spawn/sessionId shape 拒绝', () => {
     const command = { type: 'spawn-parent', identity: parent, cwd: '/repo', model };
     expect(parseAgentCommand(command)).toEqual(command);
@@ -1784,6 +1800,15 @@ describe('tool-output 事件跨进程边界', () => {
       startedAt: 1_000,
     });
     expect(parseAgentWorkerEvent({ ...event, startedAt: 'now' })).toBeNull();
+  });
+
+  it('可选 deadlineAt 随事件通过，脏数字拒绝', () => {
+    expect(parseAgentWorkerEvent({ ...event, deadlineAt: 2_000 })).toEqual({
+      ...event,
+      deadlineAt: 2_000,
+    });
+    expect(parseAgentWorkerEvent({ ...event, deadlineAt: 'later' })).toBeNull();
+    expect(parseAgentWorkerEvent({ ...event, deadlineAt: Number.NaN })).toBeNull();
   });
 
   it('脏输入拒绝', () => {

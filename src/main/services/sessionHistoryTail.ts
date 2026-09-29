@@ -3,6 +3,7 @@ import { type SessionEntry, sessionEntryToContextMessages } from '@earendil-work
 import { takeSnapshotTail } from '@shared/snapshotTail';
 import type { ProjectedMessage } from '@shared/types/agent';
 import { projectMessage } from '../../agent/projection';
+import { withUserEntryIds } from '../../agent/transcript';
 
 export function resolveParentHistoryFile(
   sessionDir: string,
@@ -40,13 +41,16 @@ export function projectParentHistoryPage(
   messages: ProjectedMessage[];
   baseIndex: number;
 } {
-  return projectWindow(branch.flatMap(sessionEntryToContextMessages), beforeIndex);
+  return projectWindow(
+    withUserEntryIds(branch.flatMap(sessionEntryToContextMessages), branch),
+    beforeIndex
+  );
 }
 
 export function projectParentHistoryTail(branch: readonly SessionEntry[]): {
   messages: ProjectedMessage[];
   baseIndex: number;
 } {
-  const raw = branch.flatMap(sessionEntryToContextMessages);
+  const raw = withUserEntryIds(branch.flatMap(sessionEntryToContextMessages), branch);
   return projectWindow(raw, raw.length);
 }

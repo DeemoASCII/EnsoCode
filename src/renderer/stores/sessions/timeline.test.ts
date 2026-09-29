@@ -1,5 +1,6 @@
 import type { ProjectedMessage } from '@shared/types/agent';
 import { describe, expect, it } from 'vitest';
+import { applyAgentEvent, emptyProjection, type TimelineMessage } from './reducer';
 import {
   buildTimeline,
   completedEditWriteFingerprint,
@@ -56,6 +57,129 @@ describe('shouldPrefetchOlderHistory', () => {
 });
 
 describe('buildTimeline', () => {
+  describe('未确认消息展示', () => {
+    it.each([false, true])(
+      '继续送达后仍在较早的未确认气泡之后，且不改变权威消息索引（rejected=%s）',
+      (deliveryRejected) => {
+        const old = {
+          ...user('17:08 instruction'),
+          timestamp: 100,
+          optimistic: true,
+          deliveryId: 'old',
+          deliveryRejected,
+        };
+        const pending = {
+          ...user('17:11 continue'),
+          timestamp: 200,
+          optimistic: true,
+          deliveryId: 'continue',
+        };
+        const delivered = { ...user('17:11 continue'), timestamp: 201, entryId: 'continue-entry' };
+        const identity = { sessionId: 'session', generation: 'generation' };
+        const after = applyAgentEvent(
+          {
+            ...emptyProjection,
+            generation: identity.generation,
+            historyBaseIndex: 40,
+            messages: [old, pending],
+          },
+          identity.sessionId,
+          {
+            type: 'message-upsert',
+            identity,
+            seq: 1,
+            index: 40,
+            message: delivered,
+          }
+        );
+        expect(after.messages).toEqual([delivered, old]);
+        const timeline = buildTimeline(after.messages, false, [], undefined, {
+          historyBaseIndex: 40,
+        });
+        expect(timeline.filter((item) => item.kind === 'user')).toEqual([
+          expect.objectContaining({
+            key: '41',
+            text: '17:08 instruction',
+            canCollapse: false,
+            deliveryState: deliveryRejected ? 'rejected' : 'pending',
+          }),
+          expect.objectContaining({ key: '40', text: '17:11 continue' }),
+        ]);
+        expect(after.messages).toEqual([delivered, old]);
+      }
+    );
+
+    it('steer 等待期间不打断真实轮次的流式状态和运行中工具', () => {
+      const assistant: ProjectedMessage = {
+        role: 'assistant',
+        timestamp: 110,
+        stopReason: 'pending',
+        content: [
+          { type: 'toolCall', id: 'tool', name: 'bash', arguments: { command: 'pwd' } },
+          { type: 'text', text: 'working' },
+        ],
+      };
+      const messages = [
+        { ...user('execute'), timestamp: 100 },
+        assistant,
+        { ...user('steer'), optimistic: true, timestamp: 120 },
+      ];
+      const timeline = buildTimeline(messages, true);
+      expect(timeline.filter((item) => item.kind === 'user').map((item) => item.text)).toEqual([
+        'execute',
+        'steer',
+      ]);
+      expect(timeline.find((item) => item.kind === 'text')).toMatchObject({ streaming: true });
+      expect(timeline.find((item) => item.kind === 'tool')).toMatchObject({ state: 'running' });
+      expect(timeline.find((item) => item.kind === 'user')).toMatchObject({ canCollapse: false });
+      expect(timeline.at(-1)).toMatchObject({
+        kind: 'user',
+        text: 'steer',
+        deliveryState: 'pending',
+        canCollapse: false,
+      });
+      const folded = foldTimeline(timeline, true, new Set(), {
+        turnOverrides: new Map([
+          ['0', true],
+          ['2', true],
+        ]),
+      });
+      expect(folded.find((item) => item.kind === 'text')).toMatchObject({ streaming: true });
+      expect(folded.at(-1)).not.toHaveProperty('collapsed', true);
+    });
+
+    it('只将有可靠时间的本地消息插到较晚用户轮次之前，不排序权威历史，也不拆开旧轮回复', () => {
+      const messages: TimelineMessage[] = [
+        { ...user('earlier turn'), timestamp: 10 },
+        { role: 'assistant', content: [{ type: 'text', text: 'earlier reply' }], timestamp: 50 },
+        { ...user('new turn'), timestamp: 40 },
+        { ...user('local first'), optimistic: true, timestamp: 20 },
+        { ...user('local second'), optimistic: true, timestamp: 30 },
+        { ...user('no time'), optimistic: true },
+      ];
+      const timeline = buildTimeline(messages, false);
+      expect(
+        timeline
+          .filter((item) => item.kind === 'user' || item.kind === 'text')
+          .map((item) => item.text)
+      ).toEqual([
+        'earlier turn',
+        'earlier reply',
+        'local first',
+        'local second',
+        'new turn',
+        'no time',
+      ]);
+      expect(timeline.filter((item) => item.kind === 'user').map((item) => item.key)).toEqual([
+        '0',
+        '3',
+        '4',
+        '2',
+        '5',
+      ]);
+    });
+  });
+
   it('historyBaseIndex 让行 key 用绝对下标，prepend 后已有行 key 不变', () => {
     const timeline = buildTimeline([user('tail')], false, [], undefined, {
       historyBaseIndex: 40,

@@ -27,6 +27,7 @@ export interface ChatChrome {
   approvalMode: Conversation['approvalMode'];
   draftText?: Conversation['draftText'];
   draftImages?: Conversation['draftImages'];
+  draftAppend?: Conversation['draftAppend'];
   prefillAgentTypeKey?: Conversation['prefillAgentTypeKey'];
   commands: Conversation['commands'];
   compactionError?: string;
@@ -93,6 +94,7 @@ export function selectChatChrome(state: SessionsSlice): ChatChrome | null {
     approvalMode: displayed.approvalMode,
     draftText: displayed.draftText,
     draftImages: displayed.draftImages,
+    draftAppend: displayed.draftAppend,
     prefillAgentTypeKey: displayed.prefillAgentTypeKey,
     commands: displayed.commands,
     compactionError: displayed.compactionError,

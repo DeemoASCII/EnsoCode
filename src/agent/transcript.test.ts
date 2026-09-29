@@ -33,11 +33,20 @@ const compaction = (
   }) as unknown as SessionEntry;
 
 describe('transcriptMessages', () => {
-  it('无 compaction 时原样返回 context 消息', () => {
+  it('user 投影带持久化 entryId，但不修改原上下文', () => {
     const entries: SessionEntry[] = [msg('1', 'user', 'a', null), msg('2', 'assistant', 'b', '1')];
     const context = entries.map((e) => (e as Msg).message);
     const result = transcriptMessages({ getBranch: () => entries }, context);
-    expect(result).toBe(context);
+    expect(result).toEqual([{ ...context[0], entryId: '1' }, context[1]]);
+    expect(context[0]).not.toHaveProperty('entryId');
+  });
+
+  it('重复正文按消息身份绑定 ID，不给未持久化的继续冒认 ID', () => {
+    const entries = [msg('1', 'user', 'continue', null), msg('2', 'user', 'continue', '1')];
+    const pending = { ...entries[1].message };
+    const result = transcriptMessages({ getBranch: () => entries }, [entries[1].message, pending]);
+    expect(result).toEqual([{ ...entries[1].message, entryId: '2' }, pending]);
+    expect(result[1]).not.toHaveProperty('entryId');
   });
 
   it('compaction 之前被摘要掉的历史补回到 context 前面，summary 落在原位', () => {
@@ -70,6 +79,9 @@ describe('transcriptMessages', () => {
     ]);
     expect(result[0].content?.[0].text).toBe('old-q');
     expect(result[3].content?.[0].text).toBe('kept-q');
+    expect(result[0]).toHaveProperty('entryId', '1');
+    expect(result[3]).toHaveProperty('entryId', '3');
+    expect(result[5]).toHaveProperty('entryId', '6');
   });
 
   it('fromHook compaction 把 verified 标到对应 summary', () => {

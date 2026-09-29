@@ -428,6 +428,7 @@ export function ChatView() {
             placeholder={planning ? t('Describe the task — a plan comes first') : undefined}
             injectedDraft={chrome.draftText}
             injectedImages={chrome.draftImages}
+            injectedDraftAppend={chrome.draftAppend}
             onDraftConsumed={() => useSessionsStore.getState().clearDraft(chrome.id)}
             queuedCount={chrome.queuedMessages?.length ?? 0}
             onSteerQueued={() => useSessionsStore.getState().steerQueued(chrome.id)}

@@ -718,6 +718,71 @@ describe('applyAgentEvent', () => {
     ).toEqual([]);
   });
 
+  it('明确拒收按 deliveryId 标记，重复正文、旧事件和已落盘消息不可误标', () => {
+    const echo = (deliveryId: string) => ({
+      role: 'user' as const,
+      content: [{ type: 'text' as const, text: 'same' }],
+      optimistic: true,
+      deliveryId,
+    });
+    const persisted = { ...echo('persisted'), optimistic: false, entryId: 'entry' };
+    const before = { ...base, messages: [echo('d1'), echo('d2'), persisted] };
+    const event = {
+      type: 'delivery-rejected' as const,
+      identity: identity(),
+      seq: 1,
+      deliveryId: 'd2',
+    };
+    const after = applyAgentEvent(before, 's1', event);
+    expect(after.messages).toEqual([
+      before.messages[0],
+      { ...before.messages[1], deliveryRejected: true },
+      persisted,
+    ]);
+    expect(applyAgentEvent(after, 's1', { ...event, deliveryId: 'd1' })).toBe(after);
+    expect(
+      applyAgentEvent(after, 's1', { ...event, seq: 2, deliveryId: 'persisted' }).messages
+    ).toEqual(after.messages);
+    expect(
+      applyAgentEvent(after, 's1', {
+        ...event,
+        seq: 2,
+        identity: { ...identity(), generation: 'stale' },
+      })
+    ).toBe(after);
+  });
+
+  it('拒收气泡不被另一条同文消息上屏或快照匹配吞掉', () => {
+    const rejected = {
+      role: 'user' as const,
+      content: [{ type: 'text' as const, text: 'continue' }],
+      optimistic: true,
+      deliveryId: 'bad',
+      deliveryRejected: true,
+    };
+    const pending = { ...rejected, deliveryId: 'new', deliveryRejected: false };
+    const before = { ...base, messages: [rejected, pending] };
+    const delivered = { role: 'user' as const, content: rejected.content };
+    const after = applyAgentEvent(before, 's1', {
+      type: 'message-upsert',
+      identity: identity(),
+      seq: 1,
+      index: 0,
+      message: delivered,
+    });
+    expect(after.messages).toEqual([delivered, rejected]);
+    expect(retainedOptimisticTail(before.messages, [delivered])).toEqual([rejected]);
+    const failed = applyAgentEvent(before, 's1', {
+      type: 'turn-failed',
+      identity: identity(),
+      seq: 1,
+      turnId: 'turn',
+      error: 'undelivered',
+      undelivered: true,
+    });
+    expect(failed.messages).toEqual([rejected]);
+  });
+
   it('delivery-settled 按 deliveryId 收回文本对不上的乐观回显', () => {
     const echo = (text: string, deliveryId: string) => ({
       role: 'user' as const,
@@ -1037,6 +1102,37 @@ describe('applyAgentEvent tool-output', () => {
     });
     expect(done.toolOutputs).toEqual({ t2: 'other' });
     expect(done.toolStartedAt).toEqual({});
+  });
+
+  it('deadlineAt 随工具起止记录与清除，轮次收口清空', () => {
+    const started = applyAgentEvent(base, 's1', {
+      ...toolOutput(1, '', 1_000),
+      deadlineAt: 601_000,
+    } as RendererAgentEvent);
+    expect(started.toolDeadlineAt).toEqual({ t1: 601_000 });
+    expect(applyAgentEvent(started, 's1', toolOutput(2, 'line')).toolDeadlineAt).toEqual({
+      t1: 601_000,
+    });
+    const settled = applyAgentEvent(started, 's1', {
+      type: 'message-upsert',
+      identity: identity(),
+      seq: 3,
+      index: 0,
+      message: {
+        role: 'toolResult',
+        toolCallId: 't1',
+        toolName: 'bash',
+        content: [{ type: 'text', text: 'done' }],
+      },
+    });
+    expect(settled.toolDeadlineAt).toEqual({});
+    const done = applyAgentEvent(started, 's1', {
+      type: 'turn-completed',
+      identity: identity(),
+      seq: 3,
+      turnId: 'turn-1',
+    });
+    expect(done.toolDeadlineAt).toEqual({});
   });
 });
 

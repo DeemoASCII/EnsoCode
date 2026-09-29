@@ -1600,22 +1600,17 @@ export function registerAgentHandlers(): void {
 
   ipcMain.handle(
     IPC_CHANNELS.AGENT_REWIND,
-    (
-      _event,
-      sessionId: unknown,
-      userIndexFromEnd: unknown,
-      restoreFiles: unknown
-    ): AgentActionResult => {
+    (_event, sessionId: unknown, entryId: unknown, restoreFiles: unknown): AgentActionResult => {
       const identity = exactIdentity(sessionId);
       if (
         !identity ||
-        typeof userIndexFromEnd !== 'number' ||
-        userIndexFromEnd < 0 ||
+        typeof entryId !== 'string' ||
+        !entryId.trim() ||
         (restoreFiles !== undefined && typeof restoreFiles !== 'boolean')
       ) {
         return { ok: false, error: 'invalid rewind or stale generation' };
       }
-      return rewindSession(identity, userIndexFromEnd, restoreFiles as boolean | undefined);
+      return rewindSession(identity, entryId, restoreFiles);
     }
   );
 

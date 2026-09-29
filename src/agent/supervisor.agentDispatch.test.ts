@@ -124,7 +124,10 @@ function session(options: Record<string, unknown>) {
     emit(event: { type: string; [key: string]: unknown }) {
       for (const listener of listeners) listener(event);
     },
-    prompt: vi.fn(async () => undefined),
+    prompt: vi.fn(
+      async (_text?: string, _options?: { preflightResult?: (accepted: boolean) => void }) =>
+        undefined
+    ),
     steer: vi.fn(async () => undefined),
     abort: vi.fn(async () => undefined),
     waitForIdle: vi.fn(async () => undefined),
@@ -652,29 +655,31 @@ describe('SessionSupervisor deterministic child lifecycle', () => {
     expect(parentSession.prompt).toHaveBeenCalledWith(expect.stringContaining('explicit handoff'));
   });
 
-  it.each([
-    {
-      label: 'apply_patch + 探后折叠 + 关沙箱',
-      editMode: 'apply_patch' as const,
-      exploreFold: true,
-      isolatedSandbox: false,
-      tools: 'all' as const,
-    },
-    {
-      label: 'replace + 默认沙箱',
-      editMode: 'replace' as const,
-      exploreFold: false,
-      isolatedSandbox: true,
-      tools: 'all' as const,
-    },
-    {
-      label: 'readonly',
-      editMode: 'apply_patch' as const,
-      exploreFold: false,
-      isolatedSandbox: false,
-      tools: 'readonly' as const,
-    },
-  ])('$label 的 child proof 工具与共享推导一致', async (spec) => {
+  it.each(
+    [
+      {
+        label: 'apply_patch + 探后折叠 + 关沙箱',
+        editMode: 'apply_patch' as const,
+        exploreFold: true,
+        isolatedSandbox: false,
+        tools: 'all' as const,
+      },
+      {
+        label: 'replace + 默认沙箱',
+        editMode: 'replace' as const,
+        exploreFold: false,
+        isolatedSandbox: true,
+        tools: 'all' as const,
+      },
+      {
+        label: 'readonly',
+        editMode: 'apply_patch' as const,
+        exploreFold: false,
+        isolatedSandbox: false,
+        tools: 'readonly' as const,
+      },
+    ].flatMap((spec) => [false, true].map((boundMcp) => ({ ...spec, boundMcp })))
+  )('$label / boundMcp=$boundMcp 的 child proof 工具与共享推导一致', async (spec) => {
     const events: AgentWorkerEvent[] = [];
     const supervisor = new SessionSupervisor({
       emit: (event) => events.push(event),
@@ -693,6 +698,20 @@ describe('SessionSupervisor deterministic child lifecycle', () => {
     await waitFor(events, 'parent-ready');
     const typeKey =
       spec.tools === 'readonly' ? ('builtin:scout' as const) : ('builtin:worker' as const);
+    const mcpServers = spec.boundMcp
+      ? ['notes', 'search'].map((name) => ({ name, transport: 'stdio' as const, command: 'mock' }))
+      : [];
+    const mcpTools = mcpServers.map((server) => ({
+      name: `mcp__${server.name}__read`,
+      label: `${server.name}: read`,
+      description: 'Read MCP data',
+      parameters: { type: 'object', properties: {} },
+      execute: vi.fn(async () => ({ content: [{ type: 'text', text: 'data' }] })),
+    }));
+    mocks.mcpToolsFor.mockImplementation(async ([server]: [{ name: string }]) =>
+      mcpTools.filter((tool) => tool.name === `mcp__${server.name}__read`)
+    );
+    const mcpBindingIds = mcpServers.map((server) => `binding-${server.name}`);
     supervisor.handleCommand({
       type: 'spawn-child',
       identity: {
@@ -714,8 +733,8 @@ describe('SessionSupervisor deterministic child lifecycle', () => {
         tools: spec.tools,
         skillPaths: [],
         skillBindingIds: [],
-        mcpServers: [],
-        mcpBindingIds: [],
+        mcpServers,
+        mcpBindingIds,
         systemPromptHash: 'profile-hash',
       },
     });
@@ -725,6 +744,13 @@ describe('SessionSupervisor deterministic child lifecycle', () => {
     );
     expect(ready?.type).toBe('child-ready');
     if (ready?.type !== 'child-ready') return;
+    expect(ready.proof.loadedMcpBindingIds).toEqual(mcpBindingIds);
+    const options = mocks.createAgentSession.mock.calls.at(-1)?.[0] as {
+      customTools: ToolDefinition[];
+    };
+    expect(options.customTools.map((tool) => tool.name).sort()).toEqual(
+      [...ready.proof.toolIds, ...mcpTools.map((tool) => tool.name)].sort()
+    );
     expect([...ready.proof.toolIds].sort()).toEqual(
       [
         ...childProfileToolIds(spec.tools, {
@@ -925,6 +951,31 @@ describe('SessionSupervisor deterministic child lifecycle', () => {
         events.flatMap((event) => (event.type === 'delivery-settled' ? [event.deliveryId] : []));
       return { events, supervisor, piSession, userMessage, settled };
     }
+
+    it.each([false, true, undefined])(
+      '仅 preflight 明确拒收才允许撤回（accepted=%s）',
+      async (accepted) => {
+        const { events, supervisor, piSession, userMessage } = await spawned();
+        piSession.prompt.mockImplementationOnce(async (_text, options) => {
+          if (accepted !== undefined) options?.preflightResult?.(accepted);
+          if (accepted) userMessage('hi');
+          throw new Error('send failed');
+        });
+        supervisor.handleCommand({
+          type: 'prompt',
+          identity: parent,
+          text: 'hi',
+          deliveryId: 'd1',
+        });
+        await settle();
+        expect(events.filter((event) => event.type === 'delivery-rejected')).toEqual(
+          accepted === false
+            ? [expect.objectContaining({ identity: parent, deliveryId: 'd1' })]
+            : []
+        );
+        await supervisor.shutdown();
+      }
+    );
 
     it('prompt 的 user 消息上屏后回执 deliveryId，且排在该 upsert 之后', async () => {
       const { events, supervisor, userMessage } = await spawned();

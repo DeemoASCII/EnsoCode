@@ -103,16 +103,41 @@ export function rewindWorkerPhase(
   return 'wait';
 }
 
+interface RewindMessages {
+  messages: readonly { role: string; entryId?: string; optimistic?: boolean }[];
+  historyBaseIndex?: number;
+}
+
+export function resolveRewindTarget(
+  conversation: RewindMessages,
+  anchor: string | number
+): { entryId: string; userIndexFromEnd: number } | null {
+  const index =
+    typeof anchor === 'string'
+      ? conversation.messages.findIndex((message) => message.entryId === anchor)
+      : rewindKeepCount(conversation.messages, anchor);
+  if (index === null || index < 0) return null;
+  const message = conversation.messages[index];
+  if (message?.role !== 'user' || message.optimistic || !message.entryId?.trim()) return null;
+  return {
+    entryId: message.entryId,
+    userIndexFromEnd: conversation.messages.slice(index + 1).filter((item) => item.role === 'user')
+      .length,
+  };
+}
+
 export function resolveRewindConfirm(
   originId: string,
   displayedId: string | null | undefined,
-  conversation: { messages: readonly { role: string }[]; historyBaseIndex?: number } | undefined,
-  absIndex: number
-): { conversationId: string; userIndexFromEnd: number } | null {
+  conversation: RewindMessages | undefined,
+  absIndex: number,
+  entryId?: string
+): { conversationId: string; entryId: string; userIndexFromEnd: number } | null {
   if (!conversation || displayedId !== originId) return null;
-  const userIndexFromEnd = userIndexFromEndForTimelineKey(conversation, absIndex);
-  if (userIndexFromEnd === null) return null;
-  return { conversationId: originId, userIndexFromEnd };
+  const anchor = entryId ?? userIndexFromEndForTimelineKey(conversation, absIndex);
+  if (anchor === null) return null;
+  const target = resolveRewindTarget(conversation, anchor);
+  return target ? { conversationId: originId, ...target } : null;
 }
 
 export function userIndexFromEndForTimelineKey(

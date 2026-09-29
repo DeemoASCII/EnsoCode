@@ -258,6 +258,7 @@ export function BtwView({
             focusKey={sessionId}
             injectedDraft={conversation?.draftText}
             injectedImages={conversation?.draftImages}
+            injectedDraftAppend={conversation?.draftAppend}
             onDraftConsumed={() => useSessionsStore.getState().clearDraft(sessionId)}
             queuedCount={conversation?.queuedMessages?.length ?? 0}
             onSteerQueued={() => useSessionsStore.getState().steerQueued(sessionId)}

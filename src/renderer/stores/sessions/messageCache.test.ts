@@ -304,17 +304,35 @@ describe('chatSurfaceBusy', () => {
     ).toBe(true);
   });
 
-  it('时间线脚点：running 与乐观未确认的发送算生成中', () => {
+  it('时间线脚点：只有真实 running 算生成中，未确认发送不冒充模型运行', () => {
     expect(chatTimelineActivity({ messages: [{}], spawning: false, status: 'running' })).toBe(
       'working'
     );
     expect(
       chatTimelineActivity({ messages: [{ optimistic: true }], spawning: false, status: 'idle' })
-    ).toBe('working');
+    ).toBeNull();
     expect(
       chatTimelineActivity({ messages: [{ optimistic: true }], spawning: true, status: 'idle' })
-    ).toBe('working');
+    ).toBe('loading');
   });
+
+  it.each(['idle', 'failed'])(
+    '历史中残留拒收或未确认气泡时，%s 不显示无法停止的生成状态',
+    (status) => {
+      for (const deliveryRejected of [false, true]) {
+        const conversation = {
+          started: true,
+          spawning: false,
+          status,
+          historyLoadAttempted: true,
+          messages: [{}, { optimistic: true, deliveryRejected }],
+        };
+        expect(chatSurfaceBusy(conversation)).toBe(false);
+        expect(chatTimelineActivity(conversation)).toBeNull();
+        expect(chatTimelineActivity({ ...conversation, status: 'running' })).toBe('working');
+      }
+    }
+  );
 
   it('时间线脚点：冷会话恢复（spawn / 读历史）是加载中，不是生成中', () => {
     expect(chatTimelineActivity({ messages: [{}], spawning: true, status: 'idle' })).toBe(

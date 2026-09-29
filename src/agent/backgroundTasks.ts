@@ -382,6 +382,13 @@ export function withForegroundBashTimeout(params: unknown): Record<string, unkno
   return { ...record, timeout: DEFAULT_FOREGROUND_BASH_TIMEOUT_SEC };
 }
 
+/** 前台命令工具实际生效的超时（毫秒）；background 与非命令工具没有截止时间 */
+export function foregroundCommandTimeoutMs(toolName: string, args: unknown): number | undefined {
+  if (toolName !== 'bash' && toolName !== 'powershell') return undefined;
+  const timeout = withForegroundBashTimeout(args).timeout;
+  return typeof timeout === 'number' ? timeout * 1000 : undefined;
+}
+
 /** bash 加 background 能力：background=true 时 detach 运行立即返回 taskId */
 export function withBackground(
   definition: ToolDefinition,

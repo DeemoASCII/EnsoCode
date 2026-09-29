@@ -30,6 +30,7 @@ import type {
   TitleSummaryInput,
   TurnDigest,
 } from '@shared/types/agent';
+import { STALE_SESSION_ERROR } from '@shared/types/agent';
 import type { AgentDispatchResult, AgentDispatchTask } from '@shared/types/mentions';
 import type { PairCreatedSession } from '@shared/types/pair';
 import type {
@@ -76,6 +77,7 @@ import { shouldFocusChildReservation } from './childReservationFocus';
 import {
   canWakeConversationForRewind,
   extractRewindDraft,
+  resolveRewindTarget,
   rewindKeepCount,
   rewindWorkerPhase,
   shouldSendRewindCommand,
@@ -104,6 +106,7 @@ import {
   applyAgentEvent,
   applyDispatchEvent,
   applyHistoryPage,
+  canWithdrawMessage,
   emptyProjection,
   isVisibleGenerationOutput,
   rewindTruncatedNeedsSnapshotResync,
@@ -146,6 +149,9 @@ let evictTimer: ReturnType<typeof setTimeout> | null = null;
 /** 正文脱节时向 worker 补要 snapshot 的去抖：同一会话一轮重叠的 upsert 不重复要 */
 const snapshotResyncAt: Record<string, number> = {};
 const SNAPSHOT_RESYNC_DEBOUNCE_MS = 2_000;
+/** worker 丢会话后的自动恢复节流：窗口期内再次被同因拒绝即放弃自愈，避免 spawn/拒绝循环 */
+const staleRecoveredAt = new Map<string, number>();
+const STALE_RECOVERY_WINDOW_MS = 60_000;
 /** 冷会话不落正文，只按此节流续 lastOutputAt：每个流式增量都 set 会逐条触发 persist */
 const COLD_HEARTBEAT_INTERVAL_MS = 5_000;
 function resyncSnapshot(sessionId: string): void {
@@ -285,6 +291,7 @@ export interface Conversation extends SessionProjection {
   /** 回退后待预填输入框的内容(rewind-done 回流,Composer 消费一次) */
   draftText?: string;
   draftImages?: AttachedImage[];
+  draftAppend?: boolean;
   /** 回退在飞：会话树尚未 navigateTree 完成。不持久化 */
   rewinding?: boolean;
   /** 工作树文件还原在飞。不持久化 */
@@ -445,6 +452,7 @@ interface SessionsState {
   /** 指定会话入队（不依赖 activeId）：手机端在轮次进行中发消息走这里 */
   enqueueMessage(conversationId: string, text: string, images?: AttachedImage[]): void;
   removeQueuedMessage(conversationId: string, messageId: string): void;
+  withdrawMessage(conversationId: string, target: { kind: 'queue' | 'delivery'; id: string }): void;
   updateQueuedMessage(conversationId: string, messageId: string, text: string): void;
   /** 立即发送队列中某条(running 时 steer 插入,否则直接 prompt) */
   sendQueuedNow(conversationId: string, messageId: string): void;
@@ -452,9 +460,9 @@ interface SessionsState {
   steerQueued(conversationId: string): void;
   /** 打断当前轮并立即发送队列中某条(中断收束后以新一轮 prompt 投递) */
   interruptAndSendQueued(conversationId: string, messageId: string): Promise<void>;
-  /** 回退到倒数第 N+1 条 user 消息(0 = 最后一条)。冷会话先 resume 并等到 worker 会话可用（snapshot / ready）。
+  /** 回退到已确认 user；本地序号先解析为 entryId。冷会话先 resume 并等待 worker 可用。
    *  restoreFiles 同时还原工作树文件 */
-  rewind(conversationId: string, userIndexFromEnd: number, restoreFiles?: boolean): void;
+  rewind(conversationId: string, anchor: string | number, restoreFiles?: boolean): void;
   /** 手动压缩上下文（/compact 与上下文面板按钮共用）。忙碌时 worker 排队，本轮结束后执行 */
   compact(conversationId: string, instructions?: string): void;
   /** UI 提示过压缩失败后清掉错误，避免重复弹提示 */
@@ -626,11 +634,53 @@ export const useSessionsStore = create<SessionsState>()(
                 ? {
                     draftText: draft.text,
                     draftImages: draft.images?.length ? draft.images : undefined,
+                    draftAppend: undefined,
                   }
                 : {}),
             })
           );
         });
+      }
+
+      async function dispatchRewind(
+        conversationId: string,
+        target: { entryId: string; userIndexFromEnd: number },
+        restoreFiles?: boolean
+      ): Promise<void> {
+        const before = get().conversations[conversationId];
+        if (!before) return;
+        applyOptimisticRewind(conversationId, target.userIndexFromEnd, restoreFiles);
+        try {
+          const result = await window.electronAPI.agent.rewind(
+            conversationId,
+            target.entryId,
+            restoreFiles
+          );
+          if (result.ok) return;
+          throw new Error(result.error ?? 'Unable to rewind this conversation.');
+        } catch (error) {
+          set((state) => {
+            const current = state.conversations[conversationId];
+            if (!current?.rewinding || current.generation !== before.generation) return state;
+            const draftUnchanged = current.draftText === rewindDraftGuard.get(conversationId);
+            rewindDraftGuard.delete(conversationId);
+            rewindKeepAbsolute.delete(conversationId);
+            return patch(state, conversationId, {
+              messages: before.messages,
+              historyBaseIndex: before.historyBaseIndex,
+              rewinding: undefined,
+              restoringFiles: undefined,
+              error: error instanceof Error ? error.message : String(error),
+              ...(draftUnchanged
+                ? {
+                    draftText: before.draftText,
+                    draftImages: before.draftImages,
+                    draftAppend: before.draftAppend,
+                  }
+                : {}),
+            });
+          });
+        }
       }
 
       /**
@@ -1459,6 +1509,7 @@ export const useSessionsStore = create<SessionsState>()(
                 ? {
                     draftText: event.editorText,
                     draftImages: event.editorImages?.length ? event.editorImages : undefined,
+                    draftAppend: undefined,
                   }
                 : {}),
             });
@@ -1596,7 +1647,9 @@ export const useSessionsStore = create<SessionsState>()(
                   // 追加到队尾：连续多条失败按 FIFO 回流，保持原发送顺序（A,B → [A,B]）
                   queuedMessages: [
                     ...(conversation.queuedMessages ?? []),
-                    toQueuedMessage(conversation.messages.find((m) => m.optimistic)!),
+                    toQueuedMessage(
+                      conversation.messages.find((m) => m.optimistic && !m.deliveryRejected)!
+                    ),
                   ],
                 }
               : {}),
@@ -1649,6 +1702,9 @@ export const useSessionsStore = create<SessionsState>()(
               : {}),
           });
         });
+        if (event.type === 'parent-rejected' && event.reason.startsWith(STALE_SESSION_ERROR)) {
+          void recoverStaleSession(id, event.reason);
+        }
         if (event.type === 'turn-completed' || event.type === 'turn-failed') {
           // 用户中断的轮次不自动续跑：清掉一次性标记后直接收口
           if (get().conversations[id]?.abortRequested) {
@@ -1668,6 +1724,52 @@ export const useSessionsStore = create<SessionsState>()(
           continueGoal(id);
         }
       });
+
+      /**
+       * worker 已不持有会话（闲置回收 / worker 重启）而 renderer 仍以为 started 时，prompt/steer
+       * 被拒。自动 resume 并按原序重投被拒消息，不让用户手动点「重新恢复」再重发。
+       * 同一会话窗口期内只自愈一次，异常时退回原有的 failed + 手动恢复。
+       */
+      async function recoverStaleSession(id: string, reason: string): Promise<void> {
+        const conversation = get().conversations[id];
+        if (
+          !conversation ||
+          conversation.started ||
+          conversation.parentId ||
+          conversation.btwParentId ||
+          !conversation.sessionFile
+        )
+          return;
+        const now = Date.now();
+        if (now - (staleRecoveredAt.get(id) ?? -Infinity) < STALE_RECOVERY_WINDOW_MS) return;
+        staleRecoveredAt.set(id, now);
+        set((state) => {
+          const current = state.conversations[id];
+          if (!current) return state;
+          const undelivered = current.messages.filter(
+            (message) => message.optimistic && !message.deliveryRejected && message.role === 'user'
+          );
+          return patch(state, id, {
+            status: 'idle',
+            error: undefined,
+            messages: current.messages.filter((message) => !undelivered.includes(message)),
+            queuedMessages: [
+              ...undelivered.map(toQueuedMessage),
+              ...(current.queuedMessages ?? []),
+            ],
+          });
+        });
+        await get().resumeConversation(id);
+        const resumed = get().conversations[id];
+        if (!resumed) return;
+        if (resumed.started) {
+          flushQueue(id);
+          return;
+        }
+        if (resumed.status !== 'failed') {
+          set((state) => patch(state, id, { status: 'failed', error: reason }));
+        }
+      }
 
       /**
        * prompt/steer 统一投递：静默失败就是「发了没反应只能重启」。失败时收回乐观回显、
@@ -3599,7 +3701,7 @@ export const useSessionsStore = create<SessionsState>()(
           set((state) => patch(state, conversationId, { compactionError: undefined }));
         },
 
-        rewind(conversationId, userIndexFromEnd, restoreFiles) {
+        rewind(conversationId, anchor, restoreFiles) {
           const conversation = get().conversations[conversationId];
           if (
             !conversation ||
@@ -3611,9 +3713,10 @@ export const useSessionsStore = create<SessionsState>()(
           }
           if (conversation.rewinding || conversation.restoringFiles) return;
           if (rewindInFlight.has(conversationId)) return;
+          const target = resolveRewindTarget(conversation, anchor);
+          if (!target) return;
           if (shouldSendRewindCommand(conversation)) {
-            applyOptimisticRewind(conversationId, userIndexFromEnd, restoreFiles);
-            void window.electronAPI.agent.rewind(conversationId, userIndexFromEnd, restoreFiles);
+            void dispatchRewind(conversationId, target, restoreFiles);
             return;
           }
           if (!conversation.started && !canWakeConversationForRewind(conversation)) return;
@@ -3632,12 +3735,9 @@ export const useSessionsStore = create<SessionsState>()(
                 shouldSendRewindCommand(after) &&
                 after.sessionFile === sessionFile
               ) {
-                applyOptimisticRewind(conversationId, userIndexFromEnd, restoreFiles);
-                void window.electronAPI.agent.rewind(
-                  conversationId,
-                  userIndexFromEnd,
-                  restoreFiles
-                );
+                const refreshedTarget = resolveRewindTarget(after, target.entryId);
+                if (!refreshedTarget) return;
+                await dispatchRewind(conversationId, refreshedTarget, restoreFiles);
                 return;
               }
               if (after && !after.error && !after.worktreeMissing && phase === 'failed') {
@@ -3683,8 +3783,49 @@ export const useSessionsStore = create<SessionsState>()(
           if (conversation?.draftText === undefined && conversation?.draftImages === undefined)
             return;
           set((state) =>
-            patch(state, conversationId, { draftText: undefined, draftImages: undefined })
+            patch(state, conversationId, {
+              draftText: undefined,
+              draftImages: undefined,
+              draftAppend: undefined,
+            })
           );
+        },
+
+        withdrawMessage(conversationId, target) {
+          set((state) => {
+            const conversation = state.conversations[conversationId];
+            if (
+              !conversation ||
+              conversation.historyOnly ||
+              conversation.rewinding ||
+              conversation.restoringFiles ||
+              conversation.workspaceMigrating
+            )
+              return state;
+            const queued =
+              target.kind === 'queue'
+                ? conversation.queuedMessages?.find((item) => item.id === target.id)
+                : undefined;
+            const message =
+              target.kind === 'delivery'
+                ? conversation.messages.find((item) => item.deliveryId === target.id)
+                : undefined;
+            if (!queued && !canWithdrawMessage(message)) return state;
+            const draft = queued ?? (message && extractRewindDraft([message], 0));
+            if (!draft) return state;
+            return patch(state, conversationId, {
+              ...(queued
+                ? {
+                    queuedMessages: conversation.queuedMessages?.filter(
+                      (item) => item.id !== target.id
+                    ),
+                  }
+                : { messages: conversation.messages.filter((item) => item !== message) }),
+              draftText: [conversation.draftText, draft.text].filter(Boolean).join('\n\n'),
+              draftImages: [...(conversation.draftImages ?? []), ...(draft.images ?? [])],
+              draftAppend: true,
+            });
+          });
         },
 
         sendQueuedNow(conversationId, messageId) {
@@ -3756,7 +3897,10 @@ export const useSessionsStore = create<SessionsState>()(
           });
           if (
             !get().conversations[conversationId]?.started ||
-            get().conversations[conversationId]?.workspaceMigrating
+            get().conversations[conversationId]?.workspaceMigrating ||
+            !get().conversations[conversationId]?.queuedMessages?.some(
+              (message) => message.id === messageId
+            )
           )
             return;
           const deliveryId = crypto.randomUUID();

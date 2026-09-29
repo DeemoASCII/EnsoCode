@@ -971,6 +971,9 @@ export const zhTranslations: Record<string, string> = {
   'Press {{key}} to steer the next queued message into this round…':
     '按 {{key}} 将下一条排队消息插入本轮…',
   Queued: '排队',
+  'Withdraw message': '撤回',
+  'Not sent': '未发送',
+  'Delivery unconfirmed': '送达待确认',
   attachments: '个附件',
   Edit: '编辑',
   'Send now': '立即发送',

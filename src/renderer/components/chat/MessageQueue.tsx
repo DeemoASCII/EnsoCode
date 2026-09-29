@@ -1,4 +1,4 @@
-import { Check, Images, Pencil, Send, SquareX, X } from 'lucide-react';
+import { Check, Images, Pencil, Send, SquareX, Undo2, X } from 'lucide-react';
 import { useState } from 'react';
 import { useI18n } from '@/i18n';
 import type { QueuedMessage } from '@/stores/sessions';
@@ -75,6 +75,19 @@ export function MessageQueue({
             </button>
           ) : (
             <div className="flex shrink-0 items-center gap-0.5">
+              <button
+                type="button"
+                title={t('Withdraw message')}
+                aria-label={t('Withdraw message')}
+                onClick={() =>
+                  useSessionsStore
+                    .getState()
+                    .withdrawMessage(conversationId, { kind: 'queue', id: message.id })
+                }
+                className="rounded p-0.5 text-muted-foreground hover:text-foreground"
+              >
+                <Undo2 className="h-3 w-3" />
+              </button>
               <button
                 type="button"
                 title={t('Edit')}

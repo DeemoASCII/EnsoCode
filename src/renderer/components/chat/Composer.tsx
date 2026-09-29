@@ -33,13 +33,14 @@ import {
 } from './composerMentionBridge';
 import { COMPOSER_DROP_ID } from './dragDrop';
 import { HoldToTalk, HoldToTalkToggle } from './HoldToTalk';
+import { applyInjectedDraft } from './injectedDraft';
 import { MentionChip } from './MentionChip';
 import { MentionEditor, type MentionEditorHandle, type MentionEditorState } from './MentionEditor';
 import { MentionPicker } from './MentionPicker';
 import { requestOpenChatModelPicker } from './ModelPicker';
 import type { ComposerPayload, MentionSegment } from './mentionComposer';
 import { createEditorPayload, mentionPopupLayout, resolvePopupKeyAction } from './mentionComposer';
-import { SlashChip, splitSlashCommand } from './SlashChip';
+import { SlashChip } from './SlashChip';
 import { filterComposerCommands } from './skillCompletion';
 import { VoiceInputButton } from './VoiceInputButton';
 
@@ -61,6 +62,7 @@ interface ComposerProps {
   locked?: boolean;
   injectedDraft?: string;
   injectedImages?: AttachedImage[];
+  injectedDraftAppend?: boolean;
   onDraftConsumed?: () => void;
   initialRecipient?: AgentTypeMentionCandidate;
   onInitialRecipientConsumed?: () => void;
@@ -111,6 +113,7 @@ export function Composer({
   locked = false,
   injectedDraft,
   injectedImages,
+  injectedDraftAppend,
   onDraftConsumed,
   initialRecipient,
   onInitialRecipientConsumed,
@@ -275,13 +278,17 @@ export function Composer({
   // biome-ignore lint/correctness/useExhaustiveDependencies: injected content is an external one-shot signal.
   useEffect(() => {
     if (!injectedDraft && !injectedImages?.length) return;
-    const parsed = splitSlashCommand(injectedDraft ?? '');
-    setSlash(parsed.slash);
-    setImages(injectedImages ?? []);
-    editorRef.current?.setSegments(parsed.rest ? [{ type: 'text', text: parsed.rest }] : []);
+    const draft = applyInjectedDraft(
+      { segments: editorRef.current?.getSegments() ?? [], images, slash },
+      { text: injectedDraft, images: injectedImages },
+      injectedDraftAppend
+    );
+    setSlash(draft.slash);
+    setImages(draft.images);
+    editorRef.current?.setSegments(draft.segments);
     onDraftConsumed?.();
     window.setTimeout(() => editorRef.current?.focus(), 0);
-  }, [injectedDraft, injectedImages]);
+  }, [injectedDraft, injectedImages, injectedDraftAppend]);
 
   const subQuery = slashSubcommandQuery(slash, editorPlain.replaceAll('\uFFFC', ''));
   const slashResults = filterComposerCommands(commands, slashQuery, skillQuery);

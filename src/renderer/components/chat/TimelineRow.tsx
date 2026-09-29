@@ -60,6 +60,7 @@ import {
   resolveRewindConfirm,
   userIndexFromEndForTurnKey,
 } from '@/stores/sessions/conversationRewind';
+import { canWithdrawMessage } from '@/stores/sessions/reducer';
 import { formatDuration, formatTokens } from '@/stores/sessions/stats';
 import {
   exploreStepsKey,
@@ -128,6 +129,7 @@ function itemEqual(prev: TimelineRowProps, next: TimelineRowProps): boolean {
         a.text !== b.text ||
         a.images.length !== b.images.length ||
         a.timestamp !== b.timestamp ||
+        a.deliveryState !== b.deliveryState ||
         a.turnDurationMs !== b.turnDurationMs ||
         a.collapsed !== b.collapsed ||
         a.canCollapse !== b.canCollapse
@@ -669,6 +671,7 @@ export const TimelineRow = memo(function TimelineRow({
               turnKey={item.key}
               messageIndex={Number(item.key)}
               timestamp={item.timestamp}
+              deliveryState={item.deliveryState}
               canCollapse={item.canCollapse}
               onToggleTurn={onToggleTurn}
             />
@@ -887,33 +890,88 @@ function ForkButton({ messageIndex }: { messageIndex: number }) {
   );
 }
 
+function WithdrawButton({ messageIndex }: { messageIndex: number }) {
+  const { t } = useI18n();
+  const host = useChatHost();
+  const conversationId = useSessionsStore((state) => displayedConversation(state)?.id);
+  const deliveryId = useSessionsStore((state) => {
+    const conversation = conversationId ? state.conversations[conversationId] : undefined;
+    if (
+      host ||
+      !conversation ||
+      conversation.historyOnly ||
+      conversation.rewinding ||
+      conversation.restoringFiles ||
+      conversation.workspaceMigrating
+    )
+      return undefined;
+    const message = conversation.messages[messageIndex - (conversation.historyBaseIndex ?? 0)];
+    return canWithdrawMessage(message) ? message.deliveryId : undefined;
+  });
+  if (!conversationId || !deliveryId) return null;
+  return (
+    <button
+      type="button"
+      title={t('Withdraw message')}
+      onClick={() =>
+        useSessionsStore
+          .getState()
+          .withdrawMessage(conversationId, { kind: 'delivery', id: deliveryId })
+      }
+      className="inline-flex items-center gap-1 hover:text-foreground"
+    >
+      <Undo2 className="h-3 w-3" />
+      {t('Withdraw message')}
+    </button>
+  );
+}
+
 /** 回退入口：已 spawn 非 spawning，或可 resume 的历史主会话。未恢复 coworker / remote / historyOnly 不显示；活 child 保持。 */
 function RewindButton({ messageIndex }: { messageIndex: number }) {
   const { t } = useI18n();
   const [open, setOpen] = useState(false);
-  /** 待确认的回退；绑打开时的会话，confirm 当时重算锚点 */
-  const [pending, setPending] = useState<{ restoreFiles: boolean; conversationId: string } | null>(
-    null
-  );
+  /** 确认框绑定打开时的会话与持久化消息，不能随时间线位置漂移。 */
+  const [pending, setPending] = useState<{
+    restoreFiles: boolean;
+    conversationId: string;
+    entryId: string;
+  } | null>(null);
   const host = useChatHost();
-  const canRewind = useSessionsStore((state) => canRewindDisplayedSession(state, host));
+  const canRewind = useSessionsStore((state) => {
+    const conversation = displayedConversation(state);
+    return (
+      canRewindDisplayedSession(state, host) &&
+      Boolean(
+        conversation &&
+          resolveRewindConfirm(conversation.id, conversation.id, conversation, messageIndex)
+      )
+    );
+  });
   if (!canRewind) return null;
   const queueRewind = (restoreFiles: boolean) => {
     const conversation = displayedConversation(useSessionsStore.getState());
     if (!conversation) return;
-    setPending({ restoreFiles, conversationId: conversation.id });
+    const target = resolveRewindConfirm(
+      conversation.id,
+      conversation.id,
+      conversation,
+      messageIndex
+    );
+    if (target)
+      setPending({ restoreFiles, conversationId: conversation.id, entryId: target.entryId });
   };
-  const rewind = (restoreFiles: boolean, originId: string) => {
+  const rewind = (restoreFiles: boolean, originId: string, entryId: string) => {
     const state = useSessionsStore.getState();
     const displayed = displayedConversation(state);
     const target = resolveRewindConfirm(
       originId,
       displayed?.id,
       state.conversations[originId],
-      messageIndex
+      messageIndex,
+      entryId
     );
     if (!target) return;
-    state.rewind(target.conversationId, target.userIndexFromEnd, restoreFiles);
+    state.rewind(target.conversationId, target.entryId, restoreFiles);
   };
   const options = [
     {
@@ -971,7 +1029,7 @@ function RewindButton({ messageIndex }: { messageIndex: number }) {
         }
         confirmLabel={t('Rewind')}
         onConfirm={() => {
-          if (pending) rewind(pending.restoreFiles, pending.conversationId);
+          if (pending) rewind(pending.restoreFiles, pending.conversationId, pending.entryId);
         }}
       />
     </Popover>
@@ -1014,12 +1072,14 @@ function UserMeta({
   messageIndex,
   timestamp,
   canCollapse,
+  deliveryState,
   onToggleTurn,
 }: {
   turnKey: string;
   messageIndex: number;
   timestamp?: number;
   canCollapse?: boolean;
+  deliveryState?: 'pending' | 'rejected';
   onToggleTurn?: (key: string, collapsed: boolean) => void;
 }) {
   const { t } = useI18n();
@@ -1027,6 +1087,10 @@ function UserMeta({
   return (
     <div className="flex items-center gap-2 text-[11px] text-muted-foreground/75 select-none">
       <RewindButton messageIndex={messageIndex} />
+      <WithdrawButton messageIndex={messageIndex} />
+      {deliveryState && (
+        <span>{t(deliveryState === 'rejected' ? 'Not sent' : 'Delivery unconfirmed')}</span>
+      )}
       {autoCollapseTurns && canCollapse && onToggleTurn && (
         <button
           type="button"

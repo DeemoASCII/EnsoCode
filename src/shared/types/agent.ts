@@ -1083,7 +1083,9 @@ export type AgentCommand =
   | {
       type: 'rewind';
       identity: SessionIdentity;
-      userIndexFromEnd: number;
+      entryId?: string;
+      /** Legacy phone clients only; desktop rewind uses a persisted entryId. */
+      userIndexFromEnd?: number;
       restoreFiles?: boolean;
     }
   | {
@@ -1198,6 +1200,8 @@ export interface TodoItem {
 
 /** 渲染层可见的消息投影：pi AgentMessage 的白名单克隆 */
 export interface ProjectedMessage {
+  /** Persisted user entry identity, absent on unconfirmed messages. */
+  entryId?: string;
   rtk?: RtkToolStats;
   role: string;
   content: ProjectedPart[];
@@ -1306,6 +1310,9 @@ export interface AgentActionResult {
   error?: string;
 }
 
+/** worker 不持有该会话（闲置回收 / worker 重启 / 换代）时拒绝 prompt/steer 的原因前缀 */
+export const STALE_SESSION_ERROR = 'unknown or stale session generation';
+
 export type ParentLifecycleEvent =
   | {
       type: 'parent-ready';
@@ -1404,6 +1411,7 @@ export type AgentWorkerEvent =
       seq: number;
       deliveryId?: string;
     }
+  | { type: 'delivery-rejected'; identity: SessionIdentity; seq: number; deliveryId: string }
   | { type: 'status'; identity: SessionIdentity; seq: number; status: NodeStatus; error?: string }
   | {
       type: 'message-upsert';
@@ -1448,6 +1456,8 @@ export type AgentWorkerEvent =
       output: string;
       /** 该工具真正开始执行的 wall clock；后续增量覆盖不改 */
       startedAt?: number;
+      /** 前台命令的超时截止 wall clock：无输出巡检在此之前不把静默当卡死 */
+      deadlineAt?: number;
     }
   | { type: 'messages-truncated'; identity: SessionIdentity; seq: number; length: number }
   | {
@@ -2842,9 +2852,19 @@ export function parseAgentCommand(value: unknown): AgentCommand | null {
         ? (value as unknown as AgentCommand)
         : null;
     case 'rewind':
-      return hasOnlyKeys(value, ['type', 'identity', 'userIndexFromEnd', 'restoreFiles']) &&
+      return hasOnlyKeys(value, [
+        'type',
+        'identity',
+        'entryId',
+        'userIndexFromEnd',
+        'restoreFiles',
+      ]) &&
         parseAnySessionIdentity(value.identity) &&
-        isSequence(value.userIndexFromEnd) &&
+        (value.entryId !== undefined
+          ? isNonEmptyString(value.entryId) &&
+            value.entryId.trim().length > 0 &&
+            value.userIndexFromEnd === undefined
+          : isSequence(value.userIndexFromEnd)) &&
         (value.restoreFiles === undefined || typeof value.restoreFiles === 'boolean')
         ? (value as unknown as AgentCommand)
         : null;
@@ -3099,6 +3119,7 @@ export function parseAgentWorkerEvent(value: unknown): AgentWorkerEvent | null {
         ? (value as unknown as AgentWorkerEvent)
         : null;
     case 'delivery-settled':
+    case 'delivery-rejected':
       return hasExactKeys(value, ['type', 'identity', 'seq', 'deliveryId']) &&
         isDeliveryId(value.deliveryId)
         ? (value as unknown as AgentWorkerEvent)
@@ -3235,7 +3256,8 @@ export function parseAgentWorkerEvent(value: unknown): AgentWorkerEvent | null {
     case 'tool-output':
       return isNonEmptyString(value.toolCallId) &&
         typeof value.output === 'string' &&
-        (value.startedAt === undefined || typeof value.startedAt === 'number')
+        (value.startedAt === undefined || typeof value.startedAt === 'number') &&
+        (value.deadlineAt === undefined || Number.isFinite(value.deadlineAt))
         ? (value as unknown as AgentWorkerEvent)
         : null;
     case 'task-started':

@@ -330,6 +330,68 @@ describe('SessionSupervisor compact failure', () => {
     await supervisor.shutdown();
   });
 
+  it('rewind 按持久化 ID 定位，缺失目标绝不回退上一轮或恢复文件', async () => {
+    const events: AgentWorkerEvent[] = [];
+    const dir = mkdtempSync(path.join(tmpdir(), 'enso-rewind-anchor-'));
+    const supervisor = new SessionSupervisor({
+      emit: (event) => events.push(event),
+      agentDir: '/tmp/agent',
+      sessionDir: dir,
+    });
+    const restore = vi
+      .spyOn(CheckpointManager.prototype, 'restoreForEntry')
+      .mockResolvedValue(true);
+    try {
+      supervisor.handleCommand({
+        type: 'spawn-parent',
+        identity: parent,
+        cwd: '/workspace',
+        model,
+      });
+      await waitFor(events, 'parent-ready');
+      const live = mocks.sessions[0] as ReturnType<typeof session>;
+      const user = (text: string) => ({ role: 'user', content: [{ type: 'text', text }] });
+      const branch = (mocks.managers[0] as { getBranch: () => unknown[] }).getBranch();
+      for (const id of ['execute', 'continue', 'later']) {
+        const message = user(id);
+        live.emit({ type: 'message_start', message: { ...message, entryId: id } });
+        branch.push({ type: 'message', id, message, timestamp: 1 });
+      }
+      live.emit({ type: 'message_start', message: user('not persisted') });
+      events.length = 0;
+      supervisor.handleCommand({
+        type: 'rewind',
+        identity: parent,
+        entryId: 'undelivered',
+        restoreFiles: true,
+      });
+      await settle();
+      expect(live.navigateTree).not.toHaveBeenCalled();
+      expect(restore).not.toHaveBeenCalled();
+      expect(events.some((event) => event.type === 'messages-truncated')).toBe(false);
+      expect(events).toContainEqual(
+        expect.objectContaining({ type: 'rewind-done', filesRestored: false })
+      );
+      expect(events).toContainEqual(expect.objectContaining({ type: 'snapshot', partial: true }));
+      supervisor.handleCommand({
+        type: 'rewind',
+        identity: parent,
+        entryId: 'continue',
+        restoreFiles: true,
+      });
+      await settle();
+      expect(live.navigateTree).toHaveBeenCalledWith('continue');
+      expect(restore).toHaveBeenCalledWith('continue', 1);
+      expect(events).toContainEqual(
+        expect.objectContaining({ type: 'messages-truncated', length: 1 })
+      );
+    } finally {
+      restore.mockRestore();
+      await supervisor.shutdown();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it('rewind 后不把 LLM 短上下文再 truncated 掉前缀', async () => {
     const events: AgentWorkerEvent[] = [];
     const supervisor = new SessionSupervisor({

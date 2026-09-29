@@ -158,7 +158,7 @@ vi.mock('./worktree', () => ({
   removeRegisteredWorktree: mocks.removeRegisteredWorktree,
 }));
 
-import { resolveSubagentModelSelection } from '../services/agentHost';
+import { resolveSubagentModelSelection, rewindSession } from '../services/agentHost';
 import { getSourceAuthorityRegistry, registerAgentHandlers } from './agent';
 
 const sender = {
@@ -196,6 +196,23 @@ describe('agent IPC Main identity boundary', () => {
 
   it('派发 host 接上子代理模型解析，模型覆盖才不会被当成档案禁止', () => {
     expect(mocks.dispatchHost.resolveSubagentModel).toBe(resolveSubagentModelSelection);
+  });
+
+  it('desktop rewind requires a persisted entry ID and a current generation', () => {
+    const identity = { sessionId: 'parent', generation: '11111111-1111-4111-8111-111111111111' };
+    mocks.currentIdentity.mockReturnValue(identity);
+    vi.mocked(rewindSession).mockReset().mockReturnValue({ ok: true });
+    const handler = mocks.handlers.get(IPC_CHANNELS.AGENT_REWIND)!;
+    for (const anchor of [0, -1, null, undefined, '', ' ', {}, []]) {
+      expect(handler(event, 'parent', anchor, true)).toMatchObject({ ok: false });
+    }
+    expect(handler(event, 'parent', 'entry', 'true')).toMatchObject({ ok: false });
+    expect(rewindSession).not.toHaveBeenCalled();
+    expect(handler(event, 'parent', 'entry', true)).toEqual({ ok: true });
+    expect(rewindSession).toHaveBeenCalledExactlyOnceWith(identity, 'entry', true);
+    mocks.currentIdentity.mockReturnValue(undefined);
+    expect(handler(event, 'parent', 'entry', true)).toMatchObject({ ok: false });
+    expect(rewindSession).toHaveBeenCalledTimes(1);
   });
 
   it.each(['busy', 'ended', 'rebound'])(

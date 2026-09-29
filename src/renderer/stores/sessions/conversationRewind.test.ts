@@ -164,7 +164,7 @@ describe('rewindWorkerPhase', () => {
 });
 
 describe('resolveRewindConfirm', () => {
-  const conversation = { messages: [{ role: 'user' }, { role: 'assistant' }] };
+  const conversation = { messages: [{ role: 'user', entryId: 'u1' }, { role: 'assistant' }] };
 
   it('displayed 不是 origin 或会话消失则 abort', () => {
     expect(resolveRewindConfirm('a', 'b', conversation, 0)).toBe(null);
@@ -175,7 +175,29 @@ describe('resolveRewindConfirm', () => {
     expect(resolveRewindConfirm('a', 'a', conversation, 0)).toEqual({
       conversationId: 'a',
       userIndexFromEnd: 0,
+      entryId: 'u1',
     });
+  });
+
+  it('未确认的继续不能回退上一轮，即使携带伪 entryId', () => {
+    for (const entryId of [undefined, 'u2']) {
+      const messages = [...conversation.messages, { role: 'user', optimistic: true, entryId }];
+      expect(resolveRewindConfirm('a', 'a', { messages }, 2)).toBeNull();
+    }
+    expect(resolveRewindConfirm('a', 'a', { messages: [{ role: 'user' }] }, 0)).toBeNull();
+  });
+
+  it('确认框绑定 entryId，分页或新消息不改变目标，目标消失就拒绝', () => {
+    const changed = {
+      messages: [{ role: 'assistant' }, ...conversation.messages, { role: 'user', entryId: 'u2' }],
+      historyBaseIndex: 20,
+    };
+    expect(resolveRewindConfirm('a', 'a', changed, 0, 'u1')).toEqual({
+      conversationId: 'a',
+      entryId: 'u1',
+      userIndexFromEnd: 1,
+    });
+    expect(resolveRewindConfirm('a', 'a', changed, 21, 'removed')).toBeNull();
   });
 });
 

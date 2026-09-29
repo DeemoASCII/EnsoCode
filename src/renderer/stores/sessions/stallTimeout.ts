@@ -46,29 +46,37 @@ export function hasLiveGenerationWork(input: {
   return input.pendingApprovals > 0 || input.pendingAsks > 0 || Boolean(input.spawningCoworker);
 }
 
-type StallSession = {
+type StallBeat = {
   lastOutputAt?: number;
   runStartedAt?: number;
-  coworkerIds?: readonly string[];
+  toolDeadlineAt?: Record<string, number> | null;
 };
 
-type StallChild = {
-  spawning?: boolean;
-  status?: string;
-  lastOutputAt?: number;
-  runStartedAt?: number;
-};
+type StallSession = StallBeat & { coworkerIds?: readonly string[] };
 
-/** 父会话等 coworker 时沿用子会话可见心跳；静默 bash / subagent 不另开豁免。 */
+type StallChild = StallBeat & { spawning?: boolean; status?: string };
+
+function ownHeartbeatAt(session: StallBeat): number | undefined {
+  let at = session.lastOutputAt ?? session.runStartedAt;
+  for (const deadline of Object.values(session.toolDeadlineAt ?? {})) {
+    if (at === undefined || deadline > at) at = deadline;
+  }
+  return at;
+}
+
+/**
+ * 父会话等 coworker 时沿用子会话可见心跳；运行中前台命令以其超时截止为心跳，过期后照常计时。
+ * 无截止时间的静默工具 / subagent 不另开豁免。
+ */
 export function stallHeartbeatAt(
   conversation: StallSession,
   conversations: Record<string, StallChild | undefined>
 ): number | undefined {
-  let at = conversation.lastOutputAt ?? conversation.runStartedAt;
+  let at = ownHeartbeatAt(conversation);
   for (const id of conversation.coworkerIds ?? []) {
     const child = conversations[id];
     if (!child || child.spawning || child.status !== 'running') continue;
-    const childAt = child.lastOutputAt ?? child.runStartedAt;
+    const childAt = ownHeartbeatAt(child);
     if (childAt !== undefined && (at === undefined || childAt > at)) at = childAt;
   }
   return at;

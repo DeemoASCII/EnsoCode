@@ -208,4 +208,26 @@ describe('stallHeartbeatAt', () => {
       })
     ).toBe(1_000);
   });
+
+  it('运行中的前台命令有截止时间时，按截止时间计时，过期后照常中止', () => {
+    const conversation = { lastOutputAt: 1_000, toolDeadlineAt: { t1: 601_000 } };
+    const at = stallHeartbeatAt(conversation, {});
+    expect(at).toBe(601_000);
+    const stalled = (now: number) =>
+      shouldAbortStalledGeneration({
+        status: 'running',
+        lastOutputAt: at,
+        now,
+        timeoutMs: 300_000,
+      });
+    expect(stalled(400_000)).toBe(false);
+    expect(stalled(900_000)).toBe(false);
+    expect(stalled(901_000)).toBe(true);
+    expect(
+      stallHeartbeatAt(
+        { lastOutputAt: 1_000, coworkerIds: ['kid'] },
+        { kid: { status: 'running', lastOutputAt: 2_000, toolDeadlineAt: { t: 700_000 } } }
+      )
+    ).toBe(700_000);
+  });
 });

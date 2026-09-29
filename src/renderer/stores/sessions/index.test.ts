@@ -123,7 +123,7 @@ const agentAbort = vi.fn(async (_id: string) => ({ ok: true }));
 const agentRelease = vi.fn(async (_id: string) => ({ ok: true }));
 const btwSpawn = vi.fn(async () => ({ ok: true }));
 const btwDispose = vi.fn(async () => ({ ok: true }));
-const agentRewind = vi.fn(async () => ({ ok: true }));
+const agentRewind = vi.fn(async (): Promise<{ ok: boolean; error?: string }> => ({ ok: true }));
 const agentFork = vi.fn(async (_sourceId: string, _targetId: string, _anchor: unknown) => ({
   ok: true,
 }));
@@ -469,6 +469,73 @@ describe('typed Agent child projection', () => {
     expect(conversation.status).toBe('failed');
     expect(conversation.error).toBe('no api key');
     expect(conversation.generation).toBeUndefined();
+  });
+
+  it('worker 已不持有会话时拒绝的消息自动 resume 后重投，不要求手动重新恢复', async () => {
+    enableRewindResumeModel();
+    agentSpawn.mockResolvedValue({ ok: true });
+    sessionsModule.useSessionsStore.setState((state) => ({
+      conversations: {
+        ...state.conversations,
+        parent: {
+          ...state.conversations.parent,
+          started: true,
+          spawning: false,
+          status: 'idle' as const,
+          generation: 'pg1',
+          sessionFile: '/tmp/evicted.jsonl',
+          lastProviderId: 'p1',
+          lastModelId: 'm1',
+          messages: [
+            {
+              role: 'user' as const,
+              content: [{ type: 'text' as const, text: 'hello again' }],
+              optimistic: true,
+              deliveryId: 'd1',
+            },
+          ],
+        },
+      },
+    }));
+    onAgentEvent?.({
+      type: 'parent-rejected',
+      identity: { sessionId: 'parent', generation: 'pg1' },
+      seq: 0,
+      reason: 'unknown or stale session generation: parent',
+    });
+    await vi.waitFor(() =>
+      expect(agentPrompt).toHaveBeenCalledWith(
+        'parent',
+        'hello again',
+        undefined,
+        expect.any(String)
+      )
+    );
+    expect(agentSpawn).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionId: 'parent', resumeFile: '/tmp/evicted.jsonl' })
+    );
+    const conversation = sessionsModule.useSessionsStore.getState().conversations.parent;
+    expect(conversation.started).toBe(true);
+    expect(conversation.error).toBeUndefined();
+    expect(conversation.queuedMessages ?? []).toEqual([]);
+    expect(
+      conversation.messages.filter((message) => message.role === 'user').map((m) => m.content)
+    ).toEqual([[{ type: 'text', text: 'hello again' }]]);
+
+    // 恢复后仍被同因拒绝：不再无限重试，落 failed 交给手动恢复
+    agentSpawn.mockClear();
+    onAgentEvent?.({
+      type: 'parent-rejected',
+      identity: { sessionId: 'parent', generation: 'pg1' },
+      seq: 0,
+      reason: 'unknown or stale session generation: parent',
+    });
+    await Promise.resolve();
+    const after = sessionsModule.useSessionsStore.getState().conversations.parent;
+    expect(agentSpawn).not.toHaveBeenCalled();
+    expect(after.started).toBe(false);
+    expect(after.status).toBe('failed');
+    expect(after.error).toBe('unknown or stale session generation: parent');
   });
 
   it('partialize never persists started and resets stale running status to idle', () => {
@@ -3723,6 +3790,136 @@ describe('manual conversation reload', () => {
   });
 });
 
+describe('withdraw undelivered messages', () => {
+  beforeEach(async () => {
+    await seedParent();
+    agentRewind.mockClear();
+    agentPrompt.mockClear();
+  });
+
+  it('等待中断期间撤回的队列项不能再被后台发送', async () => {
+    const store = sessionsModule.useSessionsStore;
+    store.setState((state) => ({
+      conversations: {
+        ...state.conversations,
+        parent: {
+          ...state.conversations.parent,
+          started: true,
+          status: 'running',
+          queuedMessages: [{ id: 'q1', text: 'cancel me' }],
+        },
+      },
+    }));
+    const pending = store.getState().interruptAndSendQueued('parent', 'q1');
+    store.getState().withdrawMessage('parent', { kind: 'queue', id: 'q1' });
+    store.setState((state) => ({
+      conversations: {
+        ...state.conversations,
+        parent: {
+          ...state.conversations.parent,
+          status: 'idle',
+        },
+      },
+    }));
+    await pending;
+    expect(agentPrompt).not.toHaveBeenCalled();
+    expect(store.getState().conversations.parent.messages).toEqual([]);
+    expect(store.getState().conversations.parent.draftText).toBe('cancel me');
+  });
+
+  it('撤回本地队列并恢复附件，保留已有草稿、历史和计划', () => {
+    const store = sessionsModule.useSessionsStore;
+    const image = { data: 'aW1hZ2U=', mimeType: 'image/png' };
+    store.setState((state) => ({
+      conversations: {
+        ...state.conversations,
+        parent: {
+          ...state.conversations.parent,
+          draftText: 'existing',
+          draftImages: [image],
+          planState: {
+            active: false,
+            executing: { planId: 'plan', title: 'Plan', text: 'steps' },
+            resolutions: { plan: 'approved' },
+          },
+          messages: [
+            {
+              role: 'toolResult',
+              content: [],
+              todos: [
+                { content: 'done', status: 'completed' },
+                { content: 'next', status: 'pending' },
+              ],
+            },
+          ],
+          queuedMessages: [
+            { id: 'q1', text: 'continue', images: [image] },
+            { id: 'q2', text: 'keep' },
+          ],
+        },
+      },
+    }));
+    const before = store.getState().conversations.parent;
+    store.getState().withdrawMessage('parent', { kind: 'queue', id: 'q1' });
+    const after = store.getState().conversations.parent;
+    expect(after.queuedMessages).toEqual([{ id: 'q2', text: 'keep' }]);
+    expect(after).toMatchObject({
+      draftText: 'existing\n\ncontinue',
+      draftImages: [image, image],
+      draftAppend: true,
+    });
+    expect(after.messages).toBe(before.messages);
+    expect(after.planState).toBe(before.planState);
+    expect(agentRewind).not.toHaveBeenCalled();
+    expect(agentPrompt).not.toHaveBeenCalled();
+    store.getState().withdrawMessage('parent', { kind: 'queue', id: 'q1' });
+    expect(store.getState().conversations.parent).toBe(after);
+    store.getState().clearDraft('parent');
+    expect(store.getState().conversations.parent.draftAppend).toBeUndefined();
+  });
+
+  it.each(['rejected', 'pending', 'persisted'])(
+    '只撤回明确拒收的精确投递，不靠失败状态推测（%s）',
+    (delivery) => {
+      const store = sessionsModule.useSessionsStore;
+      const echo = {
+        role: 'user' as const,
+        content: [{ type: 'text' as const, text: 'continue' }],
+        optimistic: true,
+        deliveryId: 'd1',
+        deliveryRejected: delivery !== 'pending',
+        ...(delivery === 'persisted' ? { entryId: 'entry' } : {}),
+      };
+      store.setState((state) => ({
+        conversations: {
+          ...state.conversations,
+          parent: {
+            ...state.conversations.parent,
+            status: 'failed',
+            messages: [echo, { ...echo, deliveryId: 'd2' }],
+          },
+        },
+      }));
+      const before = store.getState().conversations.parent;
+      store.getState().withdrawMessage('parent', { kind: 'delivery', id: 'd1' });
+      const after = store.getState().conversations.parent;
+      if (delivery === 'rejected') {
+        expect(after.messages).toEqual([before.messages[1]]);
+        expect(after.draftText).toBe('continue');
+        expect(after.draftAppend).toBe(true);
+      } else expect(after).toBe(before);
+      expect(agentRewind).not.toHaveBeenCalled();
+    }
+  );
+});
+
+const rewindMessages = () =>
+  ['one', 'two'].map((text) => ({
+    role: 'user' as const,
+    entryId: `entry-${text}`,
+    content: [{ type: 'text' as const, text }],
+  }));
+
 function emitRewindSnapshot(sessionId = 'parent') {
   onAgentEvent?.({
     type: 'snapshot',
@@ -3731,7 +3928,7 @@ function emitRewindSnapshot(sessionId = 'parent') {
       {
         identity: { sessionId, generation: 'g-ready' },
         status: 'idle',
-        messages: [],
+        messages: rewindMessages(),
         commands: [],
       },
     ],
@@ -3788,6 +3985,12 @@ describe('rewind 在 failed 状态放行、running 仍拦截', () => {
       projects: [{ id: 'project', name: 'Project', path: '/workspace' }],
     });
     await seedParent();
+    sessionsModule.useSessionsStore.setState((state) => ({
+      conversations: {
+        ...state.conversations,
+        parent: { ...state.conversations.parent, messages: rewindMessages() },
+      },
+    }));
   });
 
   it('status:failed 时调用 window.electronAPI.agent.rewind', () => {
@@ -3804,12 +4007,97 @@ describe('rewind 在 failed 状态放行、running 仍拦截', () => {
       },
     }));
     sessionsModule.useSessionsStore.getState().rewind('parent', 0, false);
-    expect(agentRewind).toHaveBeenCalledWith('parent', 0, false);
+    expect(agentRewind).toHaveBeenCalledWith('parent', 'entry-two', false);
   });
+
+  it.each([false, true])(
+    '未确认继续不裁剪进度、不唤醒或下发回退（restoreFiles=%s）',
+    (restoreFiles) => {
+      const messages = [
+        { role: 'user', entryId: 'execute', content: [{ type: 'text' as const, text: 'execute' }] },
+        {
+          role: 'toolResult',
+          toolName: 'todo',
+          content: [],
+          todos: [{ content: 'done', status: 'completed' as const }],
+        },
+        { role: 'user', optimistic: true, content: [{ type: 'text' as const, text: 'continue' }] },
+      ];
+      sessionsModule.useSessionsStore.setState((state) => ({
+        conversations: {
+          ...state.conversations,
+          parent: {
+            ...state.conversations.parent,
+            started: true,
+            spawning: false,
+            status: 'failed',
+            messages,
+          },
+        },
+      }));
+      sessionsModule.useSessionsStore.getState().rewind('parent', 0, restoreFiles);
+      expect(agentRewind).not.toHaveBeenCalled();
+      expect(agentSpawn).not.toHaveBeenCalled();
+      const after = sessionsModule.useSessionsStore.getState().conversations.parent;
+      expect(after.messages).toEqual(messages);
+      expect(after.rewinding).toBeFalsy();
+      expect(after.restoringFiles).toBeFalsy();
+    }
+  );
+
+  it('回退已确认目标使用 ID，后面的未确认消息不使 worker 选错轮次', () => {
+    const messages = [
+      { role: 'user', entryId: 'execute', content: [] },
+      { role: 'user', entryId: 'continue', content: [] },
+      { role: 'user', optimistic: true, content: [] },
+    ];
+    sessionsModule.useSessionsStore.setState((state) => ({
+      conversations: {
+        ...state.conversations,
+        parent: {
+          ...state.conversations.parent,
+          started: true,
+          spawning: false,
+          status: 'failed',
+          messages,
+        },
+      },
+    }));
+    sessionsModule.useSessionsStore.getState().rewind('parent', 1, false);
+    expect(agentRewind).toHaveBeenCalledWith('parent', 'continue', false);
+    expect(sessionsModule.useSessionsStore.getState().conversations.parent.messages).toEqual([
+      messages[0],
+    ]);
+  });
+
+  it.each(['rejected', 'offline'])(
+    '回退投递失败恢复原进度，不留下乐观截断（%s）',
+    async (error) => {
+      const store = sessionsModule.useSessionsStore;
+      store.setState((state) => ({
+        conversations: {
+          ...state.conversations,
+          parent: { ...state.conversations.parent, started: true, spawning: false, status: 'idle' },
+        },
+      }));
+      const messages = store.getState().conversations.parent.messages;
+      if (error === 'rejected') agentRewind.mockResolvedValueOnce({ ok: false, error });
+      else agentRewind.mockRejectedValueOnce(new Error(error));
+      store.getState().rewind('parent', 0, true);
+      await vi.waitFor(() => {
+        const after = store.getState().conversations.parent;
+        expect(after.messages).toEqual(messages);
+        expect(after.rewinding).toBeFalsy();
+        expect(after.restoringFiles).toBeFalsy();
+        expect(after.error).toBe(error);
+      });
+    }
+  );
 
   it('热会话回退立刻截掉目标 user 及之后，不空等 worker', () => {
     const user = (text: string) => ({
       role: 'user' as const,
+      entryId: `entry-${text}`,
       content: [{ type: 'text' as const, text }],
     });
     const assistant = (text: string) => ({
@@ -3832,7 +4120,7 @@ describe('rewind 在 failed 状态放行、running 仍拦截', () => {
     const revisionBefore =
       sessionsModule.useSessionsStore.getState().workspaceRevisionByConversation.parent ?? 0;
     sessionsModule.useSessionsStore.getState().rewind('parent', 0, false);
-    expect(agentRewind).toHaveBeenCalledWith('parent', 0, false);
+    expect(agentRewind).toHaveBeenCalledWith('parent', 'entry-two', false);
     expect(sessionsModule.useSessionsStore.getState().conversations.parent.messages).toEqual([
       user('one'),
       assistant('a'),
@@ -3851,6 +4139,7 @@ describe('rewind 在 failed 状态放行、running 仍拦截', () => {
     requestSnapshot.mockClear();
     const user = (text: string) => ({
       role: 'user' as const,
+      entryId: `entry-${text}`,
       content: [{ type: 'text' as const, text }],
     });
     const assistant = (text: string) => ({
@@ -3889,6 +4178,7 @@ describe('rewind 在 failed 状态放行、running 仍拦截', () => {
     requestSnapshot.mockClear();
     const user = (text: string) => ({
       role: 'user' as const,
+      entryId: `entry-${text}`,
       content: [{ type: 'text' as const, text }],
     });
     const assistant = (text: string) => ({
@@ -3959,6 +4249,7 @@ describe('rewind 在 failed 状态放行、running 仍拦截', () => {
     vi.setSystemTime(Date.now() + 3_000);
     const user = (text: string) => ({
       role: 'user' as const,
+      entryId: `entry-${text}`,
       content: [{ type: 'text' as const, text }],
     });
     const assistant = (text: string) => ({
@@ -3997,6 +4288,7 @@ describe('rewind 在 failed 状态放行、running 仍拦截', () => {
   it('回退中的全量快照不能把刚裁掉的旧会话写回', () => {
     const user = (text: string) => ({
       role: 'user' as const,
+      entryId: `entry-${text}`,
       content: [{ type: 'text' as const, text }],
     });
     sessionsModule.useSessionsStore.setState((state) => ({
@@ -4036,6 +4328,7 @@ describe('rewind 在 failed 状态放行、running 仍拦截', () => {
   it('对话+文件立刻标 restoringFiles，草稿不等 worker', () => {
     const user = (text: string) => ({
       role: 'user' as const,
+      entryId: `entry-${text}`,
       content: [{ type: 'text' as const, text }],
     });
     sessionsModule.useSessionsStore.setState((state) => ({
@@ -4070,8 +4363,8 @@ describe('rewind 在 failed 状态放行、running 仍拦截', () => {
           status: 'idle' as const,
           generation: 'g1',
           messages: [
-            { role: 'user', content: [{ type: 'text', text: 'keep' }] },
-            { role: 'user', content: [{ type: 'text', text: 'back' }] },
+            { role: 'user', entryId: 'entry-keep', content: [{ type: 'text', text: 'keep' }] },
+            { role: 'user', entryId: 'entry-back', content: [{ type: 'text', text: 'back' }] },
           ],
         },
       },
@@ -4167,8 +4460,52 @@ describe('rewind 在 failed 状态放行、running 仍拦截', () => {
     expect(agentRewind).not.toHaveBeenCalled();
     emitRewindSnapshot();
     await vi.waitFor(() => expect(agentRewind).toHaveBeenCalledTimes(1));
-    expect(agentRewind).toHaveBeenCalledWith('parent', 0, false);
+    expect(agentRewind).toHaveBeenCalledWith('parent', 'entry-two', false);
   });
+
+  it.each([false, true])(
+    '等待恢复时绑定原 entryId，目标消失不替换成同位置消息（removed=%s）',
+    async (removed) => {
+      const store = sessionsModule.useSessionsStore;
+      store.setState((state) => ({
+        conversations: {
+          ...state.conversations,
+          parent: {
+            ...state.conversations.parent,
+            started: true,
+            spawning: true,
+            status: 'idle',
+            sessionFile: '/tmp/cold.jsonl',
+          },
+        },
+      }));
+      store.getState().rewind('parent', 0, true);
+      const messages = [
+        ...rewindMessages().filter((message) => !removed || message.entryId !== 'entry-two'),
+        { role: 'user', entryId: 'new', content: [] },
+      ];
+      store.setState((state) => ({
+        conversations: {
+          ...state.conversations,
+          parent: {
+            ...state.conversations.parent,
+            messages,
+            historyBaseIndex: 40,
+            spawning: false,
+          },
+        },
+      }));
+      await Promise.resolve();
+      await Promise.resolve();
+      if (removed) {
+        expect(agentRewind).not.toHaveBeenCalled();
+        expect(store.getState().conversations.parent.messages).toEqual(messages);
+      } else {
+        expect(agentRewind).toHaveBeenCalledWith('parent', 'entry-two', true);
+        expect(store.getState().conversations.parent.messages).toEqual([messages[0]]);
+      }
+    }
+  );
 
   it('同一 tick 状态变 ready 后再 rewind 仍走 inFlight 不双发', async () => {
     sessionsModule.useSessionsStore.setState((state) => ({
@@ -4264,7 +4601,7 @@ describe('rewind 在 failed 状态放行、running 仍拦截', () => {
     );
     expect(agentRewind).not.toHaveBeenCalled();
     emitRewindSnapshot();
-    await vi.waitFor(() => expect(agentRewind).toHaveBeenCalledWith('parent', 1, false));
+    await vi.waitFor(() => expect(agentRewind).toHaveBeenCalledWith('parent', 'entry-one', false));
     expect(agentSpawn).toHaveBeenCalledWith(
       expect.objectContaining({ sessionId: 'parent', resumeFile: '/tmp/cold.jsonl' })
     );
