@@ -1,4 +1,6 @@
 export type AppCloseAction = 'cancel' | 'quit' | 'tray';
+/** Main 决定关闭工作台还是退出进程；Renderer 只展示对应提示。 */
+export type AppCloseScope = 'app' | 'workbench';
 
 export interface AppCloseDecision {
   action: AppCloseAction;

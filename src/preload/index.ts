@@ -1,3 +1,4 @@
+import type { AppCloseScope } from '@shared/appClose';
 import type {
   BtwAbortRequest,
   BtwDisposeRequest,
@@ -187,8 +188,11 @@ const electronAPI = {
   },
 
   app: {
-    onCloseRequest: (callback: (requestId: string) => void): (() => void) => {
-      const listener = (_: unknown, requestId: string) => callback(requestId);
+    onCloseRequest: (callback: (requestId: string, scope: AppCloseScope) => void): (() => void) => {
+      const listener = (_: unknown, requestId: unknown, scope: unknown) => {
+        if (typeof requestId === 'string')
+          callback(requestId, scope === 'workbench' ? 'workbench' : 'app');
+      };
       ipcRenderer.on(IPC_CHANNELS.APP_CLOSE_REQUEST, listener);
       return () => ipcRenderer.removeListener(IPC_CHANNELS.APP_CLOSE_REQUEST, listener);
     },

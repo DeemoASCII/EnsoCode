@@ -382,6 +382,9 @@ export const zhTranslations: Record<string, string> = {
   'Connection failed': '连接失败',
   Cancel: '取消',
   'Confirm exit': '确认退出',
+  'Close workbench': '关闭工作台',
+  'Only the workbench will close. EnsoBot windows and background tasks will keep running. To exit everything, choose Quit in the tray menu.':
+    '只关闭工作台，EnsoBot 窗口和后台任务会继续运行。要退出整个应用，请在托盘菜单选择“退出”。',
   'Exit closes the app completely, so your phone can no longer connect. Minimize to tray keeps the app running in the background so your phone can still connect.':
     '退出会完全关闭应用，手机将无法连接。最小化到托盘后应用会在后台继续运行，手机仍可连接。',
   'Minimize to tray': '最小化到托盘',

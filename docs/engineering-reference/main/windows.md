@@ -104,6 +104,19 @@ Tailwind 的 `h-11` 会算成 38.5px 而不是 44px，与 `trafficLightPosition:
   见 `ipc/index.ts` 的 `attachWindowStateEvents`。
 - 退出前 `flushSettings()` 落盘未写完的设置（见 [settings-persistence.md](settings-persistence.md)）。
 
+### 工作台与 EnsoBot 是同级窗口
+
+- EnsoBot 发行版，或 EnsoCode 已打开 Bot 窗口时，工作台 `close` 使用 `workbench` 作用域：
+  只卸载工作台 renderer，Bot 与后台 worker 继续运行。没有 Bot 的普通 EnsoCode 保持原退出行为。
+- `appCloseConfirm` 由 Main 决定作用域并传给已有的 `APP_CLOSE_REQUEST`，Renderer 只展示对应文案；
+  `before-quit` 始终是整个应用的退出确认，托盘的明确退出也仍结束所有窗口与 worker。
+- `enterServerMode` 的“无头”仅指没有工作台，不能因此关闭同级 Bot；Bot 打开时保留设置窗，
+  macOS 也不能隐藏仍承载 Bot 的 Dock。
+- 托盘卸载工作台使用 `destroy()`，不会触发窗口 `close`；不要为它遗留全局的“下一次关窗放行”标记，
+  否则重新打开工作台后第一次关窗会绕过确认。
+- 回归：`appCloseConfirm.test.ts`、`appServerMode.test.ts`。真机验证至少覆盖关闭、托盘、恢复后再次关闭
+  和明确退出整个应用，并确认 Bot renderer 不被重建。
+
 ## guest WebContentsView 由 BrowserHost 管，不走 createAppWindow
 
 内嵌浏览器的网页是主窗口 `contentView` 的子 `WebContentsView`，不是 app 窗口：

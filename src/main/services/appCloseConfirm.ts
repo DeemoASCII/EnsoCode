@@ -1,5 +1,9 @@
 import { randomUUID } from 'node:crypto';
-import { parseAppCloseResponse, shouldBypassCloseConfirm } from '@shared/appClose';
+import {
+  type AppCloseScope,
+  parseAppCloseResponse,
+  shouldBypassCloseConfirm,
+} from '@shared/appClose';
 import { IPC_CHANNELS } from '@shared/types';
 import { app, ipcMain, type WebContents } from 'electron';
 import { autoUpdaterService } from './updater/AutoUpdater';
@@ -30,12 +34,13 @@ export function attachAppCloseConfirm(
   contentsOf: () => WebContents,
   options: {
     interceptBeforeQuit: boolean;
+    windowCloseScope?: () => AppCloseScope;
     onTray: () => void | Promise<void>;
   }
 ): void {
   let flowInProgress = false;
 
-  const askRenderer = (): Promise<'cancel' | 'quit' | 'tray'> => {
+  const askRenderer = (scope: AppCloseScope): Promise<'cancel' | 'quit' | 'tray'> => {
     const requestId = randomUUID();
     return new Promise((resolve) => {
       let settled = false;
@@ -67,19 +72,19 @@ export function attachAppCloseConfirm(
       ipcMain.on(IPC_CHANNELS.APP_CLOSE_RESPONSE, onResponse);
       win.once('closed', gone);
       contentsOf().once('destroyed', gone);
-      send(IPC_CHANNELS.APP_CLOSE_REQUEST, requestId);
+      send(IPC_CHANNELS.APP_CLOSE_REQUEST, requestId, scope);
     });
   };
 
-  const beginConfirm = async () => {
+  const beginConfirm = async (scope: AppCloseScope) => {
     if (flowInProgress) return;
     flowInProgress = true;
     try {
       if (win.isDestroyed() || contentsOf().isDestroyed()) return;
-      const action = await askRenderer();
+      const action = await askRenderer(scope);
       if (action === 'cancel') return;
       flowInProgress = false;
-      if (action === 'tray') {
+      if (action === 'tray' || scope === 'workbench') {
         await options.onTray();
         return;
       }
@@ -104,13 +109,13 @@ export function attachAppCloseConfirm(
   win.on('close', (event) => {
     if (shouldPass()) return;
     event.preventDefault();
-    void beginConfirm();
+    void beginConfirm(options.windowCloseScope?.() ?? 'app');
   });
 
   const onBeforeQuit = (event: Electron.Event) => {
     if (shouldPass()) return;
     event.preventDefault();
-    void beginConfirm();
+    void beginConfirm('app');
   };
   const markQuitting = () => {
     allowQuit = true;

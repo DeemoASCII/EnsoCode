@@ -27,7 +27,7 @@ import {
 import { getEnsobotWindow, openEnsobotWindow } from '../windows/EnsobotWindow';
 import { createMainWindow, getMainWindow, isMainWindowAlive } from '../windows/MainWindow';
 import { getSettingsWindow } from '../windows/SettingsWindow';
-import { allowAppQuit, bypassNextCloseConfirm } from './appCloseConfirm';
+import { allowAppQuit } from './appCloseConfirm';
 import { browserHost } from './browserHost';
 import { refreshPowerKeepAlive } from './pairHost';
 import { setPairHeadless } from './pairSessionHost';
@@ -185,12 +185,11 @@ export async function enterServerMode(): Promise<void> {
   flushSettings();
   active = true;
   setPairHeadless(true);
-  bypassNextCloseConfirm();
   refreshPowerKeepAlive();
+  // 无头仅指工作台 renderer 关闭，不能顺带关闭同级 Bot 与它正在用的设置窗。
+  const hasBotWindow = Boolean(getEnsobotWindow());
   const settings = getSettingsWindow();
-  if (settings && !settings.isDestroyed()) settings.close();
-  const ensobot = getEnsobotWindow();
-  if (ensobot && !ensobot.isDestroyed()) ensobot.close();
+  if (!hasBotWindow && settings && !settings.isDestroyed()) settings.close();
   ensureTray();
   await browserHost.hibernateAll();
   const win = getMainWindow();
@@ -198,7 +197,7 @@ export async function enterServerMode(): Promise<void> {
     closeWindowWebContents(win);
     win.destroy();
   }
-  app.dock?.hide();
+  if (!getEnsobotWindow()) app.dock?.hide();
   // dock.hide() 会把 activation policy 改成 accessory，已有 NSStatusItem 经常被丢掉。
   recreateTray();
 }

@@ -7,6 +7,7 @@ import {
   useSensor,
   useSensors,
 } from '@dnd-kit/core';
+import type { AppCloseScope } from '@shared/appClose';
 import { PRODUCT } from '@shared/product';
 import { FoldHorizontal, PanelRight, UnfoldHorizontal } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -74,6 +75,7 @@ export default function App() {
   useDockBadge();
   const [searchOpen, setSearchOpen] = useState(false);
   const [closeRequestId, setCloseRequestId] = useState<string | null>(null);
+  const [closeScope, setCloseScope] = useState<AppCloseScope>('app');
   useWindowsWindowChrome();
   const [width, setWidth] = useState(() => {
     const saved = Number(localStorage.getItem(WIDTH_KEY));
@@ -98,7 +100,14 @@ export default function App() {
     document.documentElement.classList.add('enso-main-shell');
     return () => document.documentElement.classList.remove('enso-main-shell');
   }, []);
-  useEffect(() => window.electronAPI.app.onCloseRequest(setCloseRequestId), []);
+  useEffect(
+    () =>
+      window.electronAPI.app.onCloseRequest((id, scope) => {
+        setCloseScope(scope);
+        setCloseRequestId(id);
+      }),
+    []
+  );
   useEffect(
     () =>
       window.electronAPI.app.onFlushPersist((requestId) => {
@@ -350,10 +359,14 @@ export default function App() {
       >
         <AlertDialogPopup className="sm:max-w-sm">
           <AlertDialogHeader>
-            <AlertDialogTitle className="text-base">{t('Confirm exit')}</AlertDialogTitle>
+            <AlertDialogTitle className="text-base">
+              {t(closeScope === 'workbench' ? 'Close workbench' : 'Confirm exit')}
+            </AlertDialogTitle>
             <AlertDialogDescription>
               {t(
-                'Exit closes the app completely, so your phone can no longer connect. Minimize to tray keeps the app running in the background so your phone can still connect.'
+                closeScope === 'workbench'
+                  ? 'Only the workbench will close. EnsoBot windows and background tasks will keep running. To exit everything, choose Quit in the tray menu.'
+                  : 'Exit closes the app completely, so your phone can no longer connect. Minimize to tray keeps the app running in the background so your phone can still connect.'
               )}
             </AlertDialogDescription>
           </AlertDialogHeader>
@@ -365,7 +378,7 @@ export default function App() {
               {t('Minimize to tray')}
             </Button>
             <Button variant="destructive" size="sm" onClick={() => respondClose('quit')}>
-              {t('Exit')}
+              {t(closeScope === 'workbench' ? 'Close workbench' : 'Exit')}
             </Button>
           </AlertDialogFooter>
         </AlertDialogPopup>
