@@ -151,6 +151,24 @@ export const SPEECH_MODELS: Record<SpeechModelId, SpeechModelSpec> = {
       modelscope: 'pengzhendong/sherpa-onnx-sense-voice-zh-en-ja-ko-yue',
     },
   },
+  /** 憨包离线引擎（仅 macOS arm64）：选中下载时先装 HANBAO_ENGINE，模型取自按 MD5 寻址的 CDN */
+  hanbao: {
+    id: 'hanbao',
+    streaming: true,
+    approxBytes: 185_377_526,
+    memoryBytes: 900 * 1024 ** 2,
+    files: [
+      {
+        name: 'model.flute',
+        sha256: '3a46e175f322822f368d970580271888383cc571996776754a17af669b48867d',
+        urls: ['lf3', 'lf26'].map(
+          (host) =>
+            `https://${host}-effectcdn-tos.byteeffecttos.com/obj/ies.fe.effect/b78e55b937a6f7da432097d2d9dc7214?module=model`
+        ),
+      },
+    ],
+    sources: null,
+  },
   'gemini-live': {
     id: 'gemini-live',
     streaming: true,
@@ -161,6 +179,40 @@ export const SPEECH_MODELS: Record<SpeechModelId, SpeechModelSpec> = {
     remote: true,
   },
 };
+
+/** hanbao 预编译（源码私有）挂在 EnsoCode v0.2.1 Release；升级时换 URL、哈希和目录版本 */
+export const HANBAO_ENGINE: SpeechModelSpec = {
+  id: 'hanbao',
+  streaming: true,
+  approxBytes: 3_354_443,
+  memoryBytes: 0,
+  files: [
+    { name: 'hanbao', sha256: 'ec016c6f249e8e5d0fe4437d8612240f235c931ed11ca996f38c47d5062660f8' },
+    {
+      name: 'libs/libaudioeffect.so',
+      sha256: '5303cab48de6ef5db6ace4d54779b0e64f9e2eb6a2600dd41638f6d9b67d110f',
+    },
+    {
+      name: 'libs/libc++_shared.so',
+      sha256: 'e8373ee43274541efd2d34fe0588d55bf953612e1417ad47cfd2c4bd1aa383d0',
+    },
+    {
+      name: 'libs/libiesapplogger.so',
+      sha256: '08fc4396d0e80aafd83d646ed875289c5987f68a6b3f0827ba1605d2f12130f2',
+    },
+  ],
+  sources: null,
+  archive: {
+    url: 'https://github.com/J3n5en/EnsoCode/releases/download/v0.2.1/hanbao-0.3.0-darwin-arm64.tar.gz',
+    sha256: 'a05a4ebe2fd0b35fc8dd7b76447923e312e2a3105196c9939f6e43379d38dcde',
+    bytes: 3_354_443,
+    root: 'hanbao-darwin-arm64',
+  },
+};
+
+export function hanbaoEngineDir(runtimeRoot: string): string {
+  return path.join(runtimeRoot, 'hanbao@0.3.0');
+}
 
 /** 旧版 SenseVoice 目录名沿用，已下载的用户不必重下 */
 export function speechModelDirName(id: SpeechModelId): string {
@@ -259,6 +311,8 @@ export function recognizerConfig(spec: SpeechModelSpec, dir: string): Recognizer
           },
         },
       };
+    case 'hanbao':
+      throw new Error('hanbao runs its own engine process');
     case 'gemini-live':
       throw new Error('cloud speech model has no local recognizer');
   }

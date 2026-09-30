@@ -24,7 +24,7 @@ describe('EnsoBot 发布边界', () => {
     });
     expect(config.generateUpdatesFilesForAllChannels).toBe(false);
     expect(parse(read('electron-builder.yml')).appId).toBe('com.j3n5en.enso-code');
-    expect(JSON.parse(read('package.json')).version).toBe('0.2.1');
+    expect(JSON.parse(read('package.json')).version).toBe('0.2.2');
   });
   it('独立工作流以完整门禁和打包成功为前置，仅发布 ensobot 标签为非 Latest 预发布', () => {
     const workflow = parse(read('.github/workflows/ensobot-release.yml'));

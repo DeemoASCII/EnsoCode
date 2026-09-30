@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import type { SpeechDownloadProgressDto, SpeechModelId } from '@shared/types/speech';
@@ -7,11 +7,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 vi.mock('electron', () => ({ app: { getPath: () => tmpdir() } }));
 
 import type { SpeechEngine } from './engine';
-import { SPEECH_MODELS, speechModelDirName } from './model';
+import { HANBAO_ENGINE, hanbaoEngineDir, SPEECH_MODELS, speechModelDirName } from './model';
 import { SHERPA_ONNX_VERSION, speechRuntimeDir } from './runtime';
 import { joinSamples } from './segment';
 import {
   __setSpeechTestHooks,
+  cancelSpeechDownload,
   deleteSpeechModel,
   getSpeechStatus,
   onSpeechAvailabilityChange,
@@ -311,6 +312,7 @@ describe('speech status', () => {
       ['x-asr', false, 'ready'],
       ['qwen3-asr', false, 'missing'],
       ['sense-voice', false, 'missing'],
+      ['hanbao', true, 'missing'],
       ['gemini-live', true, 'missing'],
     ]);
   });
@@ -352,6 +354,90 @@ describe('speech status', () => {
         ok: false,
         error: 'not-ready',
       });
+    });
+  });
+
+  describe('hanbao engine downloaded on demand', () => {
+    const hanbao = { voiceInputEnabled: true, voiceModel: 'hanbao' };
+    const engineDir = () => hanbaoEngineDir(path.join(root, 'runtime'));
+    const installHanbaoModel = () => {
+      const dir = path.join(root, 'models', speechModelDirName('hanbao'));
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(path.join(dir, 'model.flute'), 'x');
+      writeFileSync(path.join(dir, '.ready'), '{}');
+    };
+    const installEngine = () => {
+      for (const file of HANBAO_ENGINE.files) {
+        mkdirSync(path.dirname(path.join(engineDir(), file.name)), { recursive: true });
+        writeFileSync(path.join(engineDir(), file.name), 'x');
+      }
+      writeFileSync(path.join(engineDir(), '.ready'), '{}');
+    };
+    const onPlatform = (platform: string, arch: string) =>
+      __setSpeechTestHooks({
+        root,
+        platform,
+        arch,
+        createEngine: async (spec) => {
+          loads.push(spec.id);
+          return fakeEngine(spec.id);
+        },
+      });
+
+    it('is hidden and not downloadable off Apple silicon', async () => {
+      onPlatform('darwin', 'x64');
+      installEngine();
+      installHanbaoModel();
+      syncSpeechFromSettings(hanbao);
+      const status = getSpeechStatus();
+      expect(status.models.map((m) => m.id)).not.toContain('hanbao');
+      expect(status.state).toBe('missing');
+      expect(speechAvailable()).toBe(false);
+      await expect(startSpeechDownload('hanbao')).resolves.toBe(false);
+    });
+
+    it('is not ready until its engine is installed too', () => {
+      installHanbaoModel();
+      syncSpeechFromSettings(hanbao);
+      expect(getSpeechStatus().models.find((m) => m.id === 'hanbao')?.state).toBe('missing');
+      installEngine();
+      expect(getSpeechStatus().state).toBe('ready');
+    });
+
+    it('fetches its engine first and never the sherpa runtime', async () => {
+      const urls: string[] = [];
+      vi.stubGlobal('fetch', async (url: string) => {
+        urls.push(String(url));
+        cancelSpeechDownload('hanbao');
+        return new Response('no', { status: 500 });
+      });
+      try {
+        await expect(startSpeechDownload('hanbao')).resolves.toBe(false);
+      } finally {
+        vi.unstubAllGlobals();
+      }
+      expect(urls).toEqual([HANBAO_ENGINE.archive?.url]);
+    });
+
+    it('streams partial text with its own engine and no sherpa runtime', async () => {
+      installEngine();
+      installHanbaoModel();
+      syncSpeechFromSettings(hanbao);
+      expect(getSpeechStatus().state).toBe('ready');
+      const partials: string[] = [];
+      const session = openSpeechSession((text) => partials.push(text));
+      session.push(second());
+      session.push(second());
+      await expect(session.finish()).resolves.toEqual({ ok: true, text: '字字。' });
+      expect(partials).toEqual(['字', '字字']);
+      expect(loads).toEqual(['hanbao']);
+    });
+
+    it('removes its engine together with the model', async () => {
+      installEngine();
+      installHanbaoModel();
+      await expect(deleteSpeechModel('hanbao')).resolves.toBe(true);
+      expect(existsSync(engineDir())).toBe(false);
     });
   });
 

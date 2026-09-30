@@ -17,13 +17,15 @@ describe('speech model registry', () => {
   it('marks the streaming models and gives every local model a download path', () => {
     expect(SPEECH_MODEL_IDS.filter((id) => SPEECH_MODELS[id].streaming)).toEqual([
       'x-asr-streaming',
+      'hanbao',
       'gemini-live',
     ]);
     expect(SPEECH_MODEL_IDS.filter((id) => SPEECH_MODELS[id].remote)).toEqual(['gemini-live']);
     for (const id of SPEECH_MODEL_IDS.filter((id) => !SPEECH_MODELS[id].remote)) {
       const spec = SPEECH_MODELS[id];
       expect(spec.id).toBe(id);
-      expect(Boolean(spec.sources) !== Boolean(spec.archive)).toBe(true);
+      const direct = spec.files.length > 0 && spec.files.every((f) => f.urls?.length);
+      expect([spec.sources, spec.archive, direct].filter(Boolean)).toHaveLength(1);
       expect(spec.approxBytes).toBeGreaterThan(0);
       expect(spec.memoryBytes).toBeGreaterThan(0);
     }

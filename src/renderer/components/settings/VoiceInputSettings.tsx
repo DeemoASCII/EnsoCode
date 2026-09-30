@@ -41,6 +41,10 @@ const MODEL_TEXT: Record<SpeechModelId, { name: string; description: string }> =
     name: 'SenseVoice',
     description: 'Chinese, English, Japanese, Korean and Cantonese.',
   },
+  hanbao: {
+    name: 'Hanbao',
+    description: 'Runs fully offline. Chinese and English.',
+  },
   'gemini-live': {
     name: 'Gemini Transcribe Live',
     description:

@@ -6,6 +6,8 @@ export interface EmbeddingModelFile {
   name: string;
   /** 已知时下载完成后校验；缺省只校验长度 */
   sha256?: string;
+  /** 不在 HF/ModelScope 上的文件：按序尝试的直链镜像，优先于 sources */
+  urls?: readonly string[];
 }
 
 export interface EmbeddingModelSpec {

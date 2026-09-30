@@ -1,12 +1,14 @@
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
   readFileSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -143,5 +145,33 @@ describe.skipIf(skip)('downloadArchiveModel', () => {
         signal: controller.signal,
       })
     ).rejects.toThrow(/abort/);
+  });
+
+  it('unpacks gzip archives and keeps nested paths and the executable bit', async () => {
+    const src = path.join(root, 'gz');
+    mkdirSync(path.join(src, 'pkg', 'libs'), { recursive: true });
+    writeFileSync(path.join(src, 'pkg', 'bin'), 'BIN');
+    chmodSync(path.join(src, 'pkg', 'bin'), 0o755);
+    writeFileSync(path.join(src, 'pkg', 'libs', 'a.so'), 'LIB');
+    const out = path.join(root, 'pkg.tar.gz');
+    execFileSync('tar', ['-czf', out, '-C', src, 'pkg']);
+    const gz = readFileSync(out);
+    const dir = path.join(root, 'engine');
+    const gzSpec = spec({
+      files: [
+        { name: 'bin', sha256: sha('BIN') },
+        { name: 'libs/a.so', sha256: sha('LIB') },
+      ],
+      archive: {
+        url: 'https://example.test/pkg.tar.gz',
+        sha256: sha(gz),
+        bytes: gz.length,
+        root: 'pkg',
+      },
+    });
+    await downloadArchiveModel(gzSpec, dir, { fetch: server(gz) });
+    expect(isModelReady(dir, gzSpec)).toBe(true);
+    expect(readFileSync(path.join(dir, 'libs', 'a.so'), 'utf8')).toBe('LIB');
+    expect(statSync(path.join(dir, 'bin')).mode & 0o111).not.toBe(0);
   });
 });

@@ -243,6 +243,18 @@ describe('downloadModel', () => {
     expect(s.calls.some((c) => c.url.startsWith('http://ms.test/'))).toBe(true);
   });
 
+  it('downloads files with direct mirrors in order when the model has no hub source', async () => {
+    const s = server({ 'a.test': () => new Response('x', { status: 503 }) });
+    const sp = spec({
+      sources: null,
+      files: [{ name: 'model.bin', sha256: SHA, urls: ['http://a.test/m', 'http://b.test/m'] }],
+    });
+    await downloadModel(sp, dir, { ...base, fetch: s.fetch, maxAttempts: 1 });
+    expect(isModelReady(dir, sp)).toBe(true);
+    expect(readFileSync(path.join(dir, 'model.bin'))).toEqual(BODY);
+    expect(s.calls.map((c) => c.url)).toEqual(['http://a.test/m', 'http://b.test/m']);
+  });
+
   it('throws all_sources_failed and leaves no partial file when every source fails', async () => {
     const s = server({
       'hf.test': () => new Response('x', { status: 500 }),

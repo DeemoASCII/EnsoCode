@@ -19,6 +19,8 @@ import { downloadArchiveModel } from './archive';
 import type { SpeechEngine, SpeechEngineStream } from './engine';
 import { geminiApiKeyFromSettings, openGeminiLiveStream, parseVocabulary } from './gemini';
 import {
+  HANBAO_ENGINE,
+  hanbaoEngineDir,
   recognizerConfig,
   SPEECH_MODELS,
   type SpeechModelSpec,
@@ -126,9 +128,31 @@ function runtimeReady(): boolean {
   return pkg !== null && isSpeechRuntimeReady(runtimeDir(), pkg);
 }
 
+/** hanbao 预编译只有 macOS arm64 */
+function hanbaoSupported(): boolean {
+  return (
+    (hooks?.platform ?? process.platform) === 'darwin' && (hooks?.arch ?? process.arch) === 'arm64'
+  );
+}
+
+function hanbaoDir(): string {
+  return hanbaoEngineDir(path.join(speechRoot(), 'runtime'));
+}
+
+function modelSupported(id: SpeechModelId): boolean {
+  return id !== 'hanbao' || hanbaoSupported();
+}
+
 function modelReady(id: SpeechModelId): boolean {
   const spec = SPEECH_MODELS[id];
   if (spec.remote) return geminiApiKey !== null;
+  if (id === 'hanbao') {
+    return (
+      hanbaoSupported() &&
+      isModelReady(hanbaoDir(), HANBAO_ENGINE) &&
+      isModelReady(modelDir(id), spec)
+    );
+  }
   return runtimeReady() && isModelReady(modelDir(id), spec);
 }
 
@@ -183,10 +207,18 @@ function modelDto(id: SpeechModelId): SpeechModelDto {
 }
 
 export function getSpeechStatus(): SpeechStatusDto {
-  const models = SPEECH_MODEL_IDS.map(modelDto);
-  const current = models.find((model) => model.id === selected) as SpeechModelDto;
+  const models = SPEECH_MODEL_IDS.filter(modelSupported).map(modelDto);
+  const current = models.find((model) => model.id === selected);
+  const local = platformPackage() !== null;
   return {
-    state: current.remote || platformPackage() ? current.state : 'unsupported',
+    // 选中的模型本机不支持时仍给出列表，让用户改选
+    state: current
+      ? current.remote || local
+        ? current.state
+        : 'unsupported'
+      : local
+        ? 'missing'
+        : 'unsupported',
     selected,
     models,
   };
@@ -209,7 +241,9 @@ async function ensureRuntime(pkg: string, signal: AbortSignal): Promise<void> {
 export async function startSpeechDownload(id: SpeechModelId): Promise<boolean> {
   const pkg = platformPackage();
   const spec = SPEECH_MODELS[id];
-  if (!pkg || spec.remote || downloads.has(id)) return false;
+  // hanbao 用自己的引擎，不装 sherpa 运行时
+  const hanbao = id === 'hanbao';
+  if (spec.remote || downloads.has(id) || (hanbao ? !hanbaoSupported() : !pkg)) return false;
   const controller = new AbortController();
   let settle!: () => void;
   const task = { controller, settled: new Promise<void>((resolve) => (settle = resolve)) };
@@ -220,7 +254,15 @@ export async function startSpeechDownload(id: SpeechModelId): Promise<boolean> {
   };
   let error: string | undefined;
   try {
-    if (!isSpeechRuntimeReady(runtimeDir(), pkg)) {
+    if (hanbao) {
+      if (!isModelReady(hanbaoDir(), HANBAO_ENGINE)) {
+        await downloadArchiveModel(HANBAO_ENGINE, hanbaoDir(), {
+          signal: controller.signal,
+          onProgress: (p) =>
+            emit({ file: p.file, fileIndex: 0, received: p.received, total: p.total }),
+        });
+      }
+    } else if (pkg && !isSpeechRuntimeReady(runtimeDir(), pkg)) {
       emit({ file: pkg, fileIndex: 0, received: 0, total: null });
       await ensureRuntime(pkg, controller.signal);
     }
@@ -265,6 +307,7 @@ export async function deleteSpeechModel(id: SpeechModelId): Promise<boolean> {
   if (engine?.id === id) unloadEngine();
   try {
     fs.rmSync(modelDir(id), { recursive: true, force: true });
+    if (id === 'hanbao') fs.rmSync(hanbaoDir(), { recursive: true, force: true });
     if (!SPEECH_MODEL_IDS.some((other) => fs.existsSync(modelDir(other)))) {
       try {
         fs.rmSync(runtimeDir(), { recursive: true, force: true });
@@ -332,6 +375,21 @@ async function createEngine(spec: SpeechModelSpec, dir: string): Promise<SpeechE
       },
       dispose: () => {},
     };
+  }
+  if (spec.id === 'hanbao') {
+    const bundle = hanbaoDir();
+    const [{ spawn }, { createHanbaoEngine }] = await Promise.all([
+      import('node:child_process'),
+      import('./hanbao'),
+    ]);
+    const model = path.join(dir, 'model.flute');
+    return createHanbaoEngine({
+      start: () =>
+        spawn(path.join(bundle, 'hanbao'), ['--pipe', model], {
+          env: { ...process.env, HB_LIBDIR: path.join(bundle, 'libs') },
+          stdio: ['pipe', 'pipe', 'ignore'],
+        }),
+    });
   }
   const { createWorkerEngine } = await import('./engine');
   const { kind, config } = recognizerConfig(spec, dir);

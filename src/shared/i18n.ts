@@ -1024,6 +1024,8 @@ export const zhTranslations: Record<string, string> = {
   'Best with mixed Chinese-English and code terms. Slower and uses more memory.':
     '中英混说和代码术语识别最好，但较慢且更占内存。',
   'Chinese, English, Japanese, Korean and Cantonese.': '支持中文、英文、日语、韩语和粤语。',
+  Hanbao: '憨包',
+  'Runs fully offline. Chinese and English.': '完全离线运行，支持中文和英文。',
   'Google cloud recognition, most accurate with mixed Chinese-English and code terms. Needs a Gemini API key.':
     'Google 云端识别，中英混说和代码术语最准；需要 Gemini API Key。',
   'Audio is uploaded to Google. On the free tier Google may use it to improve its products.':

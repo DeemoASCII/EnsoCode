@@ -231,10 +231,11 @@ async function downloadModelFiles(
   opts: DownloadModelOptions
 ): Promise<void> {
   throwIfAborted(opts.signal);
-  if (!spec.sources)
+  const direct = spec.files.length > 0 && spec.files.every((f) => f.urls?.length);
+  if (!spec.sources && !direct)
     throw new ModelDownloadError('no_sources', `${spec.id} has no download sources`);
   const sources = (opts.sources ?? ['huggingface', 'modelscope']).filter((s) => spec.sources?.[s]);
-  if (sources.length === 0) {
+  if (sources.length === 0 && !direct) {
     throw new ModelDownloadError('no_sources', `${spec.id} has no usable download sources`);
   }
   fs.mkdirSync(dir, { recursive: true });
@@ -264,9 +265,10 @@ async function downloadModelFiles(
     fs.mkdirSync(path.dirname(final), { recursive: true });
     const causes: unknown[] = [];
     let done = false;
-    for (const source of sources) {
-      const repo = spec.sources[source] as string;
-      const url = fileUrl(source, repo, file.name, opts.endpoints);
+    const urls =
+      file.urls ??
+      sources.map((s) => fileUrl(s, spec.sources?.[s] as string, file.name, opts.endpoints));
+    for (const url of urls) {
       try {
         await downloadFile(url, final, file, {
           ...opts,

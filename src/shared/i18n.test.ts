@@ -17,6 +17,8 @@ const MAPPED_I18N_KEYS = [
   'Most accurate on everyday speech. Chinese and English.',
   'Best with mixed Chinese-English and code terms. Slower and uses more memory.',
   'Chinese, English, Japanese, Korean and Cantonese.',
+  'Hanbao',
+  'Runs fully offline. Chinese and English.',
   // ModelPicker.LEVEL_LABEL_KEYS + StatsLine.THINKING_LEVEL_SHORT_KEYS
   'Min',
   'Low',

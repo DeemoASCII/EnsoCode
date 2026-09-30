@@ -68,7 +68,8 @@ export async function downloadArchiveModel(
   fs.mkdirSync(tmp, { recursive: true });
   try {
     const members = spec.files.map((f) => `${archive.root}/${f.name}`);
-    await promisify(execFile)('tar', ['-xjf', part, '-C', tmp, ...members], {
+    // 压缩格式交给 tar 自动识别（bzip2 模型包 / gzip 引擎包）
+    await promisify(execFile)('tar', ['-xf', part, '-C', tmp, ...members], {
       signal: opts.signal,
     });
     for (const file of spec.files) {
