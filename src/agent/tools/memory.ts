@@ -188,7 +188,8 @@ export function createMemoryTools(
             type: 'string',
             enum: [...MEMORY_SEARCH_SPACES],
             description:
-              "'all' = global + current project (default); 'global' = cross-project only; 'project' = current project only",
+              "'all' = every space visible to this session (default); 'global' = cross-project only; 'project' = current project only; " +
+              "'bot' = your own member memory, 'chat' = this group chat's shared memory (both only in Bot mode sessions)",
           },
           eventDateFrom: {
             type: 'string',
@@ -266,7 +267,8 @@ export function createMemoryTools(
             type: 'string',
             enum: [...MEMORY_CAPTURE_SPACES],
             description:
-              "'project' = only relevant to the current project (default); 'global' = applies across all projects (e.g. user preferences)",
+              "'project' = only relevant to the current project (default outside Bot mode); 'global' = applies across all projects (e.g. user preferences); " +
+              "'bot' = your own member memory (Bot mode sessions only, default there); 'chat' = shared by this group chat (Bot mode group chats only)",
           },
           eventStart: {
             type: 'string',

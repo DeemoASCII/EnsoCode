@@ -1324,3 +1324,92 @@ describe('rootSessionId', () => {
     ).toBe('p');
   });
 });
+
+describe('memoryHost 增量蒸馏（Bot 模式空闲 / 新对话）', () => {
+  const BOT = '22222222-2222-4222-8222-222222222222';
+  const all = [
+    { role: 'user' as const, text: 'we picked redis for the cache layer', entryId: 'e1' },
+    { role: 'assistant' as const, text: 'ok redis', entryId: 'e2' },
+    { role: 'user' as const, text: 'deploy window is friday night', entryId: 'e3' },
+    { role: 'assistant' as const, text: 'noted friday', entryId: 'e4' },
+  ];
+  const spaceOf = (id: string) => {
+    const ro = new Database(path.join(userData, 'memory', 'memory.db'), { readonly: true });
+    try {
+      return (
+        ro.prepare('SELECT space_id FROM memories WHERE id = ?').get(id) as { space_id: string }
+      ).space_id;
+    } finally {
+      ro.close();
+    }
+  };
+
+  it('按水位只蒸馏新增部分，返回新水位；无新增不调 LLM；bot 会话写 bot 空间', async () => {
+    closeMemoryDb();
+    configureMemoryEmbedding({ modelId: 'none' });
+    let visible = all.slice(0, 2);
+    const seen: string[] = [];
+    const complete = vi.fn(async (_system: string, user: string) => {
+      seen.push(user);
+      return JSON.stringify({
+        memories: [
+          {
+            title: 't',
+            content: `increment memory ${seen.length} about the cache and deploy`,
+            importance: 0.8,
+            unit_type: 'decision',
+          },
+        ],
+      });
+    });
+    syncMemoryDistillFromSettings({ memoryDistillEnabled: true, disabledBuiltinTools: [] });
+    configureMemoryDistill({ readTranscript: async () => visible, complete: () => complete });
+    const base = {
+      sessionId: 'inc-s1',
+      sessionFile: '/fake/inc.jsonl',
+      projectId: null,
+      botId: BOT,
+    };
+
+    expect(await scheduleMemoryDistill(base)).toBe('e2');
+    expect(seen).toHaveLength(1);
+    expect(seen[0]).toContain('redis');
+
+    visible = all;
+    expect(await scheduleMemoryDistill({ ...base, fromEntryId: 'e2' })).toBe('e4');
+    expect(seen).toHaveLength(2);
+    expect(seen[1]).toContain('friday');
+    expect(seen[1]).not.toContain('redis');
+
+    expect(await scheduleMemoryDistill({ ...base, fromEntryId: 'e4' })).toBe('e4');
+    expect(complete).toHaveBeenCalledTimes(2);
+
+    const jobs = getMemoryDistillJobs().filter((j) => j.payload.sessionId === 'inc-s1');
+    expect(jobs.map((j) => [j.payload.fromEntryId, j.payload.toEntryId])).toEqual(
+      expect.arrayContaining([
+        [undefined, 'e2'],
+        ['e2', 'e4'],
+      ])
+    );
+    const r = (await invokeMemory(
+      'search',
+      { query: 'increment', limit: 10, spaceId: 'bot' },
+      { botId: BOT }
+    )) as { results: { id: string }[] };
+    expect(r.results.length).toBeGreaterThan(0);
+    for (const hit of r.results) expect(spaceOf(hit.id)).toBe(`bot:${BOT}`);
+    configureMemoryDistill({ enabled: false });
+  });
+
+  it('开关关闭：水位原样返回', async () => {
+    configureMemoryDistill({ enabled: false });
+    await expect(
+      scheduleMemoryDistill({
+        sessionId: 'inc-off',
+        sessionFile: '/fake/off.jsonl',
+        projectId: null,
+        fromEntryId: 'e7',
+      })
+    ).resolves.toBe('e7');
+  });
+});

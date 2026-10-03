@@ -3,11 +3,11 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import type Database from 'better-sqlite3';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { executeMemoryOp, resolveSpaceIds } from './bridge';
+import { executeMemoryOp } from './bridge';
 import { openMemoryDb } from './db';
 import { searchMemories } from './search';
 import { createMemory, getMemory } from './store';
-import { type Embedder, projectSpaceId } from './types';
+import { botSpaceId, chatSpaceId, type Embedder, projectSpaceId } from './types';
 
 let dir: string;
 let db: Database.Database;
@@ -21,6 +21,8 @@ afterEach(() => {
 });
 
 const PROJECT = '11111111-1111-4111-8111-111111111111';
+const BOT = '22222222-2222-4222-8222-222222222222';
+const CHAT = '33333333-3333-4333-8333-333333333333';
 const capture = (content: string, extra: Record<string, unknown> = {}) => ({
   content,
   importance: 0.6,
@@ -28,16 +30,81 @@ const capture = (content: string, extra: Record<string, unknown> = {}) => ({
   ...extra,
 });
 
-describe('resolveSpaceIds', () => {
-  it("'all' = global + 项目；无项目时只剩 global", () => {
-    expect(resolveSpaceIds('all', PROJECT)).toEqual(['global', projectSpaceId(PROJECT)]);
-    expect(resolveSpaceIds('all', null)).toEqual(['global']);
-    expect(resolveSpaceIds('global', PROJECT)).toEqual(['global']);
-    expect(resolveSpaceIds('project', PROJECT)).toEqual([projectSpaceId(PROJECT)]);
+describe('executeMemoryOp：Bot 模式 space', () => {
+  const botCtx = { projectId: PROJECT, botId: BOT, chatId: CHAT };
+  const spaceOf = async (params: unknown, ctx: Parameters<typeof executeMemoryOp>[3]) => {
+    const r = (await executeMemoryOp(db, 'capture', params, ctx)) as {
+      memory: { spaceId: string };
+    };
+    return r.memory.spaceId;
+  };
+
+  it('capture 缺省 spaceId：bot 会话写 bot 空间，普通会话写项目', async () => {
+    const noSpace = { content: 'bot 默认写自己', importance: 0.6 };
+    expect(await spaceOf(noSpace, botCtx)).toBe(botSpaceId(BOT));
+    expect(await spaceOf({ ...noSpace, content: '普通会话默认项目' }, { projectId: PROJECT })).toBe(
+      projectSpaceId(PROJECT)
+    );
   });
 
-  it("'project' 但会话无项目 → 空集合（search 空结果 / capture 拒绝）", () => {
-    expect(resolveSpaceIds('project', null)).toEqual([]);
+  it('capture 显式 bot / chat / project 落到对应 space', async () => {
+    expect(await spaceOf(capture('a', { spaceId: 'bot' }), botCtx)).toBe(botSpaceId(BOT));
+    expect(await spaceOf(capture('b', { spaceId: 'chat' }), botCtx)).toBe(chatSpaceId(CHAT));
+    expect(await spaceOf(capture('c', { spaceId: 'project' }), botCtx)).toBe(
+      projectSpaceId(PROJECT)
+    );
+  });
+
+  it('非 bot 会话用 bot / chat → 报错不落库；私聊无 chatId 用 chat 也报错', async () => {
+    await expect(
+      executeMemoryOp(db, 'capture', capture('x', { spaceId: 'bot' }), { projectId: PROJECT })
+    ).rejects.toThrow(/Bot mode/);
+    await expect(
+      executeMemoryOp(db, 'search', { query: 'x', limit: 5, spaceId: 'chat' }, { projectId: null })
+    ).rejects.toThrow(/chat/);
+    await expect(
+      executeMemoryOp(db, 'capture', capture('x', { spaceId: 'chat' }), {
+        projectId: null,
+        botId: BOT,
+      })
+    ).rejects.toThrow(/chat/);
+    expect(db.prepare('SELECT COUNT(*) AS n FROM memories').get()).toEqual({ n: 0 });
+  });
+
+  it('search all：bot 会话看得到 bot / chat / 项目 / global，看不到别的成员', async () => {
+    const OTHER = '44444444-4444-4444-8444-444444444444';
+    for (const [content, spaceId] of [
+      ['周报 bot 偏好', botSpaceId(BOT)],
+      ['周报 群约定', chatSpaceId(CHAT)],
+      ['周报 项目约定', projectSpaceId(PROJECT)],
+      ['周报 全局偏好', 'global'],
+      ['周报 别的成员', botSpaceId(OTHER)],
+    ]) {
+      await createMemory(db, { content, spaceId });
+    }
+    const r = (await executeMemoryOp(
+      db,
+      'search',
+      { query: '周报', limit: 10, spaceId: 'all' },
+      botCtx
+    )) as { results: { spaceId: string }[] };
+    expect(new Set(r.results.map((x) => x.spaceId))).toEqual(
+      new Set([botSpaceId(BOT), chatSpaceId(CHAT), projectSpaceId(PROJECT), 'global'])
+    );
+  });
+
+  it('delete 只能删本 bot 可见的记忆', async () => {
+    const OTHER = '44444444-4444-4444-8444-444444444444';
+    const mine = await createMemory(db, { content: 'mine', spaceId: botSpaceId(BOT) });
+    const other = await createMemory(db, { content: 'other', spaceId: botSpaceId(OTHER) });
+    if (mine.status !== 'inserted' || other.status !== 'inserted') throw new Error('setup');
+    await expect(executeMemoryOp(db, 'delete', { id: other.memory.id }, botCtx)).rejects.toThrow(
+      /not found/
+    );
+    await expect(executeMemoryOp(db, 'delete', { id: mine.memory.id }, botCtx)).resolves.toEqual({
+      status: 'deleted',
+      id: mine.memory.id,
+    });
   });
 });
 

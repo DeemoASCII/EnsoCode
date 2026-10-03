@@ -20,6 +20,7 @@ import {
   listDistillJobs,
   listResumableDistillJobs,
   runDistillJob,
+  sliceTranscript,
   type TranscriptMessage,
 } from './memory/distill';
 import { type DownloadProgress, downloadModel, isModelReady } from './memory/embedding/downloader';
@@ -40,7 +41,8 @@ import {
   runKgJob,
 } from './memory/kg';
 import { getReembedJob, type ReembedJob, runReembedJob } from './memory/reembed';
-import { type Embedder, GLOBAL_SPACE, type Memory, projectSpaceId } from './memory/types';
+import { distillSpaceId, type MemorySpaceContext } from './memory/space';
+import type { Embedder, Memory } from './memory/types';
 
 // electron 只出现在这层接线：services/memory/* 保持纯 Node 以便测试注入路径
 let db: Database.Database | null = null;
@@ -223,25 +225,32 @@ async function readSessionTranscript(sessionFile: string): Promise<TranscriptMes
   );
   const branch = SessionManager.open(resolved, sessionDir).getBranch();
   const out: TranscriptMessage[] = [];
-  for (const raw of branch.flatMap(sessionEntryToContextMessages)) {
-    const m = projectMessage(raw);
-    if (!m || (m.role !== 'user' && m.role !== 'assistant')) continue;
-    const text = m.content
-      .filter((p): p is { type: 'text'; text: string } => p.type === 'text')
-      .map((p) => p.text)
-      .join('\n');
-    if (text.trim()) out.push({ role: m.role, text });
+  for (const entry of branch) {
+    for (const raw of sessionEntryToContextMessages(entry)) {
+      const m = projectMessage(raw);
+      if (!m || (m.role !== 'user' && m.role !== 'assistant')) continue;
+      const text = m.content
+        .filter((p): p is { type: 'text'; text: string } => p.type === 'text')
+        .map((p) => p.text)
+        .join('\n');
+      if (text.trim()) out.push({ role: m.role, text, entryId: entry.id });
+    }
   }
   return out;
 }
 
 /**
- * 会话结束 / 闲置回收时调用。读权威 jsonl → 打码拼接 → 建幂等任务（同会话同内容只一次）→ 后台跑。
- * 开关关闭直接返回，不建库也不建任务。绝不抛。
+ * 会话结束 / 闲置回收 / Bot「新对话」时调用。读权威 jsonl → 按 fromEntryId 切出增量 → 打码拼接 →
+ * 建幂等任务（同会话同内容只一次）→ 后台跑。返回新水位（下次的 fromEntryId），由调用方保存；
+ * 读失败 / 开关关闭时原样返回起点。开关关闭不建库也不建任务。绝不抛。
  */
-export function scheduleMemoryDistill(payload: DistillPayload): Promise<void> {
-  if (!distillConfig.enabled) return Promise.resolve();
-  return runDistill(payload);
+export async function scheduleMemoryDistill(payload: DistillPayload): Promise<string | undefined> {
+  if (!distillConfig.enabled) return payload.fromEntryId;
+  let watermark = payload.fromEntryId;
+  await runDistill(payload, undefined, undefined, false, (next) => {
+    watermark = next;
+  });
+  return watermark;
 }
 
 /**
@@ -275,7 +284,8 @@ function runDistill(
   payload: DistillPayload,
   onStarted?: () => void,
   force?: boolean,
-  manual = false
+  manual = false,
+  onWatermark?: (watermark: string | undefined) => void
 ): Promise<void> {
   const queuedAt = performance.now();
   return enqueueLlmJob(async () => {
@@ -284,18 +294,30 @@ function runDistill(
         sessionId: payload.sessionId,
         durationMs: Math.round(performance.now() - queuedAt),
       });
-    const messages = await distillConfig.readTranscript(payload.sessionFile);
+    const { messages, watermark } = sliceTranscript(
+      await distillConfig.readTranscript(payload.sessionFile),
+      payload.fromEntryId
+    );
     const transcript = buildTranscript(messages);
-    if (!transcript) return;
+    if (!transcript) {
+      onWatermark?.(watermark);
+      return;
+    }
     // 语言写进 payload 并进指纹：改完语言再提炼不会被当成「已提炼」跳过，
     // 续跑旧任务时也用它自己的语言复算，不受之后的设置变更影响
-    const stamped = { ...payload, language: distillConfig.language };
+    const stamped: DistillPayload = {
+      ...payload,
+      language: distillConfig.language,
+      ...(watermark !== undefined ? { toEntryId: watermark } : {}),
+    };
     const job = ensureDistillJob(
       memoryDb(),
       stamped,
       distillFingerprint(stamped.sessionId, transcript, stamped.language),
       { force }
     );
+    // 任务已落 memory_jobs（或同内容已提炼过）才推进水位：之后失败可续跑，不丢增量
+    onWatermark?.(watermark);
     if (!job) return;
     onStarted?.();
     await runOneDistill(job, transcript);
@@ -305,12 +327,13 @@ function runDistill(
 async function runOneDistill(job: DistillJob, transcript: string): Promise<void> {
   const complete = await distillConfig.complete?.();
   if (!complete || !db) return;
-  // 项目会话蒸馏进项目 space，与 memory_capture 的缺省归属一致
+  // 与 memory_capture 的缺省归属一致：bot 会话进 bot space，项目会话进项目 space
+  const { projectId, botId } = job.payload;
   await runDistillJob(db, job, {
     transcript,
     complete,
     embedder: await memoryEmbedder(),
-    spaceId: job.payload.projectId ? projectSpaceId(job.payload.projectId) : GLOBAL_SPACE,
+    spaceId: distillSpaceId({ projectId, ...(botId ? { botId } : {}) }),
     onCreated: onMemoryCreated,
   });
   // 一条都没写入时（全部低重要度 / 撞去重）也要通知：任务状态和丢弃原因变了
@@ -325,9 +348,12 @@ function resumeMemoryDistill(): void {
   void enqueueLlmJob(async () => {
     for (const job of jobs) {
       try {
-        const transcript = buildTranscript(
-          await distillConfig.readTranscript(job.payload.sessionFile)
+        const { messages } = sliceTranscript(
+          await distillConfig.readTranscript(job.payload.sessionFile),
+          job.payload.fromEntryId,
+          job.payload.toEntryId
         );
+        const transcript = buildTranscript(messages);
         await runOneDistill(job, transcript);
       } catch {
         /* 单个任务失败不影响其余 */
@@ -629,13 +655,15 @@ export function rootSessionId(identity: SessionIdentity | ChildSessionIdentity):
   return sep === -1 ? id : id.slice(0, sep);
 }
 
+/** scope：会话记忆上下文（memorySpaceContext 推导）；兼容旧调用传 projectId 字符串 / null */
 export async function invokeMemory(
   op: MemoryOp,
   params: unknown,
-  projectId: string | null
+  scope: MemorySpaceContext | string | null
 ): Promise<unknown> {
+  const space = scope !== null && typeof scope === 'object' ? scope : { projectId: scope };
   return executeMemoryOp(memoryDb(), op, params, {
-    projectId,
+    ...space,
     embedder: await memoryEmbedder(),
     onCreated: onMemoryCreated,
     onDeleted: notifyMemoryChanged,

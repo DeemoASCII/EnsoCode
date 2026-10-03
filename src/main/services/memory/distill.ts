@@ -39,6 +39,8 @@ export type Complete = (
 export interface TranscriptMessage {
   role: 'user' | 'assistant';
   text: string;
+  /** 来源会话 entry id；增量蒸馏按它切水位，缺省读取器之外可不提供 */
+  entryId?: string;
 }
 
 /** 解析后的蒸馏条目（尚未映射到写入输入） */
@@ -116,6 +118,23 @@ export function buildTranscript(messages: readonly TranscriptMessage[]): string 
     parts.push(`${m.role === 'user' ? 'User' : 'Assistant'}: ${redactSecrets(text)}`);
   }
   return parts.join(MESSAGE_SEP);
+}
+
+/**
+ * 增量蒸馏切片：取 (fromEntryId, toEntryId]。起点不在当前分支（切过分支）时退回全量，宁可重复也不丢；
+ * 水位 = 切片里最后一个 entryId，切片为空或无 entryId 时保持起点。
+ */
+export function sliceTranscript(
+  messages: readonly TranscriptMessage[],
+  fromEntryId?: string,
+  toEntryId?: string
+): { messages: TranscriptMessage[]; watermark: string | undefined } {
+  const from =
+    fromEntryId === undefined ? -1 : messages.findLastIndex((m) => m.entryId === fromEntryId);
+  const to = toEntryId === undefined ? -1 : messages.findLastIndex((m) => m.entryId === toEntryId);
+  const slice = messages.slice(from + 1, to > from ? to + 1 : messages.length);
+  const watermark = slice.findLast((m) => m.entryId !== undefined)?.entryId ?? fromEntryId;
+  return { messages: slice, watermark };
 }
 
 /** 按消息边界切块，每块 ≤ max；单条超长消息硬切。`chunks.join('\n\n')` 恒等于原文（单条硬切除外）。 */
@@ -474,6 +493,12 @@ export interface DistillPayload {
   /** 会话 jsonl 相对 sessions 根目录的路径（Main 权威）；重启续跑时据此重读 */
   sessionFile: string;
   projectId: string | null;
+  /** Bot 模式会话：蒸馏落 bot:<botId>（与 capture 缺省一致） */
+  botId?: string;
+  /** 增量蒸馏起点（不含）：上次返回的水位；缺省从头 */
+  fromEntryId?: string;
+  /** 增量终点（含）：建任务时盖章，续跑时据此复原同一段，不吞之后新增的内容 */
+  toEntryId?: string;
 }
 
 /** 每条被丢弃 / 未写入的蒸馏结果的结构化原因；设置页可直接展示 */

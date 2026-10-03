@@ -1,6 +1,5 @@
 import { CRYSTAL_MIN_SOURCES } from '@shared/memory/constants';
 import {
-  type MemorySearchSpace,
   parseMemoryCaptureRequest,
   parseMemoryCrystallizeRequest,
   parseMemoryDeleteRequest,
@@ -13,18 +12,12 @@ import { createCrystal } from './crystal';
 import type { Complete } from './distill';
 import { searchMemories } from './search';
 import { createSearchAssist } from './searchLlm';
+import { defaultCaptureSpace, type MemorySpaceContext, resolveSpaceIds } from './space';
 import { createMemory, getMemory } from './store';
-import {
-  type Embedder,
-  GLOBAL_SPACE,
-  type Memory,
-  MemoryValidationError,
-  projectSpaceId,
-} from './types';
+import { type Embedder, type Memory, MemoryValidationError } from './types';
 
-export interface MemoryBridgeContext {
-  /** Main 权威 Project.id；会话不属于任何项目（或项目已失效）时为 null */
-  projectId: string | null;
+/** projectId：Main 权威 Project.id，会话不属于任何项目（或项目已失效）时为 null；botId/chatId 仅 Bot 模式 */
+export interface MemoryBridgeContext extends MemorySpaceContext {
   embedder?: Embedder | null;
   now?: Date;
   /** 真正新插一行后的 best-effort hook（KG 抽取排队） */
@@ -33,14 +26,6 @@ export interface MemoryBridgeContext {
   onDeleted?: (id: string) => void;
   /** deep 检索的 instruct LLM；不可用时检索退回本地意图 */
   complete?: (() => Complete | null | Promise<Complete | null>) | null;
-}
-
-/** 模型只说 space 语义，这里换成真实 space_id；`project` 无项目时返回空集合让调用方决定拒绝还是空结果。 */
-export function resolveSpaceIds(space: MemorySearchSpace, projectId: string | null): string[] {
-  const project = projectId ? [projectSpaceId(projectId)] : [];
-  if (space === 'global') return [GLOBAL_SPACE];
-  if (space === 'project') return project;
-  return [GLOBAL_SPACE, ...project];
 }
 
 /**
@@ -57,7 +42,7 @@ export async function executeMemoryOp(
     const request = parseMemorySearchRequest(params);
     if (!request)
       throw new MemoryValidationError('invalid_request', 'invalid memory_search params');
-    const spaceIds = resolveSpaceIds(request.spaceId, ctx.projectId);
+    const spaceIds = resolveSpaceIds(request.spaceId, ctx);
     const assist =
       request.mode === 'deep' ? createSearchAssist((await ctx.complete?.()) ?? null) : undefined;
     const hits = await searchMemories(db, {
@@ -92,7 +77,7 @@ export async function executeMemoryOp(
     if (!request) {
       throw new MemoryValidationError('invalid_request', 'invalid memory_capture params');
     }
-    const [spaceId] = resolveSpaceIds(request.spaceId, ctx.projectId);
+    const [spaceId] = resolveSpaceIds(request.spaceId ?? defaultCaptureSpace(ctx), ctx);
     if (!spaceId) {
       throw new MemoryValidationError(
         'no_project',
@@ -159,9 +144,9 @@ export async function executeMemoryOp(
         `invalid memory_crystallize params: content, title and sourceIds (>= ${CRYSTAL_MIN_SOURCES} distinct memory ids) are required`
       );
     }
-    // 模型不指定 space：源只能来自本会话可见的 space（global + 当前项目），结晶落在源所在 space；
+    // 模型不指定 space：源只能来自本会话可见的 space（all 解析结果），结晶落在源所在 space；
     // 不可见的源与“不存在”同样拒绝，不泄露其它项目的 space
-    const visible = new Set(resolveSpaceIds('all', ctx.projectId));
+    const visible = new Set(resolveSpaceIds('all', ctx));
     const spaceIds = new Set<string>();
     for (const id of request.sourceIds) {
       const source = getMemory(db, id);
@@ -230,7 +215,7 @@ export async function executeMemoryOp(
     }
     // 只能删本会话可见 space 的记忆；不可见与不存在同样拒绝，不泄露其它项目
     const memory = getMemory(db, request.id);
-    const visible = new Set(resolveSpaceIds('all', ctx.projectId));
+    const visible = new Set(resolveSpaceIds('all', ctx));
     if (
       !memory ||
       memory.lifecycleState === 'deleted' ||
