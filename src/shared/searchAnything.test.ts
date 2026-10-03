@@ -203,6 +203,7 @@ describe('buildSettingsCatalog', () => {
     'general.autoCollapseTurns',
     'general.collapseCompletedActivity',
     'general.pinUnfinishedTodos',
+    'general.botMode',
     'general.notifyMainAgentOnly',
     'general.smartCompactEnabled',
     'general.generationStallTimeout',

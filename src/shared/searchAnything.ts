@@ -173,6 +173,11 @@ const STATIC_CATALOG: SettingsSearchEntry[] = [
     title: 'Pin unfinished todos',
   },
   {
+    id: 'general.botMode',
+    category: 'general',
+    title: 'Bot mode (experimental)',
+  },
+  {
     id: 'general.notifyMainAgentOnly',
     category: 'general',
     title: 'Notify only for the main agent',

@@ -70,6 +70,7 @@ export function GeneralSettings() {
       <TerminalShellSection />
       <WorktreeRootSection />
       <ProxySection />
+      <BotModeSection />
       <ConfigSyncSettings />
       <UpdateSection />
     </div>
@@ -89,6 +90,23 @@ function NotificationSection() {
       )}
       checked={notifyMainAgentOnly}
       onChange={setNotifyMainAgentOnly}
+    />
+  );
+}
+
+function BotModeSection() {
+  const { t } = useI18n();
+  const botModeEnabled = useSettingsStore((s) => s.botModeEnabled);
+  const setBotModeEnabled = useSettingsStore((s) => s.setBotModeEnabled);
+  return (
+    <SwitchRow
+      rowId="general.botMode"
+      title={t('Bot mode (experimental)')}
+      description={t(
+        'Adds a Code | Bot switch to the sidebar. Create members with their own persona, model and tools, and chat with them alone or in groups.'
+      )}
+      checked={botModeEnabled}
+      onChange={setBotModeEnabled}
     />
   );
 }
