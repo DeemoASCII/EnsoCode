@@ -1,0 +1,196 @@
+import type { BotChat, BotId, BotProfile, GroupEntry } from '../types/bot';
+import { parseMentions } from './mentions';
+
+export type RouterMember = Pick<BotProfile, 'id' | 'name'> & { archivedAt?: number };
+export type HumanEntry = Extract<GroupEntry, { kind: 'human' }>;
+type RouterChat = Pick<BotChat, 'members' | 'bossBotId' | 'routing'>;
+
+/** 一条人类消息引发的一轮回复；current 是正在回复的成员 */
+export interface RouterState {
+  rootEntrySeq: number;
+  queue: BotId[];
+  current: BotId | null;
+  /** 成员之间 @ 接力的次数（人类直接 @ 的不计） */
+  hops: number;
+  /** 本轮每个成员已开始回复的次数 */
+  turnsByBot: Record<BotId, number>;
+  /** 已发过的上限提示：'hops' 或 'turns:<botId>'，每种只提示一次 */
+  noticed: string[];
+}
+
+export interface ReplyResult {
+  state: RouterState;
+  /** 现在应当回复的成员（= state.current） */
+  next: BotId | null;
+  skipped: boolean;
+  /** 需写入时间线的 system 提示 */
+  notices: string[];
+}
+
+export type HumanDecision =
+  | { action: 'start'; state: RouterState }
+  | { action: 'steer' }
+  | { action: 'restart-after-current' };
+
+/** 群内且未归档的成员，按群成员顺序 */
+function activeMembers(chat: RouterChat, members: readonly RouterMember[]): RouterMember[] {
+  const list = Array.isArray(members) ? members.filter((m) => m && typeof m.id === 'string') : [];
+  return chat.members.flatMap((id) => {
+    const member = list.find((m) => m.id === id);
+    return member && member.archivedAt === undefined ? [member] : [];
+  });
+}
+
+/** 群成员（含已归档）都参与名字匹配，避免 @归档者 被误配到更短的名字 */
+function mentionedActive(
+  chat: RouterChat,
+  members: readonly RouterMember[],
+  ids: BotId[]
+): BotId[] {
+  const active = new Set(activeMembers(chat, members).map((m) => m.id));
+  return [...new Set(ids)].filter((id) => active.has(id));
+}
+
+function parseActive(chat: RouterChat, members: readonly RouterMember[], text: string): BotId[] {
+  const inChat = (Array.isArray(members) ? members : []).filter(
+    (m) => m && chat.members.includes(m.id)
+  );
+  const ordered = chat.members.flatMap((id) => inChat.filter((m) => m.id === id));
+  return mentionedActive(chat, members, parseMentions(text, ordered).ids);
+}
+
+/** entry.mentions 为权威（Main 写入时计算）；为空时回退解析正文 */
+function humanTargets(
+  chat: RouterChat,
+  members: readonly RouterMember[],
+  entry: HumanEntry
+): BotId[] {
+  const stored = Array.isArray(entry.mentions) ? entry.mentions : [];
+  return stored.length > 0
+    ? mentionedActive(chat, members, stored)
+    : parseActive(chat, members, entry.text);
+}
+
+function advance(state: RouterState): RouterState {
+  const [next = null, ...queue] = state.queue;
+  if (next === null) return { ...state, queue, current: null };
+  return {
+    ...state,
+    queue,
+    current: next,
+    turnsByBot: { ...state.turnsByBot, [next]: (state.turnsByBot[next] ?? 0) + 1 },
+  };
+}
+
+export function startRound(
+  chat: RouterChat,
+  members: readonly RouterMember[],
+  humanEntry: HumanEntry
+): RouterState {
+  let targets = humanTargets(chat, members, humanEntry);
+  if (targets.length === 0 && chat.bossBotId)
+    targets = mentionedActive(chat, members, [chat.bossBotId]);
+  return advance({
+    rootEntrySeq: humanEntry.seq,
+    queue: targets,
+    current: null,
+    hops: 0,
+    turnsByBot: {},
+    noticed: [],
+  });
+}
+
+export const isSkipReply = (text: string): boolean =>
+  typeof text === 'string' && text.trim().toLowerCase() === '[skip]';
+
+function nameOf(members: readonly RouterMember[], id: BotId): string {
+  return members.find((m) => m?.id === id)?.name ?? id;
+}
+
+/** 当前回复人说完：解析其回复里的 @ 接力，超出上限的拦下并提示 */
+export function onReply(
+  state: RouterState,
+  chat: RouterChat,
+  members: readonly RouterMember[],
+  reply: { botId: BotId; text: string }
+): ReplyResult {
+  if (state.current === null || reply.botId !== state.current) {
+    return { state, next: state.current, skipped: false, notices: [] };
+  }
+  const skipped = isSkipReply(reply.text);
+  const queue = [...state.queue];
+  const noticed = [...state.noticed];
+  const notices: string[] = [];
+  const hopBlocked: string[] = [];
+  let hops = state.hops;
+  const targets = skipped ? [] : parseActive(chat, members, reply.text);
+  for (const id of targets) {
+    if (id === reply.botId || queue.includes(id)) continue;
+    const turns = state.turnsByBot[id] ?? 0;
+    if (turns >= chat.routing.maxTurnsPerBot) {
+      if (!noticed.includes(`turns:${id}`)) {
+        noticed.push(`turns:${id}`);
+        notices.push(`「${nameOf(members, id)}」本轮已回复 ${turns} 次，达到上限，不再接力给 TA。`);
+      }
+    } else if (hops >= chat.routing.maxHops) {
+      hopBlocked.push(nameOf(members, id));
+    } else {
+      hops += 1;
+      queue.push(id);
+    }
+  }
+  if (hopBlocked.length > 0 && !noticed.includes('hops')) {
+    noticed.push('hops');
+    notices.push(
+      `本轮接力已达上限（${chat.routing.maxHops} 次），未再交给「${hopBlocked.join('」「')}」。`
+    );
+  }
+  const next = advance({ ...state, queue, hops, noticed });
+  return { state: next, next: next.current, skipped, notices };
+}
+
+/**
+ * 有成员在回复时来了新人类消息：只 @ 当前回复人 → steer；
+ * 否则等当前说完，丢弃剩余队列，用 mergePending(这段时间的人类消息) 重新 startRound。
+ */
+export function onHumanMessage(
+  state: RouterState,
+  chat: RouterChat,
+  members: readonly RouterMember[],
+  humanEntry: HumanEntry
+): HumanDecision {
+  if (state.current === null)
+    return { action: 'start', state: startRound(chat, members, humanEntry) };
+  const targets = humanTargets(chat, members, humanEntry);
+  return targets.length === 1 && targets[0] === state.current
+    ? { action: 'steer' }
+    : { action: 'restart-after-current' };
+}
+
+/**
+ * 连发合并：取最后一条人类消息（seq/正文/时间以它为准），
+ * mentions 为各条 mentions 按时间顺序去重并集；非人类条目忽略。
+ */
+export function mergePending(entries: readonly GroupEntry[]): HumanEntry | null {
+  const humans = (Array.isArray(entries) ? entries : []).filter(
+    (e): e is HumanEntry => e?.kind === 'human'
+  );
+  const last = humans.at(-1);
+  if (!last) return null;
+  const mentions = [
+    ...new Set(humans.flatMap((e) => (Array.isArray(e.mentions) ? e.mentions : []))),
+  ];
+  return { ...last, mentions };
+}
+
+/**
+ * 条目能否触发/延续路由：人类消息可以；bot 消息只有来自该成员本群会话时可以
+ * （系统以成员名义代写的委派结果来自委派会话，不路由）；delegation/system 不路由。
+ */
+export function shouldRoute(entry: GroupEntry, chat: Pick<BotChat, 'sessions'>): boolean {
+  if (!entry || typeof entry !== 'object') return false;
+  if (entry.kind === 'human') return true;
+  if (entry.kind !== 'bot') return false;
+  const session = chat.sessions[entry.botId];
+  return Boolean(session) && session.conversationId === entry.conversationId;
+}
