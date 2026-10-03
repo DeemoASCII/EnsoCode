@@ -1,0 +1,299 @@
+import { randomUUID } from 'node:crypto';
+import { dirname, join } from 'node:path';
+import { parseMentions } from '../../../shared/bots/mentions';
+import {
+  type HumanEntry,
+  isSkipReply,
+  mergePending,
+  onHumanMessage,
+  onReply,
+  type RouterState,
+  startRound,
+} from '../../../shared/bots/router';
+import { buildGroupDelta } from '../../../shared/bots/transcript';
+import type { BotChat, GroupEntryInput } from '../../../shared/types/bot';
+import type {
+  BotActionResult,
+  BotChatStateResult,
+  BotEvent,
+  BotSendResult,
+} from '../../../shared/types/botIpc';
+import type {
+  BotDeliverOptions,
+  BotDeliverResult,
+  BotSessionHost,
+  BotTurnFinished,
+} from './botSessionHost';
+import type { BotStore } from './botStore';
+import type { BotChatStore } from './chatStore';
+import { readJson, writeJsonAtomic } from './files';
+
+interface Round {
+  state: RouterState;
+  pending: HumanEntry[];
+  options?: BotDeliverOptions;
+  generation: number;
+  stopping?: string;
+}
+interface GroupChatDeps {
+  bots: BotStore;
+  chats: BotChatStore;
+  host: Pick<BotSessionHost, 'deliver' | 'onTurnFinished' | 'stopTurn'>;
+  emit: (event: BotEvent) => void;
+}
+const empty = (): RouterState => ({
+  rootEntrySeq: 0,
+  current: null,
+  queue: [],
+  hops: 0,
+  turnsByBot: {},
+  noticed: [],
+});
+
+/** 每群串行归并；router.json 只用于崩溃恢复，不重放未完成的工作。 */
+export class GroupChatService {
+  private rounds = new Map<string, Round>();
+  private locks = new Map<string, Promise<unknown>>();
+
+  constructor(private readonly deps: GroupChatDeps) {
+    for (const chat of deps.chats.list()) {
+      if (chat.kind !== 'group') continue;
+      const saved = readJson(this.file(chat.id));
+      if (
+        saved &&
+        typeof saved === 'object' &&
+        'state' in saved &&
+        saved.state &&
+        typeof saved.state === 'object' &&
+        'current' in saved.state &&
+        saved.state.current
+      ) {
+        this.system(chat.id, '回复被中断');
+      }
+      this.persist(chat.id);
+    }
+    deps.host.onTurnFinished((event) => {
+      if (!event.chatId || event.delegationId) return;
+      const id = event.chatId;
+      const generation = this.round(id).generation;
+      void this.lock(id, () => this.finished(event, generation)).catch((error) =>
+        console.warn('[bots] group reply failed', error)
+      );
+    });
+  }
+
+  settled(chatId: string): Promise<unknown> {
+    return this.locks.get(chatId) ?? Promise.resolve();
+  }
+
+  state(chatId: string): BotChatStateResult {
+    if (this.deps.chats.get(chatId)?.kind !== 'group')
+      return { ok: false, error: 'group-not-found' };
+    const { state, pending } = this.round(chatId);
+    return {
+      ok: true,
+      current: state.current,
+      queue: [...state.queue],
+      hops: state.hops,
+      turnsByBot: { ...state.turnsByBot },
+      pendingHuman: pending.length > 0,
+    };
+  }
+
+  send(chatId: string, text: string, options: BotDeliverOptions = {}): Promise<BotSendResult> {
+    return this.lock(chatId, async () => {
+      const chat = this.deps.chats.get(chatId);
+      if (chat?.kind !== 'group' || chat.archivedAt !== undefined)
+        return { ok: false, error: 'group-unavailable' };
+      if (this.round(chatId).stopping) return { ok: false, error: 'chat-stopping' };
+      const members = this.members(chat);
+      const entry = this.append(chatId, {
+        kind: 'human',
+        text,
+        mentions: parseMentions(text, members).ids,
+        id: randomUUID(),
+        at: Date.now(),
+      });
+      if (entry?.kind !== 'human') return { ok: false, error: 'timeline-write-failed' };
+      const round = this.round(chatId);
+      const decision = onHumanMessage(round.state, chat, members, entry);
+      if (decision.action === 'steer') {
+        const sent = await this.deliver(chat, round.state.current!, options);
+        if (!sent.ok) this.system(chatId, `插话投递失败：${sent.error}`);
+      } else if (decision.action === 'restart-after-current') {
+        round.pending.push(entry);
+        round.options = options;
+      } else {
+        round.state = decision.state;
+        round.options = options;
+        if (!round.state.current) this.system(chatId, '请先指定群主');
+        await this.dispatch(chatId);
+      }
+      this.persist(chatId);
+      return { ok: true };
+    });
+  }
+
+  stop(chatId: string): Promise<BotActionResult> {
+    return this.lock(chatId, async () => {
+      if (this.deps.chats.get(chatId)?.kind !== 'group')
+        return { ok: false, error: 'group-not-found' };
+      const round = this.round(chatId);
+      const current = round.state.current ?? round.stopping;
+      round.generation++;
+      round.state = empty();
+      round.pending = [];
+      this.persist(chatId);
+      if (current) {
+        round.stopping = current;
+        try {
+          await this.deps.host.stopTurn(chatId, current);
+        } catch (error) {
+          return { ok: false, error: error instanceof Error ? error.message : 'stop-failed' };
+        }
+        delete round.stopping;
+      }
+      return { ok: true };
+    });
+  }
+
+  private async finished(event: BotTurnFinished, generation: number): Promise<void> {
+    const chat = event.chatId ? this.deps.chats.get(event.chatId) : undefined;
+    if (chat?.kind !== 'group') return;
+    const round = this.round(chat.id);
+    if (
+      generation !== round.generation ||
+      round.state.current !== event.botId ||
+      chat.sessions[event.botId]?.conversationId !== event.conversationId
+    )
+      return;
+    if (!event.ok)
+      this.system(
+        chat.id,
+        `${this.deps.bots.get(event.botId)?.name ?? '已删除成员'} 回复失败：${event.error ?? '未知错误'}`
+      );
+    else if (!isSkipReply(event.text) && event.turnId)
+      this.append(chat.id, {
+        kind: 'bot',
+        botId: event.botId,
+        text: event.text,
+        conversationId: event.conversationId,
+        turnId: event.turnId,
+        id: randomUUID(),
+        at: Date.now(),
+      });
+    this.advance(chat, event.ok ? event.text : '[skip]');
+    const pending = mergePending(round.pending);
+    if (pending) {
+      round.pending = [];
+      round.state = startRound(chat, this.members(chat), pending);
+      if (!round.state.current) this.system(chat.id, '请先指定群主');
+    }
+    await this.dispatch(chat.id);
+    this.persist(chat.id);
+  }
+
+  private advance(chat: BotChat, text: string): void {
+    const round = this.round(chat.id);
+    const result = onReply(round.state, chat, this.members(chat), {
+      botId: round.state.current!,
+      text,
+    });
+    round.state = result.state;
+    for (const notice of result.notices) this.system(chat.id, notice);
+  }
+
+  private async dispatch(chatId: string): Promise<void> {
+    const round = this.round(chatId);
+    let unavailable = false;
+    while (round.state.current) {
+      const chat = this.deps.chats.get(chatId);
+      if (!chat || chat.archivedAt !== undefined) {
+        round.state = empty();
+        break;
+      }
+      const botId = round.state.current;
+      const bot = this.deps.bots.get(botId);
+      if (!bot || bot.archivedAt !== undefined || !chat.members.includes(botId)) {
+        unavailable = true;
+        this.advance(chat, '[skip]');
+        continue;
+      }
+      round.generation++;
+      this.persist(chatId);
+      const sent = await this.deliver(chat, botId, round.options);
+      if (sent.ok) return;
+      this.system(chatId, `${bot.name} 回复失败：${sent.error}`);
+      this.advance(chat, '[skip]');
+    }
+    if (unavailable) this.system(chatId, '请先指定群主');
+  }
+
+  private async deliver(chat: BotChat, botId: string, options?: BotDeliverOptions) {
+    const cursor = chat.sessions[botId]?.cursor ?? 0;
+    const delta = buildGroupDelta({
+      entries: this.deps.chats.readEntries(chat.id, { limit: Number.MAX_SAFE_INTEGER }),
+      botId,
+      cursor,
+      members: this.members(chat),
+      chatTitle: chat.title,
+    });
+    let result: BotDeliverResult;
+    try {
+      result = await this.deps.host.deliver(chat.id, botId, delta.text, options);
+    } catch (error) {
+      result = {
+        ok: false as const,
+        error: error instanceof Error ? error.message : String(error),
+      };
+    }
+    // ensureSession 首建会话会设到末尾；失败也要恢复投递前水位。
+    this.deps.chats.update(chat.id, (draft) => {
+      const session = draft.sessions[botId];
+      if (session) session.cursor = result.ok ? delta.cursor : cursor;
+      return draft;
+    });
+    return result;
+  }
+
+  private members(chat: BotChat) {
+    return chat.members.flatMap((id) => {
+      const bot = this.deps.bots.get(id);
+      return bot ? [bot] : [];
+    });
+  }
+  private round(id: string): Round {
+    let round = this.rounds.get(id);
+    if (!round) {
+      round = { state: empty(), pending: [], generation: 0 };
+      this.rounds.set(id, round);
+    }
+    return round;
+  }
+  private file(id: string) {
+    return join(dirname(this.deps.chats.workspaceDir(id)), 'router.json');
+  }
+  private persist(id: string): void {
+    if (!this.deps.chats.get(id)) return;
+    const { state, pending } = this.round(id);
+    writeJsonAtomic(this.file(id), { version: 1, state, pending });
+    this.deps.emit({ kind: 'chat', chatId: id });
+  }
+  private append(id: string, entry: GroupEntryInput) {
+    const saved = this.deps.chats.appendEntry(id, entry);
+    if (saved) this.deps.emit({ kind: 'timeline', chatId: id, seq: saved.seq });
+    return saved;
+  }
+  private system(id: string, text: string): void {
+    this.append(id, { kind: 'system', id: randomUUID(), at: Date.now(), text });
+  }
+  private lock<T>(id: string, task: () => Promise<T>): Promise<T> {
+    const run = (this.locks.get(id) ?? Promise.resolve()).then(task, task);
+    const settled = run.catch(() => {});
+    this.locks.set(id, settled);
+    void settled.then(() => {
+      if (this.locks.get(id) === settled) this.locks.delete(id);
+    });
+    return run;
+  }
+}

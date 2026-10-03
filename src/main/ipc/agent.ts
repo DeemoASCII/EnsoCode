@@ -110,13 +110,14 @@ import { toStoredTokens } from '../services/mcpOAuth';
 import { getMcpOAuthStore } from '../services/mcpOAuthStore';
 import { clearMcpStatuses, recordMcpStatus } from '../services/mcpStatusCache';
 import type { Complete } from '../services/memory/distill';
+import { memorySpaceContext } from '../services/memory/space';
 import {
   configureMemoryDistill,
   invokeMemory,
   rootSessionId,
   scheduleMemoryDistill,
 } from '../services/memoryHost';
-import { maybeNotify, setViewedSession } from '../services/notifications';
+import { maybeNotify, maybeNotifyBot, setViewedSession } from '../services/notifications';
 import { readStoredOauthCredentialKeys } from '../services/oauthProviders';
 import { forwardAgentEvent, setPairAgentBridge } from '../services/pairHost';
 import {
@@ -142,6 +143,7 @@ import { titleModelCandidates } from '../services/titleSummary';
 import { ingestSessionJsonl } from '../services/usage/ledgerStore';
 import { sendToAllWindows } from '../windows/createAppWindow';
 import { isMainWebContents } from '../windows/MainWindow';
+import { botModeEnabled, getBotServices } from './bots';
 import { agentSessionIndex, capabilityGateway, handleCapabilityInvoke } from './capabilities';
 import { readSettings, readSshTimeoutSeconds } from './settings';
 import {
@@ -228,7 +230,18 @@ function broadcastAgentEvent(event: RendererAgentEvent): void {
   } catch {
     // renderer 已崩但 webContents 对象还在：Render frame was disposed
   }
-  maybeNotify(event);
+  const binding =
+    'identity' in event && event.identity
+      ? sourceAuthority?.conversation(rootSessionId(event.identity))?.bot
+      : undefined;
+  if (binding && (event.type === 'approval-request' || event.type === 'ask-request')) {
+    const enabled = botModeEnabled();
+    void maybeNotifyBot(event, {
+      enabled,
+      chatId: binding.chatId,
+      name: (enabled ? getBotServices()?.bots.get(binding.botId)?.name : undefined) ?? '成员',
+    }).catch((error) => console.warn('[bots] notification failed', error));
+  } else maybeNotify(event);
   // 手机第二屏：按订阅过滤后加密下发（host 在 main，不依赖窗口焦点）
   forwardAgentEvent(event);
   handlePairHeadlessAgentEvent(event);
@@ -1019,11 +1032,14 @@ export function registerAgentHandlers(): void {
       if (sessionFile) {
         const conversation = sourceAuthority?.conversation(workerEvent.identity.sessionId);
         const project = conversation ? sourceAuthority?.project(conversation.projectId) : undefined;
-        void scheduleMemoryDistill({
-          sessionId: workerEvent.identity.sessionId,
-          sessionFile,
-          projectId: project?.state === 'active' ? project.projectId : null,
-        });
+        if (conversation?.bot) {
+          void getBotServices()?.memory.distill({ ...conversation, sessionFile });
+        } else
+          void scheduleMemoryDistill({
+            sessionId: workerEvent.identity.sessionId,
+            sessionFile,
+            projectId: project?.state === 'active' ? project.projectId : null,
+          });
       }
     }
     if (workerEvent.type === 'browser-invoke') {
@@ -1044,6 +1060,13 @@ export function registerAgentHandlers(): void {
       const conversation = sourceAuthority?.conversation(rootSessionId(identity));
       const project = conversation ? sourceAuthority?.project(conversation.projectId) : undefined;
       const projectId = project?.state === 'active' ? project.projectId : null;
+      const memory = conversation?.bot
+        ? getBotServices()?.memory.context({ ...conversation, projectId })
+        : { enabled: true, context: memorySpaceContext({ projectId }) };
+      if (!memory?.enabled) {
+        sendMemoryResultToSession(identity, requestId, { ok: false, error: '该成员已关闭记忆' });
+        return;
+      }
       const state = readSettingsState() ?? {};
       const disabled = resolveDisabledBuiltinTools(state.disabledBuiltinTools, {
         disabledBuiltinTools: projectDisabledBuiltinTools(state.projects, projectId ?? undefined),
@@ -1055,7 +1078,7 @@ export function registerAgentHandlers(): void {
         });
         return;
       }
-      void invokeMemory(op, params, projectId).then(
+      void invokeMemory(op, params, memory.context).then(
         (result) => sendMemoryResultToSession(identity, requestId, { ok: true, result }),
         (error: unknown) =>
           sendMemoryResultToSession(identity, requestId, {

@@ -47,6 +47,7 @@ export interface BotChatSession {
   conversationId: string;
   /** 已投递给该成员的最后一条时间线 seq */
   cursor: number;
+  distilledTo?: string;
 }
 
 export interface BotChat {
@@ -256,6 +257,7 @@ export function parseBotChat(value: unknown): BotChat | undefined {
       sessions[botId] = {
         conversationId: session.conversationId,
         cursor: intIn(session.cursor, 0, Number.MAX_SAFE_INTEGER, 0),
+        ...(isText(session.distilledTo) ? { distilledTo: session.distilledTo } : {}),
       };
     }
   }

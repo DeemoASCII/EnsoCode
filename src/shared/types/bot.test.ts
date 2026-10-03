@@ -193,6 +193,20 @@ describe('parseBotChat', () => {
     });
     expect(parsed?.sessions).toEqual({ [BOT_A]: { conversationId: 'c1', cursor: 0 } });
   });
+
+  it('preserves valid distillation watermarks and drops malformed ones', () => {
+    for (const distilledTo of ['entry-7', '', 42, null]) {
+      const parsed = parseBotChat({
+        ...group,
+        sessions: { [BOT_A]: { conversationId: 'c1', cursor: 3, distilledTo } },
+      });
+      expect(parsed?.sessions[BOT_A]).toEqual({
+        conversationId: 'c1',
+        cursor: 3,
+        ...(distilledTo === 'entry-7' ? { distilledTo } : {}),
+      });
+    }
+  });
 });
 
 describe('parseGroupEntry', () => {

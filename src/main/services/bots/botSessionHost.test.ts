@@ -27,6 +27,7 @@ class FakeRuntime implements BotRuntimePort {
   prompts: Array<{ id: string; text: string }> = [];
   steers: Array<{ id: string; text: string }> = [];
   released: string[] = [];
+  aborted: string[] = [];
   removedFiles: string[] = [];
   spawnResult = { ok: true } as { ok: boolean; error?: string };
   async spawn(spec: BotSpawnSpec) {
@@ -43,6 +44,9 @@ class FakeRuntime implements BotRuntimePort {
   }
   async release(id: string) {
     this.released.push(id);
+  }
+  abort(id: string) {
+    this.aborted.push(id);
   }
   removeSessionFiles(conversation: { conversationId: string }) {
     this.removedFiles.push(conversation.conversationId);
@@ -229,6 +233,34 @@ describe('BotSessionHost.deliver', () => {
     await host.deliver(chat.id, alice.id, 'again');
     expect(runtime.spawns).toHaveLength(2);
     expect(runtime.steers).toHaveLength(0);
+  });
+
+  it('stop aborts the active turn, drops queued work and preserves the resumable conversation', async () => {
+    host = new BotSessionHost({
+      bots,
+      chats,
+      authority: registry,
+      runtime,
+      emit: () => {},
+      maxRunningTurns: 1,
+    });
+    const alice = bot('Alice');
+    const bob = bot('Bob');
+    const aliceChat = direct(alice.id);
+    const bobChat = direct(bob.id);
+    const first = await host.deliver(aliceChat.id, alice.id, 'active');
+    const second = await host.deliver(bobChat.id, bob.id, 'queued');
+    if (!first.ok || !second.ok) throw new Error('fixture');
+    await host.stopTurn(bobChat.id, bob.id);
+    expect(host.queueState()).toEqual([]);
+    await host.stopTurn(aliceChat.id, alice.id);
+    expect(runtime.aborted).toContain(first.conversationId);
+    expect(host.runningCount()).toBe(0);
+    expect(registry.conversation(first.conversationId)?.lifecycle).not.toBe('ended');
+    expect(runtime.prompts.map((p) => p.text)).toEqual(['active']);
+    await host.deliver(aliceChat.id, alice.id, 'next');
+    expect(runtime.spawns).toHaveLength(2);
+    expect(runtime.prompts.at(-1)?.text).toBe('next');
   });
 
   it('同会话排队的后续消息在它 spawn + prompt 之后才 steer', async () => {

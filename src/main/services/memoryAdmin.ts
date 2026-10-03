@@ -211,6 +211,23 @@ export function deleteMemoryPermanently(db: Database.Database, id: string): bool
     .immediate();
 }
 
+export function deleteMemorySpace(db: Database.Database, spaceId: string): number {
+  return db
+    .transaction(() => {
+      if (spaceId.startsWith('bot:')) {
+        db.prepare(
+          "DELETE FROM memory_jobs WHERE kind = 'distill' AND CASE WHEN json_valid(payload) THEN json_extract(payload, '$.botId') END = ?"
+        ).run(spaceId.slice(4));
+      }
+      const rows = db.prepare('SELECT id FROM memories WHERE space_id = ?').all(spaceId) as {
+        id: string;
+      }[];
+      for (const row of rows) deleteMemoryPermanently(db, row.id);
+      return rows.length;
+    })
+    .immediate();
+}
+
 export function listPendingEvolves(db: Database.Database): EvolvesEdgeDto[] {
   const rows = db
     .prepare(

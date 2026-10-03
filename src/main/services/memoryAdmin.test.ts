@@ -4,6 +4,7 @@ import path from 'node:path';
 import type Database from 'better-sqlite3';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { openMemoryDb } from './memory/db';
+import { ensureDistillJob, listResumableDistillJobs } from './memory/distill';
 import { applyExtraction } from './memory/kg';
 import { createMemory, getMemory } from './memory/store';
 import type { Embedder } from './memory/types';
@@ -11,6 +12,7 @@ import {
   archiveMemory,
   clearFinishedMemoryJobs,
   deleteMemoryPermanently,
+  deleteMemorySpace,
   listMemoriesForAdmin,
   openExistingMemoryDb,
   restoreMemory,
@@ -35,6 +37,24 @@ async function add(content: string, spaceId = 'global') {
   if (result.status !== 'inserted') throw new Error('memory was not inserted');
   return result.memory;
 }
+
+it('deletes all versions and archived memories in a bot space, preserving other spaces', async () => {
+  const space = 'bot:11111111-1111-4111-8111-111111111111';
+  const first = await add('one', space);
+  const second = await add('two', space);
+  const other = await add('keep');
+  archiveMemory(db, second.id);
+  ensureDistillJob(
+    db,
+    { sessionId: 'old', sessionFile: 'old.jsonl', projectId: null, botId: space.slice(4) },
+    'old#hash'
+  );
+  expect(deleteMemorySpace(db, space)).toBe(2);
+  expect(getMemory(db, first.id)).toBeNull();
+  expect(getMemory(db, second.id)).toBeNull();
+  expect(getMemory(db, other.id)).not.toBeNull();
+  expect(listResumableDistillJobs(db)).toEqual([]);
+});
 
 describe('memory admin — 语义搜索模式', () => {
   const embedder: Embedder = {

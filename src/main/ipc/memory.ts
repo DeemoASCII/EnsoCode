@@ -24,6 +24,8 @@ import { CRYSTALLIZE_PROMPT, INSIGHT_PROMPT, withMemoryLanguage } from '@shared/
 import { IPC_CHANNELS } from '@shared/types';
 import type Database from 'better-sqlite3';
 import { app, BrowserWindow, ipcMain } from 'electron';
+import { BotStore } from '../services/bots/botStore';
+import { BotChatStore } from '../services/bots/chatStore';
 import {
   cancelChatModelDownload,
   deleteChatModel,
@@ -529,6 +531,7 @@ async function projectNames(): Promise<Map<string, string>> {
   const registry = getSourceAuthorityRegistry();
   const names = new Map<string, string>();
   for (const project of registry?.projection().projects ?? []) {
+    if (project.kind === 'bot-home') continue;
     names.set(project.projectId, basename(project.canonicalPath));
   }
   return names;
@@ -543,9 +546,16 @@ async function spaceLabeler(): Promise<(spaceId: string) => string> {
   const registry = getSourceAuthorityRegistry();
   const names = new Map<string, string>();
   for (const project of registry?.projection().projects ?? []) {
+    if (project.kind === 'bot-home') continue;
     names.set(project.projectId, basename(project.canonicalPath));
   }
+  const bots = new BotStore(path.join(app.getPath('userData'), 'bots'));
+  const chats = new BotChatStore(path.join(app.getPath('userData'), 'bot-chats'));
   return (spaceId) => {
+    if (spaceId.startsWith('bot:'))
+      return `成员：${bots.get(spaceId.slice(4))?.name ?? '已删除成员'}`;
+    if (spaceId.startsWith('chat:'))
+      return `群：${chats.get(spaceId.slice(5))?.title ?? '已删除群'}`;
     if (!spaceId.startsWith(PROJECT_SPACE_PREFIX)) return GLOBAL_SPACE_LABEL;
     const projectId = spaceId.slice(PROJECT_SPACE_PREFIX.length);
     return names.get(projectId) ?? projectId.slice(0, 8);

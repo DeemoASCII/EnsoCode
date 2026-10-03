@@ -83,7 +83,17 @@ export type BotChatWriteResult = { ok: true; chat: BotChat } | BotIpcError;
 export type BotTimelineResult = { ok: true; entries: GroupEntry[]; lastSeq: number } | BotIpcError;
 export type BotChatSessionsResult = { ok: true; sessions: BotSessionRecord[] } | BotIpcError;
 export type BotSendResult =
-  | { ok: true; conversationId: string; queued?: boolean; turnId?: string }
+  | { ok: true; conversationId?: string; queued?: boolean; turnId?: string }
+  | BotIpcError;
+export type BotChatStateResult =
+  | {
+      ok: true;
+      current: string | null;
+      queue: string[];
+      hops: number;
+      turnsByBot: Record<string, number>;
+      pendingHuman: boolean;
+    }
   | BotIpcError;
 export type BotNewSessionResult = { ok: true; conversationId: string } | BotIpcError;
 export type BotActionResult = { ok: true } | BotIpcError;

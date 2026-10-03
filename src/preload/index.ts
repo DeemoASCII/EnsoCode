@@ -128,6 +128,7 @@ import type {
   BotActionResult,
   BotChatCreateInput,
   BotChatSessionsResult,
+  BotChatStateResult,
   BotChatsListResult,
   BotChatUpdateInput,
   BotChatWriteResult,
@@ -1138,6 +1139,10 @@ const electronAPI = {
       ipcRenderer.invoke(IPC_CHANNELS.BOT_CHAT_DELETE, { chatId }),
     newSession: (chatId: string): Promise<BotNewSessionResult> =>
       ipcRenderer.invoke(IPC_CHANNELS.BOT_CHAT_NEW_SESSION, { chatId }),
+    stopChat: (chatId: string): Promise<BotActionResult> =>
+      ipcRenderer.invoke(IPC_CHANNELS.BOT_CHAT_STOP, { chatId }),
+    chatState: (chatId: string): Promise<BotChatStateResult> =>
+      ipcRenderer.invoke(IPC_CHANNELS.BOT_CHAT_STATE, { chatId }),
     chatSessions: (chatId: string): Promise<BotChatSessionsResult> =>
       ipcRenderer.invoke(IPC_CHANNELS.BOT_CHAT_SESSIONS, { chatId }),
     timeline: (request: {

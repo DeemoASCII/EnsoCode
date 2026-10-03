@@ -20,6 +20,7 @@ import type {
 } from '@shared/types/botIpc';
 import { app, ipcMain, shell } from 'electron';
 import {
+  abortSession,
   agentTypeRegistrySnapshot,
   promptSession,
   readSettingsState,
@@ -28,6 +29,7 @@ import {
   spawnSession,
   steerSession,
 } from '../services/agentHost';
+import { BotMemoryService } from '../services/bots/botMemory';
 import {
   BOT_READONLY_DISABLED_TOOLS,
   mergeBotInstruction,
@@ -36,6 +38,8 @@ import {
 import { type BotRuntimePort, BotSessionHost } from '../services/bots/botSessionHost';
 import { BotStore } from '../services/bots/botStore';
 import { BotChatStore } from '../services/bots/chatStore';
+import { GroupChatService } from '../services/bots/groupChat';
+import { removeBotMemorySpace } from '../services/bots/memoryCleanup';
 import { resolveGlobalInstruction } from '../services/instructionStore';
 import { readStoredOauthCredentialKeys } from '../services/oauthProviders';
 import { removeConversationSessionFiles } from '../services/sessionFileCleanup';
@@ -63,6 +67,8 @@ interface BotServices {
   bots: BotStore;
   chats: BotChatStore;
   host: BotSessionHost;
+  groups: GroupChatService;
+  memory: BotMemoryService;
 }
 
 type GroupSender = (
@@ -167,8 +173,13 @@ function createRuntime(botsRoot: string): BotRuntimePort {
     async release(conversationId) {
       const identity = rootIdentity(conversationId);
       if (identity && agentSessionIndex.isAlive(conversationId)) {
-        await releaseParentSession(identity);
+        const released = await releaseParentSession(identity);
+        if (!released.ok) throw new Error(released.error ?? 'release-failed');
       }
+    },
+    abort(conversationId) {
+      const identity = rootIdentity(conversationId);
+      if (identity) abortSession(identity);
     },
     removeSessionFiles(conversation) {
       removeConversationSessionFiles({
@@ -197,7 +208,19 @@ export function getBotServices(): BotServices | null {
     emit: emitBotEvent,
   });
   setBotWorkerEventObserver((event) => host.observe(event));
-  services = { bots, chats, host };
+  const groups = new GroupChatService({ bots, chats, host, emit: emitBotEvent });
+  const memory = new BotMemoryService({
+    bots,
+    chats,
+    isCodeProject: (id) => {
+      const project = authority.project(id);
+      return project?.state === 'active' && project.kind !== 'bot-home';
+    },
+    schedule: async (payload) =>
+      (await import('../services/memoryHost')).scheduleMemoryDistill(payload),
+  });
+  setBotGroupSender((chat, text, options) => groups.send(chat.id, text, options));
+  services = { bots, chats, host, groups, memory };
   return services;
 }
 
@@ -246,20 +269,26 @@ function handle(
   handler: Handler,
   whenDisabled: unknown = DISABLED
 ): void {
-  ipcMain.handle(channel, (event, request: unknown) => {
+  ipcMain.handle(channel, async (event, request: unknown) => {
     if (kind === 'write' && !isMainWebContents(event.sender.id)) return UNAVAILABLE;
     if (!botModeEnabled()) return whenDisabled;
-    const bots = getBotServices();
-    return bots ? handler(event.sender.id, request, bots) : UNAVAILABLE;
+    try {
+      const bots = getBotServices();
+      return bots ? await handler(event.sender.id, request, bots) : UNAVAILABLE;
+    } catch (error) {
+      return { ok: false, error: error instanceof Error ? error.message : 'unavailable' };
+    }
   });
 }
 
 const botIdOf = (request: unknown): string | null => {
-  const botId = (request as { botId?: unknown } | null)?.botId;
+  const botId =
+    request && typeof request === 'object' && 'botId' in request ? request.botId : undefined;
   return isBotId(botId) ? botId : null;
 };
 const chatIdOf = (request: unknown): string | null => {
-  const chatId = (request as { chatId?: unknown } | null)?.chatId;
+  const chatId =
+    request && typeof request === 'object' && 'chatId' in request ? request.chatId : undefined;
   return isBotId(chatId) ? chatId : null;
 };
 
@@ -309,19 +338,33 @@ export function registerBotHandlers(): void {
     return result;
   });
 
-  handle(IPC_CHANNELS.BOT_DELETE, 'write', (_sender, request, { host }): BotActionResult => {
-    const botId = botIdOf(request);
-    if (!botId) return INVALID;
-    const result = host.discardBot(botId);
-    return result.ok
-      ? result
-      : {
-          ok: false,
-          error: result.reason,
-          reason: result.reason,
-          ...(result.chatIds ? { chatIds: result.chatIds } : {}),
-        };
-  });
+  handle(
+    IPC_CHANNELS.BOT_DELETE,
+    'write',
+    async (_sender, request, { host, chats, groups }): Promise<BotActionResult> => {
+      const botId = botIdOf(request);
+      if (!botId) return INVALID;
+      if (!chats.list().some((chat) => chat.bossBotId === botId)) {
+        for (const chat of chats.list()) {
+          const state = chat.kind === 'group' ? groups.state(chat.id) : undefined;
+          if (state?.ok && state.current === botId) {
+            const stopped = await groups.stop(chat.id);
+            if (!stopped.ok) return stopped;
+          }
+        }
+      }
+      const result = host.discardBot(botId);
+      if (result.ok) await removeBotMemorySpace(app.getPath('userData'), `bot:${botId}`);
+      return result.ok
+        ? result
+        : {
+            ok: false,
+            error: result.reason,
+            reason: result.reason,
+            ...(result.chatIds ? { chatIds: result.chatIds } : {}),
+          };
+    }
+  );
 
   handle(
     IPC_CHANNELS.BOT_CHATS_LIST,
@@ -369,7 +412,7 @@ export function registerBotHandlers(): void {
   handle(
     IPC_CHANNELS.BOT_CHAT_UPDATE,
     'write',
-    (_sender, request, services): BotChatWriteResult => {
+    async (_sender, request, services): Promise<BotChatWriteResult> => {
       const input = parseChatUpdateInput(request);
       const current = input ? services.chats.get(input.chatId) : undefined;
       if (!input || !current) return INVALID;
@@ -386,6 +429,16 @@ export function registerBotHandlers(): void {
       }
       const workspaceChanged =
         workspace !== undefined && JSON.stringify(workspace) !== JSON.stringify(current.workspace);
+      const routing = current.kind === 'group' ? services.groups.state(current.id) : undefined;
+      if (
+        routing?.ok &&
+        (workspaceChanged ||
+          input.archived === true ||
+          (routing.current && input.members && !input.members.includes(routing.current)))
+      ) {
+        const stopped = await services.groups.stop(current.id);
+        if (!stopped.ok) return stopped;
+      }
       const before = current.sessions;
       const at = Date.now();
       const chat = services.chats.update(current.id, (draft) => {
@@ -411,18 +464,33 @@ export function registerBotHandlers(): void {
     }
   );
 
-  handle(IPC_CHANNELS.BOT_CHAT_DELETE, 'write', (_sender, request, { host }): BotActionResult => {
-    const chatId = chatIdOf(request);
-    return chatId && host.discardChat(chatId) ? { ok: true } : INVALID;
-  });
+  handle(
+    IPC_CHANNELS.BOT_CHAT_DELETE,
+    'write',
+    async (_sender, request, { host, chats, groups }): Promise<BotActionResult> => {
+      const chatId = chatIdOf(request);
+      if (!chatId || !chats.get(chatId)) return INVALID;
+      if (chats.get(chatId)?.kind === 'group') {
+        const stopped = await groups.stop(chatId);
+        if (!stopped.ok) return stopped;
+      }
+      if (!host.discardChat(chatId)) return INVALID;
+      await removeBotMemorySpace(app.getPath('userData'), `chat:${chatId}`);
+      return { ok: true };
+    }
+  );
 
   handle(
     IPC_CHANNELS.BOT_CHAT_NEW_SESSION,
     'write',
-    (_sender, request, { chats, host }): BotNewSessionResult => {
+    async (_sender, request, { chats, host, memory }): Promise<BotNewSessionResult> => {
       const chatId = chatIdOf(request);
       const chat = chatId ? chats.get(chatId) : undefined;
       if (chat?.kind !== 'direct') return INVALID;
+      const old = chat.sessions[chat.members[0]];
+      if (old) await host.stopTurn(chat.id, chat.members[0]);
+      const conversation = old && getSourceAuthorityRegistry()?.conversation(old.conversationId);
+      if (conversation) await memory.distill(conversation);
       return host.ensureSession(chat.id, chat.members[0], { fresh: true });
     }
   );
@@ -437,6 +505,15 @@ export function registerBotHandlers(): void {
         : INVALID;
     }
   );
+
+  handle(IPC_CHANNELS.BOT_CHAT_STOP, 'write', (_sender, request, { groups }) => {
+    const chatId = chatIdOf(request);
+    return chatId ? groups.stop(chatId) : INVALID;
+  });
+  handle(IPC_CHANNELS.BOT_CHAT_STATE, 'read', (_sender, request, { groups }) => {
+    const chatId = chatIdOf(request);
+    return chatId ? groups.state(chatId) : INVALID;
+  });
 
   handle(
     IPC_CHANNELS.BOT_CHAT_TIMELINE,

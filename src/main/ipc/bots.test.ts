@@ -39,6 +39,7 @@ vi.mock('../services/agentHost', () => ({
   spawnSession: mocks.spawnSession,
   promptSession: mocks.promptSession,
   steerSession: mocks.steerSession,
+  abortSession: vi.fn(),
   releaseParentSession: async () => ({ ok: true }),
 }));
 vi.mock('./agent', () => ({
@@ -144,7 +145,7 @@ describe('bots IPC', () => {
     expect(mocks.promptSession).toHaveBeenCalledWith(identity, 'hello', undefined, 'd1');
   });
 
-  it('群聊发送尚未接入；改选工作区后旧会话结束、sessions 清空；删除群清理目录', async () => {
+  it('群聊发送接入；状态和停止可用；改选工作区清空会话；删除群清理目录', async () => {
     const alice = await createBot('Alice');
     const bob = await createBot('Bob');
     const group = await call(IPC_CHANNELS.BOT_CHAT_CREATE, {
@@ -157,8 +158,18 @@ describe('bots IPC', () => {
     expect(group.ok).toBe(true);
     const chatId = (group.chat as { id: string }).id;
     expect(await call(IPC_CHANNELS.BOT_SEND, { chatId, text: 'hi', deliveryId: 'd' })).toEqual({
-      ok: false,
-      error: 'group-not-ready',
+      ok: true,
+    });
+    expect(await call(IPC_CHANNELS.BOT_CHAT_STATE, { chatId })).toMatchObject({
+      ok: true,
+      current: alice,
+      queue: [],
+      pendingHuman: false,
+    });
+    expect(await call(IPC_CHANNELS.BOT_CHAT_STOP, { chatId })).toEqual({ ok: true });
+    expect(await call(IPC_CHANNELS.BOT_CHAT_STATE, { chatId })).toMatchObject({
+      ok: true,
+      current: null,
     });
 
     const { getBotServices } = await import('./bots');

@@ -60,6 +60,7 @@ export interface BotRuntimePort {
     deliveryId?: string
   ): ActionResult;
   release(conversationId: string): Promise<void>;
+  abort?(conversationId: string): void;
   removeSessionFiles(conversation: ConversationAuthority): void;
 }
 
@@ -147,6 +148,23 @@ export class BotSessionHost {
       conversationId: item.conversationId,
       position,
     }));
+  }
+
+  async stopTurn(chatId: string, botId: string): Promise<void> {
+    const id = this.deps.chats.get(chatId)?.sessions[botId]?.conversationId;
+    if (!id) return;
+    this.queue = this.queue.filter((item) => item.conversationId !== id);
+    await this.withLock(id, async () => {
+      this.deps.runtime.abort?.(id);
+      // 等旧 generation 结束再允许后续发送，避免迟到的完成事件污染新一轮。
+      await this.deps.runtime.release(id);
+      this.live.delete(id);
+      this.running.delete(id);
+      this.slots.delete(id);
+      this.lastAssistant.delete(id);
+    });
+    this.deps.emit({ kind: 'queue', chatId });
+    this.pump();
   }
 
   sessionsOf(chatId: string): BotSessionRecord[] {
