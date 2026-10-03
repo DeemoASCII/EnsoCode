@@ -3092,13 +3092,15 @@ export class SessionSupervisor {
           state: 'start',
         });
         return;
-      case 'compaction_end':
+      case 'compaction_end': {
         // 自动压缩在 agent_end 之后异步完成：context 视图换了形，重新按完整记录对齐（历史不丢，summary 行入列）
         this.reconcileMessages(managed, this.transcript(managed));
         this.rebaseContextUsage(managed);
         managed.compaction = undefined;
+        // 被 abort 取消的压缩 pi 不带 errorMessage：按放弃收口，不能当作压完
+        const succeeded = !event.errorMessage && !event.aborted;
         // 锚点必须在对齐之后取：否则摘要消息未入列，与 guest 事件口径 maxIndex+1 差 1
-        if (!event.errorMessage) {
+        if (succeeded) {
           managed.compactionNoticeAt = managed.messages.length;
           managed.plan?.compacted();
         }
@@ -3109,8 +3111,10 @@ export class SessionSupervisor {
           seq: ++managed.seq,
           state: 'end',
           ...(event.errorMessage ? { error: event.errorMessage } : {}),
+          ...(!event.errorMessage && event.aborted ? { abandoned: true as const } : {}),
         });
         return;
+      }
       case 'agent_end': {
         this.reconcileMessages(managed, this.transcript(managed));
         // pi 将自动重试瞬态错误（随后 auto_retry_start）：非终态，不 settle、

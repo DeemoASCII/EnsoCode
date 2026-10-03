@@ -221,6 +221,44 @@ describe('SessionSupervisor compact failure', () => {
     await supervisor.shutdown();
   });
 
+  it('被中断取消的压缩按放弃收口：不报错，也不钉「已压缩」锚点', async () => {
+    const events: AgentWorkerEvent[] = [];
+    const supervisor = new SessionSupervisor({
+      emit: (event) => events.push(event),
+      agentDir: '/tmp/agent',
+      sessionDir: mkdtempSync(path.join(tmpdir(), 'enso-compact-')),
+    });
+    supervisor.handleCommand({
+      type: 'spawn-parent',
+      identity: parent,
+      cwd: '/workspace',
+      model,
+    });
+    await waitFor(events, 'parent-ready');
+    const parentSession = mocks.sessions[0] as ReturnType<typeof session>;
+    parentSession.compact.mockImplementation(async () => {
+      parentSession.emit({ type: 'compaction_start' });
+      // pi 被 abort 取消的压缩：aborted=true 且不带 errorMessage
+      parentSession.emit({ type: 'compaction_end', aborted: true });
+      throw new Error('Compaction cancelled');
+    });
+
+    supervisor.handleCommand({ type: 'compact', identity: parent });
+    await settle();
+    await settle();
+
+    const ends = events.filter((event) => event.type === 'compaction' && event.state === 'end');
+    expect(ends).toEqual([
+      expect.objectContaining({ type: 'compaction', state: 'end', abandoned: true }),
+    ]);
+    expect(ends[0]).not.toHaveProperty('error');
+    supervisor.handleCommand({ type: 'snapshot' });
+    await settle();
+    const snapshot = events.findLast((event) => event.type === 'snapshot');
+    expect(JSON.stringify(snapshot ?? {})).not.toContain('compactionNoticeAt');
+    await supervisor.shutdown();
+  });
+
   it('compact() 直接抛错且未发 compaction_end 时仍上报一次', async () => {
     const events: AgentWorkerEvent[] = [];
     const supervisor = new SessionSupervisor({
