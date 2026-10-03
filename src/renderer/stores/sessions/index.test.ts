@@ -2251,6 +2251,32 @@ describe('typed Agent child projection', () => {
     ).toHaveLength(0);
   });
 
+  it('interruptAndSendQueued 在空闲压缩中：中断压缩并立即投递，不留中断标记', async () => {
+    sessionsModule.useSessionsStore.setState((state) => ({
+      conversations: {
+        ...state.conversations,
+        parent: {
+          ...state.conversations.parent,
+          started: true,
+          status: 'idle' as const,
+          compaction: 'running',
+          queuedMessages: [{ id: 'q1', text: 'urgent' }],
+        },
+      },
+    }));
+    agentAbort.mockClear();
+    agentPrompt.mockClear();
+
+    await sessionsModule.useSessionsStore.getState().interruptAndSendQueued('parent', 'q1');
+
+    expect(agentAbort).toHaveBeenCalledWith('parent');
+    expect(agentPrompt).toHaveBeenCalledWith('parent', 'urgent', undefined, expect.any(String));
+    const conversation = sessionsModule.useSessionsStore.getState().conversations.parent;
+    expect(conversation.queuedMessages).toHaveLength(0);
+    expect(conversation.messages.some((message) => message.optimistic)).toBe(true);
+    expect(conversation.abortRequested).not.toBe(true);
+  });
+
   it('removeConversation releases a started idle parent so the worker drops it', () => {
     sessionsModule.useSessionsStore.setState((state) => ({
       conversations: {

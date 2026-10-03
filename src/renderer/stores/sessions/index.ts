@@ -3882,15 +3882,17 @@ export const useSessionsStore = create<SessionsState>()(
           const conversation = get().conversations[conversationId];
           const item = conversation?.queuedMessages?.find((message) => message.id === messageId);
           if (!conversation?.started || conversation.workspaceMigrating || !item) return;
-          if (conversation.status !== 'running') {
+          const running = conversation.status === 'running';
+          if (!running && !conversation.compaction) {
             get().sendQueuedNow(conversationId, messageId);
             return;
           }
-          // 用户接管：中断本轮不自动续跑，活动目标一并暂停（与 abort 一致）
+          // 用户接管：中断本轮不自动续跑，活动目标一并暂停（与 abort 一致）。
+          // 空闲压缩中（sendQueuedNow 会等压完）同样先中断压缩；没有轮次收束，不置中断标记
           const goal = conversation.goal;
           set((state) =>
             patch(state, conversationId, {
-              abortRequested: true,
+              ...(running ? { abortRequested: true } : {}),
               ...(goal?.status === 'active'
                 ? { goal: { ...goal, status: 'paused' as const, note: 'stopped by user' } }
                 : {}),
