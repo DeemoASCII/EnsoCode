@@ -1,3 +1,4 @@
+import { MISSED_RUNS_MAX, parseCron } from '../bots/cron';
 import { APPROVAL_MODES, type ApprovalMode, THINKING_LEVELS, type ThinkingLevel } from './agent';
 
 export type BotId = string;
@@ -334,4 +335,53 @@ export function parseGroupEntry(value: unknown): GroupEntry | undefined {
     default:
       return undefined;
   }
+}
+
+export const BOT_ROUTINE_RESULTS = ['ok', 'error', 'skipped'] as const;
+export type BotRoutineResult = (typeof BOT_ROUTINE_RESULTS)[number];
+
+/** userData/bots/<botId>/routines.json 的一条；触发后作为系统消息投进 chatId */
+export interface BotRoutine {
+  id: string;
+  botId: BotId;
+  title: string;
+  prompt: string;
+  /** 5 段 cron，本地时区 */
+  schedule: string;
+  chatId: BotChatId;
+  enabled: boolean;
+  createdAt: number;
+  updatedAt: number;
+  lastRunAt?: number;
+  lastResult?: BotRoutineResult;
+  /** 应用未运行期间错过的次数（不补跑，只展示），截断到 99 */
+  missed?: number;
+}
+
+export function parseBotRoutine(value: unknown): BotRoutine | undefined {
+  if (!isObject(value) || !isBotId(value.id) || !isBotId(value.botId)) return undefined;
+  if (!isBotChatId(value.chatId) || typeof value.enabled !== 'boolean') return undefined;
+  if (!isText(value.title) || !isText(value.prompt) || typeof value.schedule !== 'string') {
+    return undefined;
+  }
+  const cron = parseCron(value.schedule);
+  if (!cron || !isTime(value.createdAt) || !isTime(value.updatedAt)) return undefined;
+  const routine: BotRoutine = {
+    id: value.id,
+    botId: value.botId,
+    title: value.title,
+    prompt: value.prompt,
+    schedule: cron.source,
+    chatId: value.chatId,
+    enabled: value.enabled,
+    createdAt: value.createdAt,
+    updatedAt: value.updatedAt,
+  };
+  if (isTime(value.lastRunAt)) routine.lastRunAt = value.lastRunAt;
+  if (BOT_ROUTINE_RESULTS.includes(value.lastResult as BotRoutineResult)) {
+    routine.lastResult = value.lastResult as BotRoutineResult;
+  }
+  if (isSeq(value.missed) && value.missed > 0)
+    routine.missed = Math.min(MISSED_RUNS_MAX, value.missed);
+  return routine;
 }
