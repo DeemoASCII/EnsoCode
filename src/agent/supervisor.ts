@@ -1485,6 +1485,11 @@ export class SessionSupervisor {
           : [];
         this.replaceMessagesAfterRewind(managed);
         managed.plan?.refresh();
+        // 失败轮已回退掉：不再停在 failed，否则界面残留旧错误和指向上一轮的「重试」
+        if (!result.cancelled && managed.status === 'failed') {
+          managed.status = 'idle';
+          this.emitStatus(managed);
+        }
         const editorText = planFreeEditorText(result.editorText || fallbackEditorText);
         this.options.emit({
           type: 'rewind-done',

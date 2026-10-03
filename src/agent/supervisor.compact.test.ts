@@ -291,6 +291,53 @@ describe('SessionSupervisor compact failure', () => {
     await supervisor.shutdown();
   });
 
+  it('失败轮后回退：状态回到 idle 并清错误', async () => {
+    const events: AgentWorkerEvent[] = [];
+    const supervisor = new SessionSupervisor({
+      emit: (event) => events.push(event),
+      agentDir: '/tmp/agent',
+      sessionDir: mkdtempSync(path.join(tmpdir(), 'enso-rewind-')),
+    });
+    supervisor.handleCommand({
+      type: 'spawn-parent',
+      identity: parent,
+      cwd: '/workspace',
+      model,
+    });
+    await waitFor(events, 'parent-ready');
+    const parentSession = mocks.sessions[0] as ReturnType<typeof session>;
+    const failedUser = { role: 'user', content: [{ type: 'text', text: 'boom' }] };
+    parentSession.emit({ type: 'agent_start' });
+    parentSession.messages = [
+      failedUser,
+      { role: 'assistant', content: [], stopReason: 'error', errorMessage: '500 upstream' },
+    ];
+    parentSession.emit({ type: 'agent_end', willRetry: false });
+    parentSession.emit({ type: 'agent_settled' });
+    await waitFor(events, 'turn-failed');
+    (mocks.managers[0] as { getBranch: () => unknown[] }).getBranch().push({
+      type: 'message',
+      message: failedUser,
+      id: 'entry-user-1',
+      timestamp: 1,
+    });
+    parentSession.navigateTree = vi.fn(async () => {
+      parentSession.messages = [];
+      return { cancelled: false, editorText: 'boom' };
+    });
+
+    events.length = 0;
+    supervisor.handleCommand({ type: 'rewind', identity: parent, userIndexFromEnd: 0 });
+    await waitFor(events, 'rewind-done');
+
+    // 失败轮已被回退掉：状态回到 idle 并清掉错误，界面不再残留红错与「重试」
+    const statusIndex = events.findIndex((event) => event.type === 'status');
+    expect(events[statusIndex]).toMatchObject({ type: 'status', status: 'idle' });
+    expect(events[statusIndex]).not.toHaveProperty('error');
+    expect(statusIndex).toBeLessThan(events.findIndex((event) => event.type === 'rewind-done'));
+    await supervisor.shutdown();
+  });
+
   it('rewind 在 navigateTree 完成前先 truncated，且不逐条 upsert 前缀', async () => {
     const events: AgentWorkerEvent[] = [];
     const supervisor = new SessionSupervisor({
