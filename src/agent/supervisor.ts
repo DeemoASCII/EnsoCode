@@ -281,6 +281,8 @@ interface ManagedSession {
   lastRetryError?: string;
   /** 已见终态 agent_end、待 agent_settled 收口；failTurn 等提前收口时清掉，settled 不再重复收 */
   settlePending?: boolean;
+  /** 手动重试的裸 agent.continue 在跑：pi 不走 _runAgentPrompt，不会自动重试，willRetry 不可信 */
+  manualRetryRun?: boolean;
   /** 当前用户轮已做过一次空回复自动续跑 */
   silentTurnNudgeUsed: boolean;
   /** 本次空回复恢复的类型；post-tool 第二次仍空则失败 */
@@ -1227,10 +1229,16 @@ export class SessionSupervisor {
         ensureAssistantUsage(agent.state.messages as unknown[]);
         managed.currentTurnId = randomUUID();
         // 裸 agent.continue 绕过 pi 的 _runAgentPrompt，不会发 agent_settled，需自行补发收口
-        void agent.continue().then(
-          () => this.onSessionEvent(managed, { type: 'agent_settled' }),
-          (error) => this.failTurn(managed, toErrorMessage(error))
-        );
+        managed.manualRetryRun = true;
+        void agent
+          .continue()
+          .finally(() => {
+            managed.manualRetryRun = false;
+          })
+          .then(
+            () => this.onSessionEvent(managed, { type: 'agent_settled' }),
+            (error) => this.failTurn(managed, toErrorMessage(error))
+          );
         return;
       }
       case 'agent-control-result': {
@@ -3107,7 +3115,7 @@ export class SessionSupervisor {
         this.reconcileMessages(managed, this.transcript(managed));
         // pi 将自动重试瞬态错误（随后 auto_retry_start）：非终态，不 settle、
         // 不发 turn-completed、状态保持 running，否则输入框解锁后又自己跑起来
-        if (event.willRetry) {
+        if (event.willRetry && !managed.manualRetryRun) {
           // pi 的 _prepareRetry 稍后会把这条瞬态错误 assistant 消息从自身状态删掉重发；
           // 提前对齐投影，重试期间时间线不闪现错误（错误文本已在 RetryBar 上）
           const last = managed.messages.at(-1);

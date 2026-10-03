@@ -252,6 +252,41 @@ describe('SessionSupervisor terminal turn handling', () => {
     await supervisor.shutdown();
   });
 
+  it('手动重试再遇可重试错误（agent_end willRetry=true，但裸 continue 不会自动重试）：按失败收口', async () => {
+    const { events, supervisor, parentSession } = await spawn();
+    Object.assign(mocks.managers[0]!, {
+      buildSessionProjection: vi.fn(() => ({
+        entries: parentSession.messages.map((message, index) => ({
+          sourceEntry: { type: 'message', id: `m${index}`, message },
+          messages: [message],
+        })),
+      })),
+    });
+    parentSession.messages.push({ role: 'user', content: [{ type: 'text', text: 'hi' }] });
+    parentSession.agent.continue.mockImplementationOnce(async () => {
+      parentSession.emit({ type: 'agent_start' });
+      parentSession.messages.push({
+        role: 'assistant',
+        content: [],
+        stopReason: 'error',
+        errorMessage: '429 rate limited',
+      });
+      parentSession.emit({ type: 'agent_end', willRetry: true });
+    });
+
+    supervisor.handleCommand({ type: 'retry', identity: parent });
+    await waitFor(events, 'turn-failed');
+    expect(events.find((event) => event.type === 'turn-failed')).toMatchObject({
+      error: '429 rate limited',
+    });
+    expect(events.filter((event) => event.type === 'status').at(-1)).toMatchObject({
+      status: 'failed',
+    });
+    expect(events.some((event) => event.type === 'messages-truncated')).toBe(false);
+
+    await supervisor.shutdown();
+  });
+
   it('agent_end 后 pi 续跑（排队消息/扩展续跑）：等 agent_settled 才收口，全程同一轮', async () => {
     const { events, supervisor, parentSession } = await spawn();
     parentSession.emit({ type: 'agent_start' });
