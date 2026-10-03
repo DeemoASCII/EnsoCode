@@ -1,0 +1,337 @@
+import { APPROVAL_MODES, type ApprovalMode, THINKING_LEVELS, type ThinkingLevel } from './agent';
+
+export type BotId = string;
+export type BotChatId = string;
+export type BotList = 'any' | BotId[];
+
+export interface BotEngine {
+  providerId: string;
+  modelId: string;
+  thinkingLevel?: ThinkingLevel;
+}
+
+export interface BotProfile {
+  id: BotId;
+  /** 群内 @ 用，唯一（大小写不敏感） */
+  name: string;
+  title: string;
+  /** 一句话职责：路由提示与委派目录 */
+  scope: string;
+  avatar: { color: string };
+  /** 缺省跟随全局默认模型 */
+  engine?: BotEngine;
+  approvalMode: ApprovalMode;
+  tools: 'all' | 'readonly';
+  skillIds: string[];
+  mcpServerIds: string[];
+  delegation: { canDelegateTo: BotList; acceptFrom: BotList };
+  memory: { enabled: boolean };
+  archivedAt?: number;
+  createdAt: number;
+  updatedAt: number;
+  version: number;
+}
+
+export type BotChatWorkspace =
+  | { kind: 'member-home' }
+  | { kind: 'chat-home'; projectId: string }
+  | { kind: 'project'; projectId: string };
+
+export interface BotChatRouting {
+  maxHops: number;
+  maxTurnsPerBot: number;
+}
+
+export interface BotChatSession {
+  conversationId: string;
+  /** 已投递给该成员的最后一条时间线 seq */
+  cursor: number;
+}
+
+export interface BotChat {
+  id: BotChatId;
+  kind: 'direct' | 'group';
+  title: string;
+  members: BotId[];
+  bossBotId: BotId | null;
+  workspace: BotChatWorkspace;
+  routing: BotChatRouting;
+  pinned: boolean;
+  archivedAt?: number;
+  sessions: Record<BotId, BotChatSession>;
+  createdAt: number;
+  updatedAt: number;
+  version: number;
+}
+
+export const DELEGATION_STATES = ['queued', 'running', 'completed', 'failed', 'canceled'] as const;
+export type DelegationState = (typeof DELEGATION_STATES)[number];
+
+interface GroupEntryBase {
+  seq: number;
+  id: string;
+  at: number;
+}
+
+export type GroupEntry =
+  | (GroupEntryBase & { kind: 'human'; text: string; mentions: BotId[] })
+  | (GroupEntryBase & {
+      kind: 'bot';
+      botId: BotId;
+      text: string;
+      conversationId: string;
+      turnId: string;
+    })
+  | (GroupEntryBase & {
+      kind: 'delegation';
+      delegationId: string;
+      from: BotId;
+      to: BotId;
+      state: DelegationState;
+      summary?: string;
+    })
+  | (GroupEntryBase & { kind: 'system'; text: string });
+
+export type GroupEntryInput = GroupEntry extends infer E
+  ? E extends GroupEntry
+    ? Omit<E, 'seq'>
+    : never
+  : never;
+
+export const BOT_ROUTING_DEFAULTS: BotChatRouting = { maxHops: 4, maxTurnsPerBot: 2 };
+const ROUTING_LIMITS = { maxHops: 20, maxTurnsPerBot: 10 } as const;
+
+export const BOT_NAME_MAX = 24;
+/** 群聊里 @ 全体的保留写法 */
+export const BOT_MENTION_ALL = ['所有人', 'everyone', 'all'] as const;
+const BOT_NAME_RE = /^[\p{L}\p{N}_-]+$/u;
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
+const COLOR_RE = /^#[0-9a-f]{6}$/iu;
+const AVATAR_COLORS = ['#7c5cff', '#0ea5e9', '#f97316', '#22c55e', '#ec4899', '#eab308'];
+
+export const isBotId = (value: unknown): value is BotId =>
+  typeof value === 'string' && UUID_RE.test(value);
+export const isBotChatId = isBotId;
+export const botNameKey = (name: string): string => name.normalize('NFC').toLowerCase();
+
+function isObject(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+const isText = (value: unknown): value is string => typeof value === 'string' && value.length > 0;
+const isTime = (value: unknown): value is number =>
+  typeof value === 'number' && Number.isFinite(value) && value >= 0;
+const isSeq = (value: unknown): value is number =>
+  Number.isSafeInteger(value) && (value as number) >= 0;
+const strings = (value: unknown): string[] =>
+  Array.isArray(value) ? value.filter((item): item is string => isText(item)) : [];
+const str = (value: unknown): string => (typeof value === 'string' ? value : '');
+
+function botList(value: unknown): BotList {
+  return Array.isArray(value) ? value.filter(isBotId) : 'any';
+}
+
+function intIn(value: unknown, min: number, max: number, fallback: number): number {
+  if (!Number.isSafeInteger(value)) return fallback;
+  return Math.min(max, Math.max(min, value as number));
+}
+
+function defaultColor(id: string): string {
+  let hash = 0;
+  for (const char of id) hash = (hash * 31 + char.charCodeAt(0)) >>> 0;
+  return AVATAR_COLORS[hash % AVATAR_COLORS.length];
+}
+
+function normalizeName(raw: string): string | undefined {
+  const name = raw.trim().normalize('NFC');
+  return name && [...name].length <= BOT_NAME_MAX && BOT_NAME_RE.test(name) ? name : undefined;
+}
+
+export type BotNameCheck =
+  | { ok: true; name: string }
+  | { ok: false; reason: 'invalid' | 'reserved' | 'duplicate' };
+
+/** reserved：内置 agent 类型名等不可占用的名字 */
+export function checkBotName(
+  raw: string,
+  others: readonly Pick<BotProfile, 'id' | 'name'>[],
+  reserved: readonly string[],
+  selfId?: BotId
+): BotNameCheck {
+  const name = normalizeName(raw);
+  if (!name) return { ok: false, reason: 'invalid' };
+  const key = botNameKey(name);
+  if ([...BOT_MENTION_ALL, ...reserved].some((item) => botNameKey(item) === key)) {
+    return { ok: false, reason: 'reserved' };
+  }
+  if (others.some((other) => other.id !== selfId && botNameKey(other.name) === key)) {
+    return { ok: false, reason: 'duplicate' };
+  }
+  return { ok: true, name };
+}
+
+function parseEngine(value: unknown): BotEngine | undefined {
+  if (!isObject(value) || !isText(value.providerId) || !isText(value.modelId)) return undefined;
+  const engine: BotEngine = { providerId: value.providerId, modelId: value.modelId };
+  if (THINKING_LEVELS.includes(value.thinkingLevel as ThinkingLevel)) {
+    engine.thinkingLevel = value.thinkingLevel as ThinkingLevel;
+  }
+  return engine;
+}
+
+export function parseBotProfile(value: unknown): BotProfile | undefined {
+  if (!isObject(value) || !isBotId(value.id) || typeof value.name !== 'string') return undefined;
+  const name = normalizeName(value.name);
+  if (!name || !isTime(value.createdAt) || !isTime(value.updatedAt)) return undefined;
+  const avatar = isObject(value.avatar) ? value.avatar : {};
+  const delegation = isObject(value.delegation) ? value.delegation : {};
+  const memory = isObject(value.memory) ? value.memory : {};
+  const profile: BotProfile = {
+    id: value.id,
+    name,
+    title: str(value.title),
+    scope: str(value.scope),
+    avatar: {
+      color:
+        typeof avatar.color === 'string' && COLOR_RE.test(avatar.color)
+          ? avatar.color
+          : defaultColor(value.id),
+    },
+    approvalMode: APPROVAL_MODES.includes(value.approvalMode as ApprovalMode)
+      ? (value.approvalMode as ApprovalMode)
+      : 'full',
+    tools: value.tools === 'readonly' ? 'readonly' : 'all',
+    skillIds: strings(value.skillIds),
+    mcpServerIds: strings(value.mcpServerIds),
+    delegation: {
+      canDelegateTo: botList(delegation.canDelegateTo),
+      acceptFrom: botList(delegation.acceptFrom),
+    },
+    memory: { enabled: memory.enabled !== false },
+    createdAt: value.createdAt,
+    updatedAt: value.updatedAt,
+    version: Number.isSafeInteger(value.version) ? (value.version as number) : 0,
+  };
+  const engine = parseEngine(value.engine);
+  if (engine) profile.engine = engine;
+  if (isTime(value.archivedAt)) profile.archivedAt = value.archivedAt;
+  return profile;
+}
+
+function parseWorkspace(value: unknown): BotChatWorkspace | undefined {
+  if (!isObject(value)) return undefined;
+  if (value.kind === 'member-home') return { kind: 'member-home' };
+  if ((value.kind === 'chat-home' || value.kind === 'project') && isText(value.projectId)) {
+    return { kind: value.kind, projectId: value.projectId };
+  }
+  return undefined;
+}
+
+export function parseBotChat(value: unknown): BotChat | undefined {
+  if (!isObject(value) || !isBotChatId(value.id)) return undefined;
+  if (value.kind !== 'direct' && value.kind !== 'group') return undefined;
+  if (!Array.isArray(value.members) || !value.members.every(isBotId)) return undefined;
+  const members = value.members as BotId[];
+  if (new Set(members).size !== members.length) return undefined;
+  const workspace = parseWorkspace(value.workspace);
+  if (!workspace || !isTime(value.createdAt) || !isTime(value.updatedAt)) return undefined;
+  const bossBotId = value.bossBotId ?? null;
+  if (value.kind === 'direct') {
+    if (members.length !== 1 || bossBotId !== null || workspace.kind === 'chat-home')
+      return undefined;
+  } else if (
+    members.length < 2 ||
+    !isBotId(bossBotId) ||
+    !members.includes(bossBotId) ||
+    workspace.kind === 'member-home'
+  ) {
+    return undefined;
+  }
+  const routing = isObject(value.routing) ? value.routing : {};
+  const sessions: Record<BotId, BotChatSession> = {};
+  if (isObject(value.sessions)) {
+    for (const [botId, session] of Object.entries(value.sessions)) {
+      if (!members.includes(botId) || !isObject(session) || !isText(session.conversationId))
+        continue;
+      sessions[botId] = {
+        conversationId: session.conversationId,
+        cursor: intIn(session.cursor, 0, Number.MAX_SAFE_INTEGER, 0),
+      };
+    }
+  }
+  const chat: BotChat = {
+    id: value.id,
+    kind: value.kind,
+    title: str(value.title),
+    members,
+    bossBotId: bossBotId as BotId | null,
+    workspace,
+    routing: {
+      maxHops: intIn(routing.maxHops, 1, ROUTING_LIMITS.maxHops, BOT_ROUTING_DEFAULTS.maxHops),
+      maxTurnsPerBot: intIn(
+        routing.maxTurnsPerBot,
+        1,
+        ROUTING_LIMITS.maxTurnsPerBot,
+        BOT_ROUTING_DEFAULTS.maxTurnsPerBot
+      ),
+    },
+    pinned: value.pinned === true,
+    sessions,
+    createdAt: value.createdAt,
+    updatedAt: value.updatedAt,
+    version: Number.isSafeInteger(value.version) ? (value.version as number) : 0,
+  };
+  if (isTime(value.archivedAt)) chat.archivedAt = value.archivedAt;
+  return chat;
+}
+
+export function parseGroupEntry(value: unknown): GroupEntry | undefined {
+  if (!isObject(value) || !isSeq(value.seq) || !isText(value.id) || !isTime(value.at))
+    return undefined;
+  const base = { seq: value.seq, id: value.id, at: value.at };
+  switch (value.kind) {
+    case 'human':
+      return typeof value.text === 'string'
+        ? { ...base, kind: 'human', text: value.text, mentions: strings(value.mentions) }
+        : undefined;
+    case 'bot':
+      return isBotId(value.botId) &&
+        typeof value.text === 'string' &&
+        isText(value.conversationId) &&
+        isText(value.turnId)
+        ? {
+            ...base,
+            kind: 'bot',
+            botId: value.botId,
+            text: value.text,
+            conversationId: value.conversationId,
+            turnId: value.turnId,
+          }
+        : undefined;
+    case 'delegation': {
+      if (
+        !isText(value.delegationId) ||
+        !isBotId(value.from) ||
+        !isBotId(value.to) ||
+        !DELEGATION_STATES.includes(value.state as DelegationState)
+      ) {
+        return undefined;
+      }
+      const entry: GroupEntry = {
+        ...base,
+        kind: 'delegation',
+        delegationId: value.delegationId,
+        from: value.from,
+        to: value.to,
+        state: value.state as DelegationState,
+      };
+      if (typeof value.summary === 'string') entry.summary = value.summary;
+      return entry;
+    }
+    case 'system':
+      return typeof value.text === 'string'
+        ? { ...base, kind: 'system', text: value.text }
+        : undefined;
+    default:
+      return undefined;
+  }
+}
