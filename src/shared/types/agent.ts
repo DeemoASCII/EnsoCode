@@ -685,7 +685,8 @@ export interface ModelRef {
   modelId: string;
 }
 
-export type ProjectKind = 'local' | 'ssh';
+/** bot-home：Bot 成员 / 群独立工作区的隐藏项目，只由 Main 创建，不投影给 renderer */
+export type ProjectKind = 'local' | 'ssh' | 'bot-home';
 
 export interface ProjectAuthority {
   projectId: string;
@@ -745,6 +746,13 @@ export interface ConversationForkOrigin {
   entryId: string;
 }
 
+/** Bot 会话归属：只由 Main 写入；chatId 为 null 表示委派会话 */
+export interface ConversationBotBinding {
+  botId: string;
+  chatId: string | null;
+  delegationId?: string;
+}
+
 export interface ConversationAuthority {
   conversationId: string;
   projectId: string;
@@ -754,6 +762,7 @@ export interface ConversationAuthority {
   sessionFile?: string;
   selection?: DefaultModelRef & { revision: number };
   forkedFrom?: ConversationForkOrigin;
+  bot?: ConversationBotBinding;
 }
 
 export type ConversationAuthorityProjection = ConversationAuthority;
@@ -2088,6 +2097,9 @@ function isValidProjectRemoteFields(value: Record<string, unknown>): boolean {
   if (value.kind === 'local' || value.kind === undefined) {
     return value.sshHost === undefined && value.sshConnectionId === undefined;
   }
+  if (value.kind === 'bot-home') {
+    return value.sshHost === undefined && value.sshConnectionId === undefined;
+  }
   return false;
 }
 
@@ -2160,6 +2172,7 @@ export function parseConversationAuthority(value: unknown): ConversationAuthorit
       'sessionFile',
       'selection',
       'forkedFrom',
+      'bot',
     ]) ||
     !isUuid(value.conversationId) ||
     !isUuid(value.projectId) ||
@@ -2191,7 +2204,18 @@ export function parseConversationAuthority(value: unknown): ConversationAuthorit
       return null;
     }
   }
+  if (value.bot !== undefined && !isConversationBotBinding(value.bot)) return null;
   return value as unknown as ConversationAuthority;
+}
+
+function isConversationBotBinding(value: unknown): value is ConversationBotBinding {
+  return (
+    isRecord(value) &&
+    hasOnlyKeys(value, ['botId', 'chatId', 'delegationId']) &&
+    isUuid(value.botId) &&
+    (value.chatId === null || isUuid(value.chatId)) &&
+    (value.delegationId === undefined || isNonEmptyString(value.delegationId))
+  );
 }
 
 export function parseSourceAuthorityProjection(value: unknown): SourceAuthorityProjection | null {

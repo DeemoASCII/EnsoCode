@@ -365,6 +365,27 @@ export const IPC_CHANNELS = {
   BTW_ABORT: 'btw:abort',
   BTW_SPAWN: 'btw:spawn',
   BTW_DISPOSE: 'btw:dispose',
+
+  // Bot 模式（实验）：成员、聊天、投递；身份 / 工作区 / 人设一律由 Main 推导
+  BOTS_LIST: 'bots:list',
+  BOT_GET: 'bots:get',
+  BOT_CREATE: 'bots:create',
+  BOT_UPDATE: 'bots:update',
+  BOT_ARCHIVE: 'bots:archive',
+  BOT_DELETE: 'bots:delete',
+  BOT_CHATS_LIST: 'bots:chats-list',
+  BOT_CHAT_CREATE: 'bots:chat-create',
+  BOT_CHAT_UPDATE: 'bots:chat-update',
+  BOT_CHAT_DELETE: 'bots:chat-delete',
+  BOT_CHAT_NEW_SESSION: 'bots:chat-new-session',
+  BOT_CHAT_SESSIONS: 'bots:chat-sessions',
+  BOT_CHAT_TIMELINE: 'bots:chat-timeline',
+  BOT_SEND: 'bots:send',
+  BOT_OPEN_WORKSPACE: 'bots:open-workspace',
+  /** bot 会话正文（含已结束的历史会话），只接受 bot 会话 id */
+  BOT_SESSION_HISTORY: 'bots:session-history',
+  /** main → renderer：Bot 数据变化提示 */
+  BOT_EVENT: 'bots:event',
 } as const;
 
 export type IpcChannel = (typeof IPC_CHANNELS)[keyof typeof IPC_CHANNELS];

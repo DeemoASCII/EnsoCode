@@ -25,6 +25,7 @@ import {
   isSameChildSessionIdentity,
   type SessionIdentity,
 } from '@shared/builtinAgents';
+import { WORKSPACE_WRITE_TOOL_ID } from '@shared/childProfileTools';
 import { type CompactStrategy, resolveCompactStrategy } from '@shared/compactStrategy';
 import { DEFAULT_MAX_ACTIVE_COWORKERS } from '@shared/maxActiveCoworkers';
 import {
@@ -1881,7 +1882,9 @@ export class SessionSupervisor {
           : null;
       };
     const buildCoreTools = (): Def[] => [
-      ...buildBaseTools(gate, checkpoints),
+      ...(toolEnabled(WORKSPACE_WRITE_TOOL_ID)
+        ? buildBaseTools(gate, checkpoints)
+        : readOnlyTools()),
       ...wrapMcpTools(gate),
     ];
     // 会话工厂：一次性 subagent 与持久 coworker 共用。gate 参数化——subagent 复用父门,

@@ -2,6 +2,7 @@ import { app } from 'electron';
 import { registerAgentHandlers } from './agent';
 import { registerAppBadgeHandlers } from './appBadge';
 import { registerAssetHandlers } from './assets';
+import { registerBotHandlers } from './bots';
 import { registerBrowserHandlers } from './browser';
 import { registerBtwHandlers } from './btw';
 import { registerCapabilityHandlers } from './capabilities';
@@ -57,6 +58,7 @@ export function registerIpcHandlers(): void {
   registerResourceHandlers();
   registerMemoryHandlers();
   registerBtwHandlers();
+  registerBotHandlers();
   registerAppBadgeHandlers();
   registerSpeechHandlers();
 

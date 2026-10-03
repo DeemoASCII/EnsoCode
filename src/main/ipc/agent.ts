@@ -190,6 +190,8 @@ const pendingAgentControl = new Map<string, AbortController>();
 const pendingComputer = new Map<string, AbortController>();
 let sourceBindings: ActiveConversationRegistry | null = null;
 let sourceAuthority: SourceAuthorityRegistry | null = null;
+let botWorkerObserver: ((event: AgentWorkerEvent | { type: 'worker-exited' }) => void) | null =
+  null;
 const selectionClockOwners = new WeakSet<WebContents>();
 
 function watchSelectionClock(sender: WebContents): void {
@@ -211,6 +213,13 @@ export function getAgentService(): AgentService | null {
 
 export function getSourceAuthorityRegistry(): SourceAuthorityRegistry | null {
   return sourceAuthority;
+}
+
+/** Bot 会话宿主订阅 worker 事件（turn 结果、运行态） */
+export function setBotWorkerEventObserver(
+  observer: ((event: AgentWorkerEvent | { type: 'worker-exited' }) => void) | null
+): void {
+  botWorkerObserver = observer;
 }
 
 function broadcastAgentEvent(event: RendererAgentEvent): void {
@@ -307,6 +316,10 @@ function spawnBoundSession(
   request: AgentSpawnRequest,
   credentialKeys: ReadonlySet<string>
 ) {
+  // bot 会话的人设 / 工作区只能由 Main 的 BotSessionHost 组装，通用 spawn 路径一律拒绝
+  if (sourceAuthority?.conversation(request.sessionId)?.bot) {
+    return { ok: false, error: 'bot conversation must be spawned by bot host' };
+  }
   return spawnSession(
     identity,
     request,
@@ -473,6 +486,14 @@ async function readParentHistoryTail(
   const persisted = agentSessionIndex.persistedConversation(conversationId);
   const sessionFile =
     typeof persisted?.sessionFile === 'string' ? persisted.sessionFile : undefined;
+  return readSessionHistoryFile(sessionFile, beforeIndex);
+}
+
+/** 根会话 pi jsonl 的尾窗 / 分页投影；路径须落在 sessions 目录内 */
+export async function readSessionHistoryFile(
+  sessionFile: string | undefined,
+  beforeIndex?: number
+): Promise<ParentHistoryTailResult> {
   const sessionDir = path.join(app.getPath('userData'), 'agent', 'sessions');
   const resolved = resolveParentHistoryFile(sessionDir, sessionFile);
   if (!resolved) {
@@ -915,6 +936,7 @@ export function registerAgentHandlers(): void {
       return;
     dispatchService?.observe(workerEvent);
     agentService?.observe(workerEvent);
+    botWorkerObserver?.(workerEvent);
     if (workerEvent.type === 'turn-completed' || workerEvent.type === 'turn-failed') {
       const file = agentSessionIndex.sessionFile(workerEvent.identity);
       if (file) {
@@ -1131,7 +1153,7 @@ export function registerAgentHandlers(): void {
     broadcastAgentEvent(workerEvent);
   });
 
-  ipcMain.handle(IPC_CHANNELS.SOURCE_AUTHORITY_READ, () => sourceAuthority!.projection());
+  ipcMain.handle(IPC_CHANNELS.SOURCE_AUTHORITY_READ, () => sourceAuthority!.rendererProjection());
 
   ipcMain.handle(IPC_CHANNELS.SOURCE_CONVERSATION_CREATE, (event, request: unknown) => {
     if (!isMainWebContents(event.sender.id))

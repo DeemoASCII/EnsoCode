@@ -345,6 +345,36 @@ describe('Main-owned source authority contracts', () => {
     expect(parseConversationAuthority({ ...conversation, parentId: 'forged' })).toBeNull();
   });
 
+  it('bot-home 项目与 bot 会话绑定只在权威形状里出现，renderer 创建请求不得携带', () => {
+    const botId = '33333333-3333-4333-8333-333333333333';
+    const chatId = '44444444-4444-4444-8444-444444444444';
+    const home = { projectId, canonicalPath: '/u/bots/x/workspace', kind: 'bot-home' };
+    expect(parseProjectAuthority({ ...home, state: 'active', version: 1 })).not.toBeNull();
+    expect(
+      parseProjectAuthority({ ...home, sshHost: 'h', state: 'active', version: 1 })
+    ).toBeNull();
+    expect(
+      parseCreateProjectAuthorityRequest({ requestId: 'p', path: '/x', kind: 'bot-home' })
+    ).toBeNull();
+
+    const base = { conversationId, projectId, kind: 'root', lifecycle: 'draft', version: 1 };
+    const direct = { ...base, bot: { botId, chatId } };
+    expect(parseConversationAuthority(direct)).toEqual(direct);
+    const delegated = { ...base, bot: { botId, chatId: null, delegationId: 'd-1' } };
+    expect(parseConversationAuthority(delegated)).toEqual(delegated);
+    expect(parseConversationAuthority({ ...base, bot: { botId: 'x', chatId } })).toBeNull();
+    expect(parseConversationAuthority({ ...base, bot: { botId } })).toBeNull();
+    expect(parseConversationAuthority({ ...base, bot: { botId, chatId, extra: 1 } })).toBeNull();
+    expect(
+      parseCreateConversationAuthorityRequest({
+        requestId: 'c',
+        projectId,
+        projectVersion: 1,
+        bot: { botId, chatId },
+      })
+    ).toBeNull();
+  });
+
   it('project/conversation 专用 mutations strict，id 由 Main result 生成', () => {
     expect(parseCreateProjectAuthorityRequest({ requestId: 'p1', path: '/repo' })).not.toBeNull();
     expect(

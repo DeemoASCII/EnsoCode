@@ -267,6 +267,32 @@ describe('agent IPC Main identity boundary', () => {
     }
   );
 
+  it('通用 AGENT_SPAWN 拒绝 bot 会话（人设与工作区只能由 BotSessionHost 组装）', async () => {
+    const authority = getSourceAuthorityRegistry()!;
+    vi.spyOn(authority, 'conversation').mockReturnValue({
+      conversationId: 'bot-target',
+      projectId: 'p',
+      kind: 'root',
+      lifecycle: 'draft',
+      version: 1,
+      bot: { botId: '11111111-1111-4111-8111-111111111111', chatId: null },
+    });
+    vi.spyOn(authority, 'project').mockReturnValue({
+      projectId: 'p',
+      canonicalPath: '/repo',
+      state: 'active',
+      version: 1,
+    });
+    const result = await mocks.handlers.get(IPC_CHANNELS.AGENT_SPAWN)!(event, {
+      sessionId: 'bot-target',
+      providerId: 'provider',
+      modelId: 'model',
+      cwd: '/repo',
+    });
+    expect(result).toMatchObject({ ok: false });
+    expect(mocks.spawnSession).not.toHaveBeenCalled();
+  });
+
   it('cleans a late fork file if the target was removed before completion', () => {
     const sourceId = '11111111-1111-4111-8111-111111111111';
     const targetId = '33333333-3333-4333-8333-333333333333';

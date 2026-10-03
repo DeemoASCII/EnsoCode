@@ -2,6 +2,9 @@ import { parseWindowsLocalShell } from './windowsLocalShell';
 
 export type ChildProfileShell = 'bash' | 'powershell';
 
+/** 父会话 disabledTools 里的伪 id：命中时不挂 shell 与文件写工具（与 readonly 子代理同档） */
+export const WORKSPACE_WRITE_TOOL_ID = 'workspace_write';
+
 export interface ChildProfileToolOptions {
   /** 缺省 apply_patch：只挂 apply_patch，不挂 edit/write */
   editMode?: 'replace' | 'apply_patch';

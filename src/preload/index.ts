@@ -125,6 +125,23 @@ import type {
 } from '@shared/types/agent';
 import { parseDispatchMainEvent } from '@shared/types/agent';
 import type {
+  BotActionResult,
+  BotChatCreateInput,
+  BotChatSessionsResult,
+  BotChatsListResult,
+  BotChatUpdateInput,
+  BotChatWriteResult,
+  BotDraftInput,
+  BotEvent,
+  BotGetResult,
+  BotNewSessionResult,
+  BotSendRequest,
+  BotSendResult,
+  BotsListResult,
+  BotTimelineResult,
+  BotWriteIpcResult,
+} from '@shared/types/botIpc';
+import type {
   BrowserClearKind,
   BrowserDesignModeEvent,
   BrowserTabState,
@@ -1096,6 +1113,52 @@ const electronAPI = {
       ipcRenderer.invoke(IPC_CHANNELS.BTW_SPAWN, request),
     dispose: (request: BtwDisposeRequest): Promise<{ ok: boolean; error?: string }> =>
       ipcRenderer.invoke(IPC_CHANNELS.BTW_DISPOSE, request),
+  },
+  bots: {
+    list: (): Promise<BotsListResult> => ipcRenderer.invoke(IPC_CHANNELS.BOTS_LIST),
+    get: (botId: string): Promise<BotGetResult> =>
+      ipcRenderer.invoke(IPC_CHANNELS.BOT_GET, { botId }),
+    create: (draft: BotDraftInput): Promise<BotWriteIpcResult> =>
+      ipcRenderer.invoke(IPC_CHANNELS.BOT_CREATE, draft),
+    update: (request: {
+      botId: string;
+      expectedVersion?: number;
+      draft: BotDraftInput;
+    }): Promise<BotWriteIpcResult> => ipcRenderer.invoke(IPC_CHANNELS.BOT_UPDATE, request),
+    archive: (botId: string, archived: boolean): Promise<BotWriteIpcResult> =>
+      ipcRenderer.invoke(IPC_CHANNELS.BOT_ARCHIVE, { botId, archived }),
+    remove: (botId: string): Promise<BotActionResult> =>
+      ipcRenderer.invoke(IPC_CHANNELS.BOT_DELETE, { botId }),
+    chats: (): Promise<BotChatsListResult> => ipcRenderer.invoke(IPC_CHANNELS.BOT_CHATS_LIST),
+    createChat: (request: BotChatCreateInput): Promise<BotChatWriteResult> =>
+      ipcRenderer.invoke(IPC_CHANNELS.BOT_CHAT_CREATE, request),
+    updateChat: (request: BotChatUpdateInput): Promise<BotChatWriteResult> =>
+      ipcRenderer.invoke(IPC_CHANNELS.BOT_CHAT_UPDATE, request),
+    deleteChat: (chatId: string): Promise<BotActionResult> =>
+      ipcRenderer.invoke(IPC_CHANNELS.BOT_CHAT_DELETE, { chatId }),
+    newSession: (chatId: string): Promise<BotNewSessionResult> =>
+      ipcRenderer.invoke(IPC_CHANNELS.BOT_CHAT_NEW_SESSION, { chatId }),
+    chatSessions: (chatId: string): Promise<BotChatSessionsResult> =>
+      ipcRenderer.invoke(IPC_CHANNELS.BOT_CHAT_SESSIONS, { chatId }),
+    timeline: (request: {
+      chatId: string;
+      beforeSeq?: number;
+      limit?: number;
+    }): Promise<BotTimelineResult> => ipcRenderer.invoke(IPC_CHANNELS.BOT_CHAT_TIMELINE, request),
+    send: (request: BotSendRequest): Promise<BotSendResult> =>
+      ipcRenderer.invoke(IPC_CHANNELS.BOT_SEND, request),
+    openWorkspace: (target: { chatId: string } | { botId: string }): Promise<BotActionResult> =>
+      ipcRenderer.invoke(IPC_CHANNELS.BOT_OPEN_WORKSPACE, target),
+    sessionHistory: (request: {
+      conversationId: string;
+      beforeIndex?: number;
+    }): Promise<ParentHistoryTailResult> =>
+      ipcRenderer.invoke(IPC_CHANNELS.BOT_SESSION_HISTORY, request),
+    onEvent: (callback: (event: BotEvent) => void): (() => void) => {
+      const listener = (_: unknown, event: BotEvent) => callback(event);
+      ipcRenderer.on(IPC_CHANNELS.BOT_EVENT, listener);
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.BOT_EVENT, listener);
+    },
   },
   terminal: {
     create: (request: TerminalCreateRequest): Promise<TerminalCreateResult> =>

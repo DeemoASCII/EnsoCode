@@ -146,6 +146,8 @@ export interface SettingsState {
   memoryKgEnabled: boolean;
   /** 语音输入：开启后才提示下载本地识别模型；缺省关 */
   voiceInputEnabled: boolean;
+  /** 实验功能：Bot 模式；缺省关，关闭时 Main 不启动 Bot 后台逻辑 */
+  botModeEnabled: boolean;
   /** 桌面录音用的麦克风设备 id；SYSTEM_MICROPHONE 跟随系统 */
   voiceInputDevice: string;
   /** 本机语音识别模型 */
@@ -325,6 +327,7 @@ export interface SettingsState {
   setMemoryDistillEnabled: (value: boolean) => void;
   setMemoryKgEnabled: (value: boolean) => void;
   setVoiceInputEnabled: (value: boolean) => void;
+  setBotModeEnabled: (value: boolean) => void;
   setVoiceInputDevice: (deviceId: string) => void;
   setVoiceModel: (model: SpeechModelId) => void;
   setVoiceCorrectionEnabled: (value: boolean) => void;

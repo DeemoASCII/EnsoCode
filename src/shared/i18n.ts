@@ -1078,6 +1078,11 @@ export const zhTranslations: Record<string, string> = {
   'No speech detected.': '没有识别到语音。',
   'Voice input failed.': '语音识别失败。',
   'Voice input is turned off.': '语音输入已关闭。',
+  Experimental: '实验功能',
+  'Bot mode': 'Bot 模式',
+  'Chat with AI members that have personas, form groups and delegate work. Off by default.':
+    '与有人设的 AI 成员私聊、拉群并互相委派工作。默认关闭。',
+  'Bot mode is turned off.': 'Bot 模式已关闭。',
   'The speech model is not downloaded yet.': '语音模型尚未下载。',
   'The recording was empty or too long.': '录音为空或过长。',
   'Voice input needs a secure (HTTPS) connection.': '语音输入需要 HTTPS 安全连接。',

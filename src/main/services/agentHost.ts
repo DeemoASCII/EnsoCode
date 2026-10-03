@@ -672,6 +672,13 @@ export function spawnSession(
     rolePrompt?: string;
     extraDisabledTools?: readonly string[];
     omitDispatchTools?: boolean;
+    /** Bot 会话：人设、指令与技能/MCP 选择全由 Main 按成员档案组装，替代预设与插件资源 */
+    bot?: {
+      systemPrompt: string;
+      instruction: { path: string; content: string };
+      skillIds: string[];
+      mcpServerIds: string[];
+    };
   }
 ): { ok: boolean; error?: string } {
   if (request.resumeFile && !existsSync(request.resumeFile)) {
@@ -692,21 +699,26 @@ export function spawnSession(
     return { ok: false, error: 'Select an assistant approval model in Settings first.' };
   }
   const approvalReviewerConfig = reviewer.ok ? reviewer.selection?.config : undefined;
-  const preset = resolvePreset(request.presetId);
-  const systemPrompt = resolvePresetSystemPrompt(preset);
+  const bot = options?.bot;
+  const preset: Preset | undefined = bot
+    ? { id: 'bot', name: 'bot', skillIds: bot.skillIds, mcpServerIds: bot.mcpServerIds }
+    : resolvePreset(request.presetId);
+  const systemPrompt = bot
+    ? { ok: true as const, content: bot.systemPrompt }
+    : resolvePresetSystemPrompt(preset);
   if (!systemPrompt.ok) {
     return { ok: false, error: '自定义系统提示词正文读取失败，请重新保存或恢复默认。' };
   }
-  const instruction = resolveGlobalInstruction(
-    preset ? { instructionId: preset.instructionId } : undefined
-  );
+  const instruction = bot
+    ? bot.instruction
+    : resolveGlobalInstruction(preset ? { instructionId: preset.instructionId } : undefined);
   const state = readSettingsState();
   // Claude 插件：按各自开关现读安装目录，不受预设影响
   const plugins = enabledPlugins(state);
-  const skillPaths = [...enabledSkillPaths(preset), ...plugins.skillPaths];
+  const skillPaths = [...enabledSkillPaths(preset), ...(bot ? [] : plugins.skillPaths)];
   const mcpServers = enabledMcpServers(preset);
   const mcpNames = new Set(mcpServers.map((server) => server.name));
-  for (const server of plugins.mcpServers) {
+  for (const server of bot ? [] : plugins.mcpServers) {
     if (!mcpNames.has(server.name)) mcpServers.push(server);
     mcpNames.add(server.name);
   }
