@@ -63,18 +63,20 @@ interface BotProfile {
   name: string;              // 群内 @ 用，唯一（大小写不敏感）
   title: string;             // 头衔，如「后端」
   scope: string;             // 一句话职责，用于路由提示和委派目录
-  avatar: { crop: CircleCrop | null; color: string };
-  engine: { providerId: string; modelId: string; thinkingLevel?: ThinkingLevel };
+  avatar: { color: string };            // 头像原图另存 avatar.png
+  engine?: { providerId: string; modelId: string; thinkingLevel?: ThinkingLevel };  // 缺省跟随全局默认模型
   approvalMode: ApprovalMode;            // 复用现有档位，新建默认完全放行（full）
-  tools: 'all' | 'readonly' | { allow: string[] };
+  tools: 'all' | 'readonly';            // 与自定义 agent 类型一致
   skillIds: string[]; mcpServerIds: string[];
-  home: { kind: 'bot-home' } | { kind: 'project'; projectId: string };
   delegation: { canDelegateTo: 'any' | string[]; acceptFrom: 'any' | string[] };
   memory: { enabled: boolean };
-  archivedAt?: string;
+  archivedAt?: number;
+  createdAt: number; updatedAt: number;
   version: number;
 }
 ```
+
+实现：`src/shared/types/bot.ts`（类型与收窄）、`src/main/services/bots/botStore.ts`。私聊的工作区由聊天的 `workspace` 决定，成员档案不再单独记 home。
 
 - 名字不能与内置 agent 类型重名（大小写不敏感）。
 - **归档**（默认的「删除」）：从列表隐藏，私聊、记忆、例行任务全部保留，可恢复；例行任务暂停。**彻底删除**需二次确认，级联删除其私聊、委派会话、`bot:<id>` 记忆、例行任务和成员 home；所在群的历史发言保留（显示为「已删除成员」），群里不能再 @ 他；他若是群主，删除前要求先换群主。
