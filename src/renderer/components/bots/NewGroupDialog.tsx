@@ -109,7 +109,7 @@ export function NewGroupDialog({
         <DialogHeader>
           <DialogTitle>{t('New group chat')}</DialogTitle>
           <DialogDescription>
-            {t('One member replies at a time. Without @, the group owner replies.')}
+            {t('One member replies at a time. Without @, the best-fit member is picked to reply.')}
           </DialogDescription>
         </DialogHeader>
         <DialogPanel className="max-h-[65vh] space-y-4">

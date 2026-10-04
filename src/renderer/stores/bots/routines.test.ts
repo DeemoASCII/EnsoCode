@@ -9,7 +9,7 @@ const chat = (over: Partial<BotChat>): BotChat => ({
   members: ['b1'],
   bossBotId: null,
   workspace: { kind: 'member-home' },
-  routing: { maxHops: 4, maxTurnsPerBot: 2 },
+  routing: { mode: 'boss', maxHops: 4, maxTurnsPerBot: 2 },
   pinned: false,
   sessions: {},
   createdAt: 1,

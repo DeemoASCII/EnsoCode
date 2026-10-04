@@ -24,7 +24,7 @@ import type {
 import type { AgentMode, ApprovalMode, ThinkingLevel } from '@shared/types/agent';
 import type { SpeechModelId } from '@shared/types/speech';
 import type { ModelPricing, PricingTable } from '@shared/usage/pricing';
-import type { VirtualModelEntry } from '@shared/virtualModels';
+import type { VirtualClassifierConfig, VirtualModelEntry } from '@shared/virtualModels';
 import type { WindowsLocalShell } from '@shared/windowsLocalShell';
 import type { OauthCredentialSnapshot } from '@/stores/oauthCredentials';
 
@@ -148,6 +148,8 @@ export interface SettingsState {
   voiceInputEnabled: boolean;
   /** 实验功能：Bot 模式；缺省关，关闭时 Main 不启动 Bot 后台逻辑 */
   botModeEnabled: boolean;
+  /** Bot 群聊智能选人的分类来源；null 走标题模型回退链 judge */
+  botRouteClassifier: VirtualClassifierConfig | null;
   /** 桌面录音用的麦克风设备 id；SYSTEM_MICROPHONE 跟随系统 */
   voiceInputDevice: string;
   /** 本机语音识别模型 */
@@ -328,6 +330,7 @@ export interface SettingsState {
   setMemoryKgEnabled: (value: boolean) => void;
   setVoiceInputEnabled: (value: boolean) => void;
   setBotModeEnabled: (value: boolean) => void;
+  setBotRouteClassifier: (value: VirtualClassifierConfig | null) => void;
   setVoiceInputDevice: (deviceId: string) => void;
   setVoiceModel: (model: SpeechModelId) => void;
   setVoiceCorrectionEnabled: (value: boolean) => void;

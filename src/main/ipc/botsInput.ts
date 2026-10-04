@@ -6,7 +6,13 @@ import {
   THINKING_LEVELS,
   type ThinkingLevel,
 } from '@shared/types/agent';
-import { type BotChat, type BotList, isBotId } from '@shared/types/bot';
+import {
+  BOT_ROUTING_MODES,
+  type BotChat,
+  type BotList,
+  type BotRoutingMode,
+  isBotId,
+} from '@shared/types/bot';
 import type { BotChatUpdateInput, BotChatWorkspaceInput } from '@shared/types/botIpc';
 import type { BotDraft } from '../services/bots/botStore';
 
@@ -163,8 +169,12 @@ function parseWorkspaceInput(value: unknown): ChatWorkspaceInput | null {
 
 function parseRouting(value: unknown): Partial<BotChat['routing']> | null {
   const input = record(value);
-  if (!input || !onlyKeys(input, ['maxHops', 'maxTurnsPerBot'])) return null;
+  if (!input || !onlyKeys(input, ['mode', 'maxHops', 'maxTurnsPerBot'])) return null;
   const routing: Partial<BotChat['routing']> = {};
+  if (input.mode !== undefined) {
+    if (!BOT_ROUTING_MODES.includes(input.mode as BotRoutingMode)) return null;
+    routing.mode = input.mode as BotRoutingMode;
+  }
   for (const key of ['maxHops', 'maxTurnsPerBot'] as const) {
     if (input[key] === undefined) continue;
     if (!seq(input[key])) return null;

@@ -1,0 +1,65 @@
+import {
+  parseSmartRouteReply,
+  pickSmartRouteChoice,
+  type SmartRouteInput,
+  smartRouteJudgePrompt,
+  smartRouteQuestion,
+} from '../../../shared/bots/smartRoute';
+import type { DefaultModelRef } from '../../../shared/defaultModel';
+import {
+  parseVirtualClassifier,
+  VIRTUAL_CLASSIFIER_DEFAULT_TIMEOUT_MS,
+  type VirtualClassifierConfig,
+} from '../../../shared/virtualModels';
+import type { GroupResponderSelector } from './groupChat';
+
+interface SmartRouterDeps {
+  settings: () => Record<string, unknown> | undefined;
+  /** 便宜模型一次性补全：preferred 排最前，其后是标题模型回退链；没有可用模型返回 null */
+  judge: (
+    request: {
+      systemPrompt: string;
+      userText: string;
+      preferred: DefaultModelRef | undefined;
+      timeoutMs: number;
+    },
+    signal: AbortSignal
+  ) => Promise<string | null>;
+  /** pi 分类器 choice 问题；分类器不可用返回 null */
+  classify: (
+    config: VirtualClassifierConfig,
+    question: ReturnType<typeof smartRouteQuestion>,
+    signal: AbortSignal
+  ) => Promise<Record<string, number> | null>;
+}
+
+/** 全局「群聊选人模型」：未设置走 judge + 标题模型回退链；judge 指定快模型；pi-classifier 走 worker 分类 */
+export function createSmartRouter(deps: SmartRouterDeps): GroupResponderSelector {
+  const config = () => parseVirtualClassifier(deps.settings()?.botRouteClassifier);
+  return {
+    timeoutMs: () => config()?.timeoutMs ?? VIRTUAL_CLASSIFIER_DEFAULT_TIMEOUT_MS,
+    async select(input: SmartRouteInput, signal: AbortSignal) {
+      const current = config();
+      if (current?.source === 'pi-classifier') {
+        const probabilities = await deps.classify(current, smartRouteQuestion(input), signal);
+        if (!probabilities) console.warn('[bots] smart routing: classifier unavailable');
+        return probabilities ? pickSmartRouteChoice(probabilities, input) : null;
+      }
+      const text = await deps.judge(
+        {
+          ...smartRouteJudgePrompt(input),
+          preferred: current?.model,
+          timeoutMs: current?.timeoutMs ?? VIRTUAL_CLASSIFIER_DEFAULT_TIMEOUT_MS,
+        },
+        signal
+      );
+      if (text === null) {
+        console.warn('[bots] smart routing: no model available');
+        return null;
+      }
+      const picked = parseSmartRouteReply(text, input);
+      if (!picked) console.warn('[bots] smart routing reply not understood:', text.slice(0, 80));
+      return picked;
+    },
+  };
+}

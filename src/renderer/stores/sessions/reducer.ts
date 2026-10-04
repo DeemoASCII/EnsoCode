@@ -284,6 +284,8 @@ const eventIdentity = (event: RendererAgentEvent): SessionIdentity | null => {
   if (
     event.type === 'text-completed' ||
     event.type === 'text-failed' ||
+    event.type === 'choice-classified' ||
+    event.type === 'choice-failed' ||
     event.type === 'text-delta'
   )
     return null;
@@ -391,6 +393,8 @@ export function applyAgentEvent(
   if (
     event.type === 'text-completed' ||
     event.type === 'text-failed' ||
+    event.type === 'choice-classified' ||
+    event.type === 'choice-failed' ||
     event.type === 'text-delta'
   )
     return state;

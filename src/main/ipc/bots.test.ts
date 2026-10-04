@@ -35,6 +35,7 @@ vi.mock('../services/sessionFileCleanup', () => ({ removeConversationSessionFile
 vi.mock('../services/agentHost', () => ({
   agentTypeRegistrySnapshot: () => ({ revision: 0, candidates: [{ displayName: 'Reviewer' }] }),
   readSettingsState: () => mocks.settings,
+  isAgentWorkerReady: () => false,
   resolveModelSelection: () => ({ ok: true }),
   spawnSession: mocks.spawnSession,
   promptSession: mocks.promptSession,
@@ -226,16 +227,23 @@ describe('bots IPC', () => {
       workspace: { kind: 'chat-home' },
     });
     expect(group.ok).toBe(true);
+    expect(group.chat).toMatchObject({ routing: { mode: 'smart' } });
     const chatId = (group.chat as { id: string }).id;
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     expect(await call(IPC_CHANNELS.BOT_SEND, { chatId, text: 'hi', deliveryId: 'd' })).toEqual({
       ok: true,
     });
-    expect(await call(IPC_CHANNELS.BOT_CHAT_STATE, { chatId })).toMatchObject({
-      ok: true,
-      current: alice,
-      queue: [],
-      pendingHuman: false,
-    });
+    // 新群缺省智能选人；worker 不在线没有可用模型 → 兜底群主
+    await vi.waitFor(async () =>
+      expect(await call(IPC_CHANNELS.BOT_CHAT_STATE, { chatId })).toMatchObject({
+        ok: true,
+        current: alice,
+        queue: [],
+        pendingHuman: false,
+        routing: false,
+      })
+    );
+    warn.mockRestore();
     expect(await call(IPC_CHANNELS.BOT_CHAT_STOP, { chatId })).toEqual({ ok: true });
     expect(await call(IPC_CHANNELS.BOT_CHAT_STATE, { chatId })).toMatchObject({
       ok: true,

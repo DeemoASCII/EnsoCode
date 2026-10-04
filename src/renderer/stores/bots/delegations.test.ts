@@ -34,7 +34,7 @@ const chat: BotChat = {
   members: ['boss', 'ops'],
   bossBotId: 'boss',
   workspace: { kind: 'chat-home', projectId: 'p' },
-  routing: { maxHops: 4, maxTurnsPerBot: 2 },
+  routing: { mode: 'boss', maxHops: 4, maxTurnsPerBot: 2 },
   pinned: false,
   sessions: { boss: { conversationId: 'p1', cursor: 0 } },
   createdAt: 1,

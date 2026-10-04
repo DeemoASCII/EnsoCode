@@ -28,6 +28,7 @@ export interface ChatRuntime {
   hops: number;
   turnsByBot: Record<string, number>;
   pendingHuman: boolean;
+  routing: boolean;
 }
 
 export type BotView = { kind: 'chat'; chatId: string } | { kind: 'inbox' } | null;

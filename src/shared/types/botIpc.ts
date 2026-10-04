@@ -108,6 +108,8 @@ export type BotChatStateResult =
       hops: number;
       turnsByBot: Record<string, number>;
       pendingHuman: boolean;
+      /** 正在智能选人（分类中） */
+      routing: boolean;
     }
   | BotIpcError;
 export type BotNewSessionResult = { ok: true; conversationId: string } | BotIpcError;

@@ -178,6 +178,13 @@ const STATIC_CATALOG: SettingsSearchEntry[] = [
     title: 'Bot mode (experimental)',
   },
   {
+    id: 'general.botRouteClassifier',
+    category: 'general',
+    title: 'Group reply picker model',
+    description:
+      'When nobody is @-mentioned in a smart-routing group, this model picks which member replies.',
+  },
+  {
     id: 'general.notifyMainAgentOnly',
     category: 'general',
     title: 'Notify only for the main agent',

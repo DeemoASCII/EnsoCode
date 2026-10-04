@@ -204,6 +204,7 @@ describe('buildSettingsCatalog', () => {
     'general.collapseCompletedActivity',
     'general.pinUnfinishedTodos',
     'general.botMode',
+    'general.botRouteClassifier',
     'general.notifyMainAgentOnly',
     'general.smartCompactEnabled',
     'general.generationStallTimeout',

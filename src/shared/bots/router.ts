@@ -85,9 +85,12 @@ function advance(state: RouterState): RouterState {
 export function startRound(
   chat: RouterChat,
   members: readonly RouterMember[],
-  humanEntry: HumanEntry
+  humanEntry: HumanEntry,
+  /** 智能选人结果；不在群或已归档时退回群主 */
+  picked: BotId | null = null
 ): RouterState {
   let targets = humanTargets(chat, members, humanEntry);
+  if (targets.length === 0 && picked) targets = mentionedActive(chat, members, [picked]);
   if (targets.length === 0 && chat.bossBotId)
     targets = mentionedActive(chat, members, [chat.bossBotId]);
   return advance({
@@ -98,6 +101,22 @@ export function startRound(
     turnsByBot: {},
     noticed: [],
   });
+}
+
+/** 智能选人只接管：smart 模式、人类消息没有任何 @（含 @所有人、@已归档成员），且至少两位可选成员 */
+export function needsSmartRoute(
+  chat: RouterChat,
+  members: readonly RouterMember[],
+  humanEntry: HumanEntry
+): boolean {
+  if (chat.routing.mode !== 'smart') return false;
+  if (Array.isArray(humanEntry.mentions) && humanEntry.mentions.length > 0) return false;
+  const inChat = (Array.isArray(members) ? members : []).filter(
+    (m) => m && chat.members.includes(m.id)
+  );
+  const parsed = parseMentions(humanEntry.text, inChat);
+  if (parsed.all || parsed.ids.length > 0) return false;
+  return activeMembers(chat, members).length >= 2;
 }
 
 export const isSkipReply = (text: string): boolean =>

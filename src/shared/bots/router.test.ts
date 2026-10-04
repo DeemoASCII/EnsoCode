@@ -3,6 +3,7 @@ import type { BotChat, GroupEntry } from '../types/bot';
 import {
   isSkipReply,
   mergePending,
+  needsSmartRoute,
   onHumanMessage,
   onReply,
   type RouterState,
@@ -19,7 +20,10 @@ const members = [
   { id: 'old', name: '老员工', archivedAt: 1 },
 ];
 
-function chat(routing = { maxHops: 4, maxTurnsPerBot: 2 }): BotChat {
+function chat(
+  routing: Partial<BotChat['routing']> = {},
+  mode: BotChat['routing']['mode'] = 'boss'
+): BotChat {
   return {
     id: 'chat',
     kind: 'group',
@@ -27,7 +31,7 @@ function chat(routing = { maxHops: 4, maxTurnsPerBot: 2 }): BotChat {
     members: ['boss', 'fe', 'be', 'old'],
     bossBotId: 'boss',
     workspace: { kind: 'project', projectId: 'p' },
-    routing,
+    routing: { mode, maxHops: 4, maxTurnsPerBot: 2, ...routing },
     pinned: false,
     sessions: {
       boss: { conversationId: 'c-boss', cursor: 0 },
@@ -86,6 +90,45 @@ describe('startRound', () => {
     const state = startRound(chat(), [], human('hi'));
     expect(state.current).toBeNull();
     expect(state.queue).toEqual([]);
+  });
+
+  it('没有 @ 时用智能选中的在群成员', () => {
+    const state = startRound(chat({}, 'smart'), members, human('hi'), 'be');
+    expect(state.current).toBe('be');
+    expect(state.turnsByBot).toEqual({ be: 1 });
+  });
+
+  it('智能选中已归档或不在群的成员时退回群主', () => {
+    expect(startRound(chat({}, 'smart'), members, human('hi'), 'old').current).toBe('boss');
+    expect(startRound(chat({}, 'smart'), members, human('hi'), 'ghost').current).toBe('boss');
+    expect(startRound(chat({}, 'smart'), members, human('hi'), null).current).toBe('boss');
+  });
+
+  it('有 @ 时忽略智能选人结果', () => {
+    expect(startRound(chat({}, 'smart'), members, human('@前端'), 'be').current).toBe('fe');
+  });
+});
+
+describe('needsSmartRoute', () => {
+  const smart = chat({}, 'smart');
+
+  it('smart 模式下没有任何 @ 的人类消息需要智能选人', () => {
+    expect(needsSmartRoute(smart, members, human('帮我看看'))).toBe(true);
+  });
+
+  it('boss 模式不选人', () => {
+    expect(needsSmartRoute(chat(), members, human('帮我看看'))).toBe(false);
+  });
+
+  it('含 @（含 @所有人、@已归档成员）时不选人', () => {
+    expect(needsSmartRoute(smart, members, human('@前端 看看'))).toBe(false);
+    expect(needsSmartRoute(smart, members, human('@所有人 看看'))).toBe(false);
+    expect(needsSmartRoute(smart, members, human('@老员工 看看'))).toBe(false);
+    expect(needsSmartRoute(smart, members, human('看看', ['fe']))).toBe(false);
+  });
+
+  it('可选成员不足两位时不选人', () => {
+    expect(needsSmartRoute(smart, members.slice(0, 1), human('hi'))).toBe(false);
   });
 });
 

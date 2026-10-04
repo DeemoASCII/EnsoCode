@@ -54,6 +54,7 @@ import type {
   SubagentModelOption,
   ThinkingLevel,
   TitleSummaryInput,
+  VirtualClassifierCredentials,
   VirtualSpawnClassifier,
 } from '@shared/types/agent';
 import { parseAgentWorkerEvent } from '@shared/types/agent';
@@ -225,7 +226,7 @@ export function startAgentWorker(): void {
       // 手动重读结果只回给发起 invoke 的等待者，不进普通事件流（renderer 的通用
       // snapshot 分支会顺手改 started / 清 asks，手动刷新不能有这些副作用）
       if (pendingReloads.settle(event) || workspaceLocks.settle(event)) return;
-      if (settleCompletion(event)) return;
+      if (settleCompletion(event) || settleChoice(event)) return;
       onEvent?.(event);
     }
   });
@@ -239,6 +240,10 @@ export function startAgentWorker(): void {
     workspaceLocks.failAll('agent worker exited');
     for (const [id, p] of pendingCompletions) {
       pendingCompletions.delete(id);
+      p.reject(new Error('agent worker exited'));
+    }
+    for (const [id, p] of pendingChoices) {
+      pendingChoices.delete(id);
       p.reject(new Error('agent worker exited'));
     }
     onEvent?.({ type: 'worker-exited' });
@@ -468,7 +473,7 @@ function resolveVirtualModelSelection(
   };
 }
 
-function resolveVirtualClassifier(
+export function resolveVirtualClassifier(
   classifier: VirtualClassifierConfig,
   authenticatedAccountKeys: ReadonlySet<string>
 ): VirtualSpawnClassifier | undefined {
@@ -1100,6 +1105,73 @@ export function completeText(input: {
     if (!posted.ok) {
       pendingCompletions.get(requestId)?.reject(new Error(posted.error ?? 'post failed'));
       pendingCompletions.delete(requestId);
+    }
+  });
+}
+
+const pendingChoices = new Map<
+  string,
+  { resolve: (probabilities: Record<string, number>) => void; reject: (error: Error) => void }
+>();
+
+function settleChoice(event: AgentWorkerEvent): boolean {
+  if (event.type !== 'choice-classified' && event.type !== 'choice-failed') return false;
+  const p = pendingChoices.get(event.requestId);
+  if (!p) return true;
+  pendingChoices.delete(event.requestId);
+  if (event.type === 'choice-classified') p.resolve(event.probabilities);
+  else p.reject(new Error(event.error));
+  return true;
+}
+
+/**
+ * 一次性 pi 分类器 choice 问题（群聊智能选人）：worker 跑 runtime.classify，按 requestId 回流概率。
+ * signal 中止时先拒绝等待者再通知 worker 停止；worker 不在 / 退出 / 超时都 reject。
+ */
+export function classifyChoice(
+  input: {
+    classifier: VirtualClassifierCredentials;
+    state: Record<string, unknown>;
+    instructions: string;
+    criteria: Record<string, string>;
+    timeoutMs: number;
+  },
+  signal?: AbortSignal
+): Promise<Record<string, number>> {
+  if (!worker || !workerReady) return Promise.reject(new Error('Agent worker is not running.'));
+  if (signal?.aborted) return Promise.reject(new Error('aborted'));
+  const requestId = randomUUID();
+  return new Promise((resolve, reject) => {
+    const cleanup = () => {
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', onAbort);
+    };
+    const timer = setTimeout(() => {
+      pendingChoices.delete(requestId);
+      cleanup();
+      reject(new Error('classify timed out'));
+    }, input.timeoutMs + 2_000);
+    const onAbort = () => {
+      if (!pendingChoices.delete(requestId)) return;
+      cleanup();
+      reject(new Error('aborted'));
+      sendAgentCommand({ type: 'abort-classify-choice', requestId });
+    };
+    signal?.addEventListener('abort', onAbort, { once: true });
+    pendingChoices.set(requestId, {
+      resolve: (probabilities) => {
+        cleanup();
+        resolve(probabilities);
+      },
+      reject: (error) => {
+        cleanup();
+        reject(error);
+      },
+    });
+    const posted = sendAgentCommand({ type: 'classify-choice', requestId, ...input });
+    if (!posted.ok) {
+      pendingChoices.get(requestId)?.reject(new Error(posted.error ?? 'post failed'));
+      pendingChoices.delete(requestId);
     }
   });
 }

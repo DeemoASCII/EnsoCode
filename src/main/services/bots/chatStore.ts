@@ -71,6 +71,8 @@ export class BotChatStore {
     const at = this.now();
     const chat = parseBotChat({
       ...draft,
+      // 解析缺省为 boss（旧数据不变）；新建群缺省智能选人
+      routing: { ...(draft.kind === 'group' ? { mode: 'smart' } : {}), ...draft.routing },
       id,
       pinned: false,
       sessions: {},

@@ -20,12 +20,17 @@ import type {
 } from '@shared/types/botIpc';
 import { app, ipcMain, shell } from 'electron';
 import {
+  abortCompleteText,
   abortSession,
   agentTypeRegistrySnapshot,
+  classifyChoice,
+  completeText,
+  isAgentWorkerReady,
   promptSession,
   readSettingsState,
   releaseParentSession,
   resolveModelSelection,
+  resolveVirtualClassifier,
   respondApproval,
   spawnSession,
   steerSession,
@@ -46,8 +51,10 @@ import { removeBotMemorySpace } from '../services/bots/memoryCleanup';
 import { RoutineRunner } from '../services/bots/routineRunner';
 import { RoutineScheduler } from '../services/bots/routineScheduler';
 import { BotRoutineStore } from '../services/bots/routineStore';
+import { createSmartRouter } from '../services/bots/smartRouter';
 import { resolveGlobalInstruction } from '../services/instructionStore';
 import { readStoredOauthCredentialKeys } from '../services/oauthProviders';
+import { remoteCandidates } from '../services/remoteModels';
 import { removeConversationSessionFiles } from '../services/sessionFileCleanup';
 import { sendToAllWindows } from '../windows/createAppWindow';
 import { isMainWebContents } from '../windows/MainWindow';
@@ -234,7 +241,37 @@ export function getBotServices(): BotServices | null {
     runtime: createRuntime(botsRoot),
     emit: emitBotEvent,
   });
-  const groups = new GroupChatService({ bots, chats, host, emit: emitBotEvent });
+  const groups = new GroupChatService({
+    bots,
+    chats,
+    host,
+    emit: emitBotEvent,
+    responder: createSmartRouter({
+      settings: () => readSettingsState(),
+      judge: async ({ preferred, ...request }, signal) => {
+        const state = readSettingsState();
+        if (!state || !isAgentWorkerReady()) return null;
+        const candidates = await remoteCandidates(state, preferred);
+        if (candidates.length === 0 || signal.aborted) return null;
+        const requestId = randomUUID();
+        const abort = () => abortCompleteText(requestId);
+        signal.addEventListener('abort', abort, { once: true });
+        try {
+          return await completeText({ requestId, ...request, candidates, maxTokens: 1024 });
+        } finally {
+          signal.removeEventListener('abort', abort);
+        }
+      },
+      classify: async (config, question, signal) => {
+        const resolved = resolveVirtualClassifier(config, await readStoredOauthCredentialKeys());
+        if (!resolved?.classifier || !isAgentWorkerReady()) return null;
+        return classifyChoice(
+          { classifier: resolved.classifier, ...question, timeoutMs: config.timeoutMs },
+          signal
+        );
+      },
+    }),
+  });
   host.onDiscard((scope) => {
     if (scope.chatId) groups.discard(scope.chatId);
   });

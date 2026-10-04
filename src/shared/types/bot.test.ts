@@ -133,7 +133,7 @@ describe('parseBotChat', () => {
     members: [BOT_A, BOT_B],
     bossBotId: BOT_A,
     workspace: { kind: 'project', projectId: 'p1' },
-    routing: { maxHops: 4, maxTurnsPerBot: 2 },
+    routing: { mode: 'smart', maxHops: 4, maxTurnsPerBot: 2 },
     pinned: false,
     sessions: { [BOT_A]: { conversationId: 'c1', cursor: 3 } },
     createdAt: 1,
@@ -188,10 +188,17 @@ describe('parseBotChat', () => {
       },
     });
     expect(parsed?.routing).toEqual({
+      mode: 'boss',
       maxHops: 20,
       maxTurnsPerBot: BOT_ROUTING_DEFAULTS.maxTurnsPerBot,
     });
     expect(parsed?.sessions).toEqual({ [BOT_A]: { conversationId: 'c1', cursor: 0 } });
+  });
+
+  it('routing.mode 缺省或非法时为 boss（旧数据不变）', () => {
+    expect(parseBotChat({ ...group, routing: { maxHops: 4 } })?.routing.mode).toBe('boss');
+    expect(parseBotChat({ ...group, routing: { mode: 'x' } })?.routing.mode).toBe('boss');
+    expect(parseBotChat({ ...group, routing: undefined })?.routing.mode).toBe('boss');
   });
 
   it('preserves valid distillation watermarks and drops malformed ones', () => {
@@ -265,5 +272,20 @@ describe('parseGroupEntry', () => {
     expect(
       parseGroupEntry({ seq: 1, id: 'e', at: 1, kind: 'human', text: 'x', mentions: [BOT_A, 2] })
     ).toMatchObject({ mentions: [BOT_A] });
+  });
+
+  it('bot 条目保留 routedBy: smart，其余值丢弃', () => {
+    const base = {
+      seq: 2,
+      id: 'e2',
+      at: 2,
+      kind: 'bot',
+      botId: BOT_A,
+      text: 'yo',
+      conversationId: 'c1',
+      turnId: 't1',
+    };
+    expect(parseGroupEntry({ ...base, routedBy: 'smart' })).toEqual({ ...base, routedBy: 'smart' });
+    expect(parseGroupEntry({ ...base, routedBy: 'other' })).toEqual(base);
   });
 });

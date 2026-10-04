@@ -105,7 +105,10 @@ export function BotChatView({ chat }: { chat: BotChat }) {
   const hint = (() => {
     if (archived) return t('This chat is archived. Restore it before sending.');
     if (chat.kind === 'group') {
-      const base = t('Without @, the group owner replies');
+      const base =
+        chat.routing.mode === 'smart'
+          ? t('Without @, the best-fit member is picked to reply')
+          : t('Without @, the group owner replies');
       if (replying)
         return `${base} · ${t('{{name}} is replying; new messages are routed after they finish', { name: replying.name })}`;
       return base;
@@ -224,7 +227,7 @@ export function BotChatView({ chat }: { chat: BotChat }) {
                   : t('@ a member, or just say it…')
               }
               members={chat.kind === 'group' ? members : undefined}
-              running={summary.running || Boolean(runtime?.current)}
+              running={summary.running || Boolean(runtime?.current || runtime?.routing)}
               disabled={archived}
               hint={hint}
               toolbar={direct ? <DirectChips bot={direct} /> : null}

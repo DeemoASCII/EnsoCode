@@ -107,6 +107,18 @@ describe('chat inputs', () => {
     expect(parseChatUpdateInput({ chatId: A, sessions: {} })).toBeNull();
     expect(parseChatUpdateInput({ chatId: A, routing: { maxHops: 'x' } })).toBeNull();
   });
+
+  it('routing.mode 只接受 boss / smart', () => {
+    expect(parseChatUpdateInput({ chatId: A, routing: { mode: 'smart' } })).toEqual({
+      chatId: A,
+      routing: { mode: 'smart' },
+    });
+    expect(parseChatUpdateInput({ chatId: A, routing: { mode: 'boss' } })?.routing).toEqual({
+      mode: 'boss',
+    });
+    expect(parseChatUpdateInput({ chatId: A, routing: { mode: 'auto' } })).toBeNull();
+    expect(parseChatUpdateInput({ chatId: A, routing: { mode: 1 } })).toBeNull();
+  });
 });
 
 describe('send / timeline / workspace / history inputs', () => {

@@ -38,7 +38,12 @@ export type BotChatWorkspace =
   | { kind: 'chat-home'; projectId: string }
   | { kind: 'project'; projectId: string };
 
+/** 人类消息不 @ 任何人时：boss 群主回复；smart 由便宜模型/分类器选一位成员 */
+export const BOT_ROUTING_MODES = ['boss', 'smart'] as const;
+export type BotRoutingMode = (typeof BOT_ROUTING_MODES)[number];
+
 export interface BotChatRouting {
+  mode: BotRoutingMode;
   maxHops: number;
   maxTurnsPerBot: number;
 }
@@ -174,6 +179,8 @@ export type GroupEntry =
       text: string;
       conversationId: string;
       turnId: string;
+      /** 该轮回复人由智能选人选出（群主兜底不标） */
+      routedBy?: 'smart';
     })
   | (GroupEntryBase & {
       kind: 'delegation';
@@ -191,7 +198,7 @@ export type GroupEntryInput = GroupEntry extends infer E
     : never
   : never;
 
-export const BOT_ROUTING_DEFAULTS: BotChatRouting = { maxHops: 4, maxTurnsPerBot: 2 };
+export const BOT_ROUTING_DEFAULTS: BotChatRouting = { mode: 'boss', maxHops: 4, maxTurnsPerBot: 2 };
 const ROUTING_LIMITS = { maxHops: 20, maxTurnsPerBot: 10 } as const;
 
 export const BOT_NAME_MAX = 24;
@@ -360,6 +367,9 @@ export function parseBotChat(value: unknown): BotChat | undefined {
     bossBotId: bossBotId as BotId | null,
     workspace,
     routing: {
+      mode: BOT_ROUTING_MODES.includes(routing.mode as BotRoutingMode)
+        ? (routing.mode as BotRoutingMode)
+        : BOT_ROUTING_DEFAULTS.mode,
       maxHops: intIn(routing.maxHops, 1, ROUTING_LIMITS.maxHops, BOT_ROUTING_DEFAULTS.maxHops),
       maxTurnsPerBot: intIn(
         routing.maxTurnsPerBot,
@@ -399,6 +409,7 @@ export function parseGroupEntry(value: unknown): GroupEntry | undefined {
             text: value.text,
             conversationId: value.conversationId,
             turnId: value.turnId,
+            ...(value.routedBy === 'smart' ? { routedBy: 'smart' as const } : {}),
           }
         : undefined;
     case 'delegation': {

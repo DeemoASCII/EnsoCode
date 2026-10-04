@@ -26,7 +26,12 @@ import { DEFAULT_DISABLED_BUILTIN_TOOLS } from '@shared/types';
 import type { AgentMode, SourceAuthorityProjection } from '@shared/types/agent';
 import { DEFAULT_SPEECH_MODEL_ID, SYSTEM_MICROPHONE } from '@shared/types/speech';
 import { parseUsageModelPricing } from '@shared/usage/pricing';
-import { parseVirtualModels, type VirtualModelEntry } from '@shared/virtualModels';
+import {
+  parseVirtualClassifier,
+  parseVirtualModels,
+  type VirtualClassifierConfig,
+  type VirtualModelEntry,
+} from '@shared/virtualModels';
 import { parseWindowsLocalShell } from '@shared/windowsLocalShell';
 import { create } from 'zustand';
 import { createJSONStorage, persist } from 'zustand/middleware';
@@ -144,6 +149,7 @@ const initialState = {
   memoryKgEnabled: false,
   voiceInputEnabled: false,
   botModeEnabled: false,
+  botRouteClassifier: null as VirtualClassifierConfig | null,
   voiceInputDevice: SYSTEM_MICROPHONE,
   voiceModel: DEFAULT_SPEECH_MODEL_ID,
   voiceCorrectionEnabled: false,
@@ -303,6 +309,7 @@ export const useSettingsStore = create<SettingsState>()(
       setMemoryKgEnabled: (memoryKgEnabled) => set({ memoryKgEnabled }),
       setVoiceInputEnabled: (voiceInputEnabled) => set({ voiceInputEnabled }),
       setBotModeEnabled: (botModeEnabled) => set({ botModeEnabled }),
+      setBotRouteClassifier: (botRouteClassifier) => set({ botRouteClassifier }),
       setVoiceInputDevice: (voiceInputDevice) => set({ voiceInputDevice }),
       setVoiceModel: (voiceModel) => set({ voiceModel }),
       setVoiceCorrectionEnabled: (voiceCorrectionEnabled) => set({ voiceCorrectionEnabled }),
@@ -1005,6 +1012,10 @@ export const useSettingsStore = create<SettingsState>()(
         const virtualModels = parseVirtualModels(s.virtualModels);
         if (JSON.stringify(virtualModels) !== JSON.stringify(s.virtualModels)) {
           useSettingsStore.setState({ virtualModels });
+        }
+        const botRouteClassifier = parseVirtualClassifier(s.botRouteClassifier) ?? null;
+        if (JSON.stringify(botRouteClassifier) !== JSON.stringify(s.botRouteClassifier ?? null)) {
+          useSettingsStore.setState({ botRouteClassifier });
         }
         const smartCompactMode = parseSmartCompactMode(s.smartCompactMode) ?? 'auto';
         if (smartCompactMode !== s.smartCompactMode) {

@@ -113,13 +113,20 @@ export interface SpawnModelConfig extends ModelCapabilityOverrides {
   virtual?: VirtualSpawnConfig;
 }
 
+/** pi catalog 里的分类器 provider/model 与凭证 */
+export interface VirtualClassifierCredentials {
+  provider: string;
+  modelId: string;
+  apiKey?: string;
+}
+
 export interface VirtualSpawnClassifier {
   source: 'judge' | 'pi-classifier';
   timeoutMs: number;
   /** judge：裁判聊天模型 */
   model?: SpawnModelConfig;
   /** pi-classifier：pi catalog 里的分类器 provider/model 与凭证 */
-  classifier?: { provider: string; modelId: string; apiKey?: string };
+  classifier?: VirtualClassifierCredentials;
 }
 
 export interface VirtualSpawnConfig {
@@ -1178,6 +1185,17 @@ export type AgentCommand =
       type: 'abort-complete-text';
       requestId: string;
     }
+  | {
+      /** 一次性 pi 分类器 choice 问题（群聊智能选人）；结果经 choice-classified / choice-failed 按 requestId 回流 */
+      type: 'classify-choice';
+      requestId: string;
+      classifier: VirtualClassifierCredentials;
+      state: Record<string, unknown>;
+      instructions: string;
+      criteria: Record<string, string>;
+      timeoutMs: number;
+    }
+  | { type: 'abort-classify-choice'; requestId: string }
   | { type: 'abort-retry'; identity: SessionIdentity }
   | { type: 'retry'; identity: SessionIdentity }
   /** 释放父会话：中断并销毁 worker 侧会话（含全部 coworker/child），jsonl 留盘可 resume。
@@ -1670,6 +1688,8 @@ export type AgentWorkerEvent =
     }
   | { type: 'text-completed'; requestId: string; text: string }
   | { type: 'text-failed'; requestId: string; error: string }
+  | { type: 'choice-classified'; requestId: string; probabilities: Record<string, number> }
+  | { type: 'choice-failed'; requestId: string; error: string }
   | { type: 'text-delta'; requestId: string; text: string; thinking?: string }
   | {
       type: 'task-output';
@@ -2012,13 +2032,16 @@ function parseVirtualSpawnClassifier(value: unknown): boolean {
     return value.classifier === undefined && parsePhysicalSpawnModelConfig(value.model) !== null;
   }
   if (value.source !== 'pi-classifier' || value.model !== undefined) return false;
-  const classifier = value.classifier;
+  return parseClassifierCredentials(value.classifier);
+}
+
+function parseClassifierCredentials(value: unknown): value is VirtualClassifierCredentials {
   return (
-    isRecord(classifier) &&
-    hasOnlyKeys(classifier, ['provider', 'modelId', 'apiKey']) &&
-    isNonEmptyString(classifier.provider) &&
-    isNonEmptyString(classifier.modelId) &&
-    (classifier.apiKey === undefined || typeof classifier.apiKey === 'string')
+    isRecord(value) &&
+    hasOnlyKeys(value, ['provider', 'modelId', 'apiKey']) &&
+    isNonEmptyString(value.provider) &&
+    isNonEmptyString(value.modelId) &&
+    (value.apiKey === undefined || typeof value.apiKey === 'string')
   );
 }
 
@@ -2905,6 +2928,32 @@ export function parseAgentCommand(value: unknown): AgentCommand | null {
       return hasExactKeys(value, ['type', 'requestId']) && isNonEmptyString(value.requestId)
         ? (value as unknown as AgentCommand)
         : null;
+    case 'classify-choice':
+      return hasExactKeys(value, [
+        'type',
+        'requestId',
+        'classifier',
+        'state',
+        'instructions',
+        'criteria',
+        'timeoutMs',
+      ]) &&
+        isNonEmptyString(value.requestId) &&
+        parseClassifierCredentials(value.classifier) &&
+        isRecord(value.state) &&
+        isNonEmptyString(value.instructions) &&
+        isRecord(value.criteria) &&
+        Object.keys(value.criteria).length > 0 &&
+        Object.values(value.criteria).every(isNonEmptyString) &&
+        typeof value.timeoutMs === 'number' &&
+        Number.isFinite(value.timeoutMs) &&
+        value.timeoutMs > 0
+        ? (value as unknown as AgentCommand)
+        : null;
+    case 'abort-classify-choice':
+      return hasExactKeys(value, ['type', 'requestId']) && isNonEmptyString(value.requestId)
+        ? (value as unknown as AgentCommand)
+        : null;
     case 'summarize-title':
       return hasExactKeys(value, ['type', 'conversationId', 'input', 'candidates']) &&
         isNonEmptyString(value.conversationId) &&
@@ -3295,6 +3344,21 @@ export function parseAgentWorkerEvent(value: unknown): AgentWorkerEvent | null {
       : null;
   }
   if (value.type === 'text-failed') {
+    return hasExactKeys(value, ['type', 'requestId', 'error']) &&
+      isNonEmptyString(value.requestId) &&
+      isNonEmptyString(value.error)
+      ? (value as unknown as AgentWorkerEvent)
+      : null;
+  }
+  if (value.type === 'choice-classified') {
+    return hasExactKeys(value, ['type', 'requestId', 'probabilities']) &&
+      isNonEmptyString(value.requestId) &&
+      isRecord(value.probabilities) &&
+      Object.values(value.probabilities).every((p) => typeof p === 'number' && Number.isFinite(p))
+      ? (value as unknown as AgentWorkerEvent)
+      : null;
+  }
+  if (value.type === 'choice-failed') {
     return hasExactKeys(value, ['type', 'requestId', 'error']) &&
       isNonEmptyString(value.requestId) &&
       isNonEmptyString(value.error)

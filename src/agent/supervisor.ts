@@ -209,7 +209,7 @@ import { createEnsoAppTool, EnsoAppInvoker } from './tools/ensoApp';
 import { createEnsoCapabilitiesTool } from './tools/ensoCapabilities';
 import { createMemoryTools, MemoryInvoker } from './tools/memory';
 import { createWebTools } from './tools/web';
-import { createVirtualChooser } from './virtualClassifier';
+import { createVirtualChooser, resolveClassifierModel } from './virtualClassifier';
 import { registerVirtualModel } from './virtualModels';
 import { createWorkflowTool, WORKFLOW_STOPPED_BY_USER } from './workflow';
 import { listWorkflowPresets, loadWorkflowPreset, workflowPresetRoots } from './workflowPresets';
@@ -686,6 +686,8 @@ export class SessionSupervisor {
   });
   private readonly completeTextAborts = new Map<string, AbortController>();
   private readonly completeTextPendingAborts = new Set<string>();
+  private readonly classifyAborts = new Map<string, AbortController>();
+  private readonly classifyPendingAborts = new Set<string>();
 
   private branchContextExtension(getSession: () => ManagedSession | undefined): InlineExtension {
     return workspaceBranchContextExtension(getSession, (requestId) => {
@@ -971,6 +973,22 @@ export class SessionSupervisor {
       const active = this.completeTextAborts.get(command.requestId);
       if (active) active.abort();
       else this.completeTextPendingAborts.add(command.requestId);
+      return;
+    }
+    if (command.type === 'classify-choice') {
+      void this.classifyChoice(command).catch((error) =>
+        this.options.emit({
+          type: 'choice-failed',
+          requestId: command.requestId,
+          error: toErrorMessage(error) || 'classify failed',
+        })
+      );
+      return;
+    }
+    if (command.type === 'abort-classify-choice') {
+      const active = this.classifyAborts.get(command.requestId);
+      if (active) active.abort();
+      else this.classifyPendingAborts.add(command.requestId);
       return;
     }
     if (command.type === 'set-proxy-env') {
@@ -4025,6 +4043,73 @@ export class SessionSupervisor {
     } finally {
       this.completeTextAborts.delete(command.requestId);
       this.completeTextPendingAborts.delete(command.requestId);
+    }
+  }
+
+  /** 一次性 pi 分类器 choice 问题（群聊智能选人）：只回概率，选人与阈值由 Main 决定 */
+  private async classifyChoice(
+    command: Extract<AgentCommand, { type: 'classify-choice' }>
+  ): Promise<void> {
+    const { requestId } = command;
+    if (this.classifyPendingAborts.delete(requestId)) {
+      this.options.emit({ type: 'choice-failed', requestId, error: 'aborted' });
+      return;
+    }
+    const userAbort = new AbortController();
+    this.classifyAborts.set(requestId, userAbort);
+    const timeout = new AbortController();
+    const timer = setTimeout(() => timeout.abort(), command.timeoutMs);
+    const fail = (error: string) =>
+      this.options.emit({
+        type: 'choice-failed',
+        requestId,
+        error: userAbort.signal.aborted
+          ? 'aborted'
+          : timeout.signal.aborted
+            ? `timed out after ${command.timeoutMs}ms`
+            : error,
+      });
+    try {
+      const runtime = await this.getRuntime();
+      const model = resolveClassifierModel(runtime, command.classifier);
+      const result = await runtime.classify(
+        model,
+        {
+          state: command.state as never,
+          questions: {
+            choice: {
+              type: 'choice',
+              instructions: command.instructions,
+              criteria: command.criteria,
+            },
+          },
+        },
+        {
+          signal: AbortSignal.any([userAbort.signal, timeout.signal]),
+          ...(command.classifier.apiKey ? { apiKey: command.classifier.apiKey } : {}),
+        }
+      );
+      const answer = result.answers.choice;
+      if (result.stopReason !== 'stop' || answer?.type !== 'choice') {
+        fail(result.errorMessage?.trim() || `classifier ${result.stopReason}`);
+        return;
+      }
+      this.options.emit({
+        type: 'choice-classified',
+        requestId,
+        probabilities: Object.fromEntries(
+          Object.entries(answer.probabilities).filter(
+            (entry): entry is [string, number] =>
+              typeof entry[1] === 'number' && Number.isFinite(entry[1])
+          )
+        ),
+      });
+    } catch (error) {
+      fail(toErrorMessage(error) || 'classify failed');
+    } finally {
+      clearTimeout(timer);
+      this.classifyAborts.delete(requestId);
+      this.classifyPendingAborts.delete(requestId);
     }
   }
 

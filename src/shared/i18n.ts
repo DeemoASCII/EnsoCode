@@ -2181,8 +2181,8 @@ export const zhTranslations: Record<string, string> = {
   'Import character card (JSON)': '导入人物卡（JSON）',
   'Blank member': '空白成员',
   'Create and start chatting': '创建并开始私聊',
-  'One member replies at a time. Without @, the group owner replies.':
-    '一次只有一位成员回复；没人被 @ 时由群主回复。',
+  'One member replies at a time. Without @, the best-fit member is picked to reply.':
+    '一次只有一位成员回复；没人被 @ 时智能选出最合适的成员回复。',
   'Pick at least two, and one owner': '至少选两位，并指定一位群主',
   'Create at least two members first.': '请先创建至少两名成员。',
   'Shared workspace': '共享工作区',
@@ -2216,6 +2216,19 @@ export const zhTranslations: Record<string, string> = {
   'Group workspace': '群工作区',
   'Missing project': '项目已不存在',
   'Bot mode (experimental)': 'Bot 模式（实验）',
+  'Group reply picker model': '群聊选人模型',
+  'When nobody is @-mentioned in a smart-routing group, this model picks which member replies.':
+    '在「智能选人」的群里没人被 @ 时，用这个模型选出回复的成员。',
+  'Default (title model)': '默认（跟随标题总结模型）',
+  'Fast chat model': '快速聊天模型',
+  'Falls back to the group owner on timeout, error or an unclear answer.':
+    '超时、出错或回答不明确时由群主回复。',
+  'Without @': '不 @ 时',
+  'Group owner replies': '群主回复',
+  'Smart pick': '智能选人',
+  'Choosing who replies…': '正在选择回复人…',
+  'Picked automatically because nobody was @-mentioned': '没人被 @，由智能选人选出',
+  'Without @, the best-fit member is picked to reply': '不 @ 时智能选出最合适的成员回复',
   'Adds a Code | Bot switch to the sidebar. Create members with their own persona, model and tools, and chat with them alone or in groups.':
     '在侧栏顶部加入 Code | Bot 切换。创建拥有各自人设、模型和工具的成员，与他们私聊或拉群协作。',
   Interrupted: '中断',

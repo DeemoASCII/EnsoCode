@@ -1,7 +1,8 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { SmartRouteInput } from '../../../shared/bots/smartRoute';
 import type { BotTurnFinished } from './botSessionHost';
 import { BotStore } from './botStore';
 import { BotChatStore } from './chatStore';
@@ -151,7 +152,7 @@ it('queues routine replies behind the group round and selects the requested memb
 });
 
 it('limits relay and does not publish skip replies', async () => {
-  chats.update(id, (c) => ({ ...c, routing: { maxHops: 1, maxTurnsPerBot: 2 } }));
+  chats.update(id, (c) => ({ ...c, routing: { mode: 'boss', maxHops: 1, maxTurnsPerBot: 2 } }));
   await group.send(id, 'go');
   await done(a, '@Bob go');
   await done(b, '@Alice again');
@@ -221,7 +222,7 @@ it('skips removed members and reports unavailable boss', async () => {
 });
 
 it('enforces per-member turn limits and skips archived queued members', async () => {
-  chats.update(id, (c) => ({ ...c, routing: { maxHops: 4, maxTurnsPerBot: 1 } }));
+  chats.update(id, (c) => ({ ...c, routing: { mode: 'boss', maxHops: 4, maxTurnsPerBot: 1 } }));
   await group.send(id, 'start');
   await done(a, '@Bob next');
   await done(b, '@Alice again');
@@ -268,4 +269,165 @@ it('refuses a new round until a failed stop is successfully retried', async () =
   expect(await group.stop(id)).toEqual({ ok: true });
   await group.send(id, 'next');
   expect(deliver).toHaveBeenCalledTimes(2);
+});
+
+describe('smart routing', () => {
+  const deferred = () => {
+    let resolve!: (value: string | null) => void;
+    const promise = new Promise<string | null>((r) => {
+      resolve = r;
+    });
+    return { promise, resolve };
+  };
+  const select = vi.fn<(input: SmartRouteInput, signal: AbortSignal) => Promise<string | null>>();
+  let timeoutMs = 1000;
+  const useResponder = () => {
+    group.dispose();
+    group = new GroupChatService({
+      bots,
+      chats,
+      host,
+      emit,
+      responder: { timeoutMs: () => timeoutMs, select },
+    });
+  };
+  beforeEach(() => {
+    select.mockReset();
+    timeoutMs = 1000;
+    useResponder();
+  });
+
+  it('新群缺省智能选人：选中成员回复，并在其发言上标 routedBy', async () => {
+    select.mockResolvedValueOnce(b);
+    await group.send(id, '帮忙改个接口');
+    await vi.waitFor(() => expect(deliver).toHaveBeenCalledTimes(1));
+    expect(deliver.mock.calls[0][1]).toBe(b);
+    const input = select.mock.calls[0][0];
+    expect(input.message).toBe('帮忙改个接口');
+    expect(input.candidates.map((c) => c.id)).toEqual([a, b]);
+    await done(b, 'ok');
+    expect(entries().at(-1)).toMatchObject({ kind: 'bot', botId: b, routedBy: 'smart' });
+    select.mockResolvedValueOnce(a);
+    await group.send(id, '大家觉得呢');
+    await vi.waitFor(() => expect(deliver).toHaveBeenCalledTimes(2));
+    await done(a, 'fine');
+    expect(entries().at(-1)).not.toHaveProperty('routedBy');
+  });
+
+  it('分类期间 chatState 暴露 routing，超时兜底群主且不写报错条目', async () => {
+    timeoutMs = 20;
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    select.mockImplementationOnce(() => new Promise(() => {}));
+    await group.send(id, 'hello');
+    expect(group.state(id)).toMatchObject({ routing: true, current: null });
+    expect(deliver).not.toHaveBeenCalled();
+    await vi.waitFor(() => expect(deliver).toHaveBeenCalledTimes(1));
+    expect(deliver.mock.calls[0][1]).toBe(a);
+    expect(group.state(id)).toMatchObject({ routing: false, current: a });
+    expect(entries().some((e) => e.kind === 'system')).toBe(false);
+    warn.mockRestore();
+  });
+
+  it('出错或选中不在群成员时兜底群主', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    select.mockRejectedValueOnce(new Error('boom'));
+    await group.send(id, 'one');
+    await vi.waitFor(() => expect(deliver).toHaveBeenCalledTimes(1));
+    expect(deliver.mock.calls[0][1]).toBe(a);
+    await done(a, 'ok');
+    select.mockResolvedValueOnce('ghost');
+    await group.send(id, 'two');
+    await vi.waitFor(() => expect(deliver).toHaveBeenCalledTimes(2));
+    expect(deliver.mock.calls[1][1]).toBe(a);
+    warn.mockRestore();
+  });
+
+  it('分类期间来新消息：放弃本次结果，按合并后的消息重新判定', async () => {
+    const first = deferred();
+    const second = deferred();
+    select.mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
+    await group.send(id, 'first', { deliveryId: 'd1' });
+    await group.send(id, 'second', { deliveryId: 'd2' });
+    expect(select).toHaveBeenCalledTimes(2);
+    expect(select.mock.calls[0][1].aborted).toBe(true);
+    expect(select.mock.calls[1][0].message).toBe('second');
+    expect(select.mock.calls[1][0].recent.at(-1)).toEqual({ speaker: 'Human', text: 'first' });
+    first.resolve(a);
+    await group.settled(id);
+    expect(deliver).not.toHaveBeenCalled();
+    second.resolve(b);
+    await vi.waitFor(() => expect(deliver).toHaveBeenCalledTimes(1));
+    expect(deliver.mock.calls[0][1]).toBe(b);
+    expect(deliver.mock.calls[0][3]).toMatchObject({ deliveryId: 'd2' });
+  });
+
+  it('分类期间来 @ 消息直接按 @ 路由', async () => {
+    select.mockReturnValueOnce(new Promise(() => {}));
+    await group.send(id, 'first');
+    await group.send(id, '@Bob 你来');
+    expect(select).toHaveBeenCalledTimes(1);
+    expect(select.mock.calls[0][1].aborted).toBe(true);
+    expect(deliver.mock.calls.map((c) => c[1])).toEqual([b]);
+    expect(group.state(id)).toMatchObject({ routing: false, current: b });
+  });
+
+  it('@ 消息与 boss 模式不调用分类器', async () => {
+    await group.send(id, '@Bob hi');
+    await done(b, 'ok');
+    await group.send(id, '@所有人 hi');
+    await done(a, 'ok');
+    await done(b, 'ok');
+    chats.update(id, (c) => ({ ...c, routing: { ...c.routing, mode: 'boss' } }));
+    await group.send(id, 'no mention');
+    expect(select).not.toHaveBeenCalled();
+    expect(deliver.mock.calls.at(-1)?.[1]).toBe(a);
+  });
+
+  it('成员回复期间积压的无 @ 消息在其说完后智能选人', async () => {
+    await group.send(id, '@Alice start');
+    await group.send(id, 'follow up');
+    expect(select).not.toHaveBeenCalled();
+    select.mockResolvedValueOnce(b);
+    await done(a, 'done');
+    expect(select).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => expect(deliver).toHaveBeenCalledTimes(2));
+    expect(deliver.mock.calls[1][1]).toBe(b);
+  });
+
+  it('例行任务在分类结束后再派发', async () => {
+    const pick = deferred();
+    select.mockReturnValueOnce(pick.promise);
+    await group.send(id, 'hello');
+    const routine = group.runAs(id, b, 'routine', undefined);
+    await group.settled(id);
+    expect(deliver).not.toHaveBeenCalled();
+    pick.resolve(b);
+    await vi.waitFor(() => expect(deliver).toHaveBeenCalledTimes(1));
+    expect(deliver.mock.calls[0][1]).toBe(b);
+    await done(b, 'reply');
+    expect(await routine).toMatchObject({ ok: true });
+  });
+
+  it('stop、删除群与 dispose 取消进行中的分类', async () => {
+    const pick = deferred();
+    select.mockReturnValueOnce(pick.promise);
+    await group.send(id, 'hello');
+    expect(await group.stop(id)).toEqual({ ok: true });
+    expect(select.mock.calls[0][1].aborted).toBe(true);
+    expect(group.state(id)).toMatchObject({ routing: false });
+    pick.resolve(b);
+    await group.settled(id);
+    expect(deliver).not.toHaveBeenCalled();
+
+    select.mockReturnValueOnce(new Promise(() => {}));
+    await group.send(id, 'again');
+    group.discard(id);
+    expect(select.mock.calls[1][1].aborted).toBe(true);
+
+    select.mockReturnValueOnce(new Promise(() => {}));
+    await group.send(id, 'third');
+    group.dispose();
+    expect(select.mock.calls[2][1].aborted).toBe(true);
+    expect(deliver).not.toHaveBeenCalled();
+  });
 });

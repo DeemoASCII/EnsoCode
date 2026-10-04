@@ -1113,6 +1113,48 @@ describe('一次性文本补全命令', () => {
     expect(parseAgentCommand({ type: 'abort-complete-text' })).toBeNull();
   });
 
+  it('classify-choice：校验分类器、criteria 与超时', () => {
+    const command = {
+      type: 'classify-choice',
+      requestId: 'route-1',
+      classifier: { provider: 'openrouter', modelId: 'cls', apiKey: 'k' },
+      state: { message: 'hi', history: [{ speaker: 'Human', text: 'x' }] },
+      instructions: 'who replies?',
+      criteria: { a: 'Alice', b: 'Bob' },
+      timeoutMs: 3000,
+    };
+    expect(parseAgentCommand(command)).toEqual(command);
+    const { apiKey: _apiKey, ...noKey } = command.classifier;
+    expect(parseAgentCommand({ ...command, classifier: noKey })).not.toBeNull();
+    for (const bad of [
+      { ...command, requestId: '' },
+      { ...command, classifier: { provider: '', modelId: 'cls' } },
+      { ...command, classifier: { ...command.classifier, extra: 1 } },
+      { ...command, criteria: {} },
+      { ...command, criteria: { a: 1 } },
+      { ...command, state: [] },
+      { ...command, instructions: 1 },
+      { ...command, timeoutMs: 0 },
+      { ...command, extra: true },
+    ]) {
+      expect(parseAgentCommand(bad)).toBeNull();
+    }
+    expect(parseAgentCommand({ type: 'abort-classify-choice', requestId: 'route-1' })).toEqual({
+      type: 'abort-classify-choice',
+      requestId: 'route-1',
+    });
+    expect(parseAgentCommand({ type: 'abort-classify-choice', requestId: '' })).toBeNull();
+  });
+
+  it('choice-classified / choice-failed 事件', () => {
+    const done = { type: 'choice-classified', requestId: 'r', probabilities: { a: 0.7, b: 0.3 } };
+    expect(parseAgentWorkerEvent(done)).toEqual(done);
+    expect(parseAgentWorkerEvent({ ...done, probabilities: { a: 'x' } })).toBeNull();
+    const failed = { type: 'choice-failed', requestId: 'r', error: 'aborted' };
+    expect(parseAgentWorkerEvent(failed)).toEqual(failed);
+    expect(parseAgentWorkerEvent({ ...failed, error: '' })).toBeNull();
+  });
+
   it('接受 stream 与 reasoning，拒绝脏值', () => {
     const command = {
       type: 'complete-text',

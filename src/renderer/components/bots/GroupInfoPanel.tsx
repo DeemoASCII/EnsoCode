@@ -1,4 +1,4 @@
-import type { BotChat, BotProfile } from '@shared/types/bot';
+import type { BotChat, BotProfile, BotRoutingMode } from '@shared/types/bot';
 import type { BotChatUpdateInput } from '@shared/types/botIpc';
 import { Crown, MoreHorizontal, Plus, UserMinus } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
@@ -6,6 +6,13 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Menu, MenuItem, MenuPopup, MenuTrigger } from '@/components/ui/menu';
 import { Popover, PopoverPopup, PopoverTrigger } from '@/components/ui/popover';
+import {
+  Select,
+  SelectItem,
+  SelectPopup,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
 import { addToast } from '@/components/ui/toast';
 import { useI18n } from '@/i18n';
 import { useBotsStore } from '@/stores/bots';
@@ -78,6 +85,10 @@ export function GroupInfoPanel({ chat }: { chat: BotChat }) {
       : undefined;
   const routingDirty =
     hops !== String(chat.routing.maxHops) || turns !== String(chat.routing.maxTurnsPerBot);
+  const modeItems: Array<{ value: BotRoutingMode; label: string }> = [
+    { value: 'boss', label: t('Group owner replies') },
+    { value: 'smart', label: t('Smart pick') },
+  ];
 
   return (
     <div className="min-h-0 flex-1 overflow-y-auto p-4">
@@ -176,7 +187,9 @@ export function GroupInfoPanel({ chat }: { chat: BotChat }) {
           value={
             runtime?.current
               ? `${name(runtime.current)}（${t('relay {{n}}/{{max}}', { n: runtime.hops, max: chat.routing.maxHops })}）`
-              : '—'
+              : runtime?.routing
+                ? t('Choosing who replies…')
+                : '—'
           }
         />
         <KeyValue
@@ -200,6 +213,28 @@ export function GroupInfoPanel({ chat }: { chat: BotChat }) {
       </PanelSection>
 
       <PanelSection title={t('Routing limits')}>
+        <div className="mb-2 flex items-center justify-between gap-3">
+          <span className="text-muted-foreground text-xs">{t('Without @')}</span>
+          <Select
+            items={modeItems}
+            value={chat.routing.mode}
+            onValueChange={(mode) => {
+              if (mode !== chat.routing.mode)
+                void update({ routing: { mode: mode as BotRoutingMode } });
+            }}
+          >
+            <SelectTrigger size="sm" className="w-40">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectPopup>
+              {modeItems.map((item) => (
+                <SelectItem key={item.value} value={item.value}>
+                  {item.label}
+                </SelectItem>
+              ))}
+            </SelectPopup>
+          </Select>
+        </div>
         <div className="grid grid-cols-2 gap-2">
           <label className="space-y-1">
             <span className="text-muted-foreground text-xs">{t('@ relay limit')}</span>

@@ -36,7 +36,7 @@ const chat = (extra: Partial<BotChat> = {}): BotChat => ({
   members: [A, B],
   bossBotId: A,
   workspace: { kind: 'chat-home', projectId: 'p' },
-  routing: { maxHops: 4, maxTurnsPerBot: 2 },
+  routing: { mode: 'boss', maxHops: 4, maxTurnsPerBot: 2 },
   pinned: false,
   sessions: { [A]: { conversationId: 'conv-a', cursor: 3 } },
   createdAt: 1,

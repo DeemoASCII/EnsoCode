@@ -34,7 +34,7 @@ describe('BotChatStore chats', () => {
   it('creates, reloads and rejects invalid chats', () => {
     const chat = group();
     expect(chat).toMatchObject({
-      routing: { maxHops: 4, maxTurnsPerBot: 2 },
+      routing: { mode: 'smart', maxHops: 4, maxTurnsPerBot: 2 },
       sessions: {},
       version: 1,
     });
@@ -51,6 +51,15 @@ describe('BotChatStore chats', () => {
   });
 
   it('updates through a validated mutation and bumps version', () => {
+    const boss = store.create({
+      kind: 'group',
+      title: 'x',
+      members: [BOT_A, BOT_B],
+      bossBotId: BOT_A,
+      workspace: { kind: 'project', projectId: 'p' },
+      routing: { mode: 'boss' },
+    });
+    expect(boss?.routing.mode).toBe('boss');
     const chat = group();
     const updated = store.update(chat.id, (draft) => ({
       ...draft,

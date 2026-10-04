@@ -5,11 +5,13 @@ import {
   type HumanEntry,
   isSkipReply,
   mergePending,
+  needsSmartRoute,
   onHumanMessage,
   onReply,
   type RouterState,
   startRound,
 } from '../../../shared/bots/router';
+import { buildSmartRouteInput, type SmartRouteInput } from '../../../shared/bots/smartRoute';
 import { buildGroupDelta } from '../../../shared/bots/transcript';
 import type { BotChat, GroupEntryInput } from '../../../shared/types/bot';
 import type {
@@ -34,6 +36,10 @@ interface Round {
   options?: BotDeliverOptions;
   generation: number;
   stopping?: string;
+  /** 进行中的智能选人；abort 同时充当本次结果的身份 */
+  routing?: { entry: HumanEntry; abort: AbortController };
+  /** 本轮首位回复人由智能选人选出，其发言标 routedBy */
+  smartPicked?: string;
 }
 interface AutonomousReply {
   botId: string;
@@ -42,12 +48,19 @@ interface AutonomousReply {
   options: BotDeliverOptions;
   resolve: (result: BotSendResult) => void;
 }
+/** 智能选人：返回成员 id；null 交给群主。超时由 GroupChatService 统一兜底 */
+export interface GroupResponderSelector {
+  timeoutMs(): number;
+  select(input: SmartRouteInput, signal: AbortSignal): Promise<string | null>;
+}
 interface GroupChatDeps {
   bots: BotStore;
   chats: BotChatStore;
   host: Pick<BotSessionHost, 'deliver' | 'onTurnFinished' | 'stopTurn' | 'onDeliverySent'>;
   emit: (event: BotEvent) => void;
+  responder?: GroupResponderSelector;
 }
+const SMART_ROUTE_HISTORY_SCAN = 40;
 const empty = (): RouterState => ({
   rootEntrySeq: 0,
   current: null,
@@ -126,7 +139,7 @@ export class GroupChatService {
   state(chatId: string): BotChatStateResult {
     if (this.deps.chats.get(chatId)?.kind !== 'group')
       return { ok: false, error: 'group-not-found' };
-    const { state, pending } = this.round(chatId);
+    const { state, pending, routing } = this.round(chatId);
     return {
       ok: true,
       current: state.current,
@@ -134,6 +147,7 @@ export class GroupChatService {
       hops: state.hops,
       turnsByBot: { ...state.turnsByBot },
       pendingHuman: pending.length > 0,
+      routing: Boolean(routing),
     };
   }
 
@@ -154,6 +168,15 @@ export class GroupChatService {
       });
       if (entry?.kind !== 'human') return { ok: false, error: 'timeline-write-failed' };
       const round = this.round(chatId);
+      if (round.routing) {
+        // 选人期间又来人类消息：放弃本次结果，对合并后的消息重新判定
+        const merged = mergePending([round.routing.entry, entry]) ?? entry;
+        this.cancelRouting(round);
+        round.options = options;
+        await this.begin(chat, merged);
+        this.persist(chatId);
+        return { ok: true };
+      }
       const decision = onHumanMessage(round.state, chat, members, entry);
       if (decision.action === 'steer') {
         const sent = await this.deliver(chat, round.state.current!, options);
@@ -162,10 +185,8 @@ export class GroupChatService {
         round.pending.push(entry);
         round.options = options;
       } else {
-        round.state = decision.state;
         round.options = options;
-        if (!round.state.current) this.system(chatId, '请先指定群主');
-        await this.dispatch(chatId);
+        await this.begin(chat, entry);
       }
       this.persist(chatId);
       return { ok: true };
@@ -211,6 +232,8 @@ export class GroupChatService {
       round.generation++;
       round.state = empty();
       round.pending = [];
+      this.cancelRouting(round);
+      delete round.smartPicked;
       for (const job of this.autonomous.get(chatId) ?? [])
         job.resolve({ ok: false, error: 'chat-stopped' });
       this.autonomous.delete(chatId);
@@ -244,25 +267,106 @@ export class GroupChatService {
         chat.id,
         `${this.deps.bots.get(event.botId)?.name ?? '已删除成员'} 回复失败：${event.error ?? '未知错误'}`
       );
-    else if (!isSkipReply(event.text) && event.turnId)
+    else if (!isSkipReply(event.text) && event.turnId) {
+      const smart = round.smartPicked === event.botId;
       this.append(chat.id, {
         kind: 'bot',
         botId: event.botId,
         text: event.text,
         conversationId: event.conversationId,
         turnId: event.turnId,
+        ...(smart ? { routedBy: 'smart' as const } : {}),
         id: randomUUID(),
         at: Date.now(),
       });
+    }
+    delete round.smartPicked;
     this.advance(chat, event.ok ? event.text : '');
     const pending = mergePending(round.pending);
     if (pending) {
       round.pending = [];
-      round.state = startRound(chat, this.members(chat), pending);
-      if (!round.state.current) this.system(chat.id, '请先指定群主');
-    }
-    await this.dispatch(chat.id);
+      await this.begin(chat, pending);
+    } else await this.dispatch(chat.id);
     this.persist(chat.id);
+  }
+
+  /** 新一轮：需要智能选人时异步分类（不占锁），否则按 @ / 群主直接开始 */
+  private async begin(chat: BotChat, entry: HumanEntry): Promise<void> {
+    const round = this.round(chat.id);
+    const members = this.members(chat);
+    delete round.smartPicked;
+    const responder = this.deps.responder;
+    if (responder && needsSmartRoute(chat, members, entry)) {
+      round.state = empty();
+      const abort = new AbortController();
+      round.routing = { entry, abort };
+      const input = buildSmartRouteInput(
+        chat,
+        members,
+        this.deps.chats.readEntries(chat.id, {
+          beforeSeq: entry.seq,
+          limit: SMART_ROUTE_HISTORY_SCAN,
+        }),
+        entry
+      );
+      void this.smartRoute(chat.id, responder, input, abort);
+      return;
+    }
+    round.state = startRound(chat, members, entry);
+    if (!round.state.current) this.system(chat.id, '请先指定群主');
+    await this.dispatch(chat.id);
+  }
+
+  private async smartRoute(
+    chatId: string,
+    responder: GroupResponderSelector,
+    input: SmartRouteInput,
+    abort: AbortController
+  ): Promise<void> {
+    const timeout = new AbortController();
+    const timer = setTimeout(() => timeout.abort(), responder.timeoutMs());
+    const signal = AbortSignal.any([abort.signal, timeout.signal]);
+    let picked: string | null = null;
+    try {
+      const cut = new Promise<null>((resolve) => {
+        if (signal.aborted) resolve(null);
+        signal.addEventListener('abort', () => resolve(null), { once: true });
+      });
+      const selecting = Promise.resolve()
+        .then(() => responder.select(input, signal))
+        .catch((error) => {
+          if (!signal.aborted) console.warn('[bots] smart routing failed', error);
+          return null;
+        });
+      picked = await Promise.race([selecting, cut]);
+      if (timeout.signal.aborted && !abort.signal.aborted)
+        console.warn('[bots] smart routing timed out');
+    } finally {
+      clearTimeout(timer);
+    }
+    if (abort.signal.aborted) return;
+    await this.lock(chatId, async () => {
+      const round = this.rounds.get(chatId);
+      const routing = round?.routing;
+      if (this.disposed || !round || routing?.abort !== abort) return;
+      delete round.routing;
+      const chat = this.deps.chats.get(chatId);
+      if (chat?.kind !== 'group' || chat.archivedAt !== undefined) {
+        this.persist(chatId);
+        return;
+      }
+      round.state = startRound(chat, this.members(chat), routing.entry, picked);
+      if (picked && round.state.current === picked && picked !== chat.bossBotId)
+        round.smartPicked = picked;
+      if (!round.state.current) this.system(chatId, '请先指定群主');
+      await this.dispatch(chatId);
+      this.persist(chatId);
+    }).catch((error) => console.warn('[bots] smart routing failed', error));
+  }
+
+  private cancelRouting(round: Round): void {
+    round.routing?.abort.abort();
+    delete round.routing;
   }
 
   private advance(chat: BotChat, text: string): void {
@@ -276,8 +380,8 @@ export class GroupChatService {
   }
 
   private async dispatch(chatId: string): Promise<void> {
-    if (this.disposed) return;
     const round = this.round(chatId);
+    if (this.disposed || round.routing) return;
     if (!round.state.current) {
       const job = this.autonomous.get(chatId)?.shift();
       if (job) {
@@ -378,6 +482,7 @@ export class GroupChatService {
     for (const id of this.rounds.keys()) {
       for (const job of this.autonomous.get(id) ?? [])
         job.resolve({ ok: false, error: 'canceled' });
+      this.cancelRouting(this.round(id));
       this.rounds.set(id, { state: empty(), pending: [], generation: 0 });
       this.persist(id);
     }
@@ -390,6 +495,8 @@ export class GroupChatService {
     for (const job of this.autonomous.get(chatId) ?? [])
       job.resolve({ ok: false, error: 'canceled' });
     this.autonomous.delete(chatId);
+    const round = this.rounds.get(chatId);
+    if (round) this.cancelRouting(round);
     this.rounds.delete(chatId);
     for (const [id, cursor] of this.cursors) if (cursor.chatId === chatId) this.cursors.delete(id);
   }

@@ -1274,6 +1274,8 @@ export const useSessionsStore = create<SessionsState>()(
         if (
           event.type === 'text-completed' ||
           event.type === 'text-failed' ||
+          event.type === 'choice-classified' ||
+          event.type === 'choice-failed' ||
           event.type === 'text-delta'
         )
           return;

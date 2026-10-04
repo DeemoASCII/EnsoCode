@@ -85,7 +85,7 @@ export function GroupTimeline({
       return;
     }
     if (atBottomRef.current) el.scrollTop = el.scrollHeight;
-  }, [entries, active.length, replying?.id, activity]);
+  }, [entries, active.length, replying?.id, activity, runtime?.routing]);
 
   useEffect(() => {
     if (!timeline?.loading) prependRef.current = null;
@@ -148,6 +148,12 @@ export function GroupTimeline({
             onOpenConversation={onOpenConversation}
           />
         ))}
+        {!replying && runtime?.routing && (
+          <div className="flex items-center gap-2 text-muted-foreground text-xs">
+            <TypingDots />
+            {t('Choosing who replies…')}
+          </div>
+        )}
         {replying && (
           <div className="flex gap-2.5">
             <BotAvatar bot={replying} size="sm" busy />
@@ -245,6 +251,14 @@ function EntryRow({
                 </span>
                 {bot?.title ? `${bot.title} · ` : ''}
                 {timeOf(entry.at)}
+                {entry.routedBy === 'smart' && (
+                  <span
+                    title={t('Picked automatically because nobody was @-mentioned')}
+                    className="ml-1.5 rounded border px-1 py-px text-[10px]"
+                  >
+                    {t('Smart pick')}
+                  </span>
+                )}
               </div>
             )}
             <div className="rounded-xl rounded-tl-sm bg-muted px-3 py-2 text-sm">
