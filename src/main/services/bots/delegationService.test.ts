@@ -71,7 +71,7 @@ function fixture(autoStart = true, over = new Set<string>()) {
     host,
     store,
     emit: () => {},
-    timeoutMs: 1000,
+    minuteMs: 1,
   });
   const finish = (id: string) =>
     host.observe({
@@ -89,7 +89,7 @@ function fixture(autoStart = true, over = new Set<string>()) {
     finish,
     abort,
     bob: b.bot.id,
-    deps: { bots, chats, authority, host, store, emit: () => {}, timeoutMs: 1000 },
+    deps: { bots, chats, authority, host, store, emit: () => {}, minuteMs: 1 },
   };
 }
 it('truncates context, finishes once, and waits for the busy parent', async () => {
@@ -170,9 +170,44 @@ it('times out and aborts; cancellation is final', async () => {
   const f = fixture();
   const sent = f.service.delegate(f.parent, { to: 'Bob', task: 'work' });
   if (!sent.ok) throw new Error(sent.error);
-  await vi.advanceTimersByTimeAsync(1000);
+  expect(f.store.get(sent.delegationId)?.timeoutMinutes).toBe(240);
+  await vi.advanceTimersByTimeAsync(239);
+  expect(f.store.get(sent.delegationId)?.state).toBe('running');
+  await vi.advanceTimersByTimeAsync(1);
   expect(f.store.get(sent.delegationId)).toMatchObject({ state: 'failed', failure: 'timeout' });
   expect(f.abort).toHaveBeenCalled();
+  f.service.dispose();
+});
+it("caps the delegation timeout by the target's limit and lets the caller ask for less", async () => {
+  const f = fixture();
+  f.deps.bots.update(f.bob, { delegationTimeoutMinutes: 30 }, []);
+  const capped = f.service.delegate(f.parent, { to: 'Bob', task: 'a', deadlineMinutes: 90 });
+  if (!capped.ok) throw new Error(capped.error);
+  expect(capped.warning).toContain('30');
+  const short = f.service.delegate(f.parent, { to: 'Bob', task: 'b', deadlineMinutes: 10 });
+  if (!short.ok) throw new Error(short.error);
+  expect(short).not.toHaveProperty('warning');
+  const plain = f.service.delegate(f.parent, { to: 'Bob', task: 'c' });
+  if (!plain.ok) throw new Error(plain.error);
+  expect(f.store.get(capped.delegationId)?.timeoutMinutes).toBe(30);
+  expect(f.store.get(short.delegationId)?.timeoutMinutes).toBe(10);
+  expect(f.store.get(plain.delegationId)?.timeoutMinutes).toBe(30);
+  for (const bad of [0, -5, Number.NaN, Number.POSITIVE_INFINITY])
+    expect(f.service.delegate(f.parent, { to: 'Bob', task: 'x', deadlineMinutes: bad })).toEqual({
+      ok: false,
+      error: 'deadlineMinutes must be a positive number.',
+    });
+  await vi.advanceTimersByTimeAsync(10);
+  expect(f.store.get(short.delegationId)?.failure).toBe('timeout');
+  expect(f.store.get(capped.delegationId)?.state).toBe('running');
+  await vi.advanceTimersByTimeAsync(20);
+  expect(f.store.get(capped.delegationId)?.failure).toBe('timeout');
+  expect(f.store.get(plain.delegationId)?.failure).toBe('timeout');
+  // 重试沿用原时限，并按目标当前上限再收紧
+  f.deps.bots.update(f.bob, { delegationTimeoutMinutes: 5 }, []);
+  const retried = f.service.retry(short.delegationId);
+  if (!retried.ok) throw new Error(retried.error);
+  expect(f.store.get(retried.delegationId)?.timeoutMinutes).toBe(5);
   f.service.dispose();
 });
 it('disabling cancels running delegation timers and rejects subsequent delegate calls', async () => {

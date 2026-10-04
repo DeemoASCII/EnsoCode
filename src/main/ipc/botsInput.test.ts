@@ -70,6 +70,17 @@ describe('parseBotDraftInput', () => {
       expect(parseBotDraftInput({ budget }), JSON.stringify(budget)).toBeNull();
   });
 
+  it('委派时限：1..1440 的整数分钟，null = 默认，脏值拒绝', () => {
+    expect(parseBotDraftInput({ delegationTimeoutMinutes: 45 })).toEqual({
+      delegationTimeoutMinutes: 45,
+    });
+    expect(parseBotDraftInput({ delegationTimeoutMinutes: null })).toEqual({
+      delegationTimeoutMinutes: undefined,
+    });
+    for (const bad of [0, 1441, 2.5, '45', {}])
+      expect(parseBotDraftInput({ delegationTimeoutMinutes: bad })).toBeNull();
+  });
+
   it('更新请求带 botId 与可选 expectedVersion', () => {
     expect(parseBotUpdateInput({ botId: A, expectedVersion: 2, draft: { title: 't' } })).toEqual({
       botId: A,

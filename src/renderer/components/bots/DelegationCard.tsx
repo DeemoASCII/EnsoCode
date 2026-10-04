@@ -36,7 +36,7 @@ export function failureText(record: Delegation, t: TFunction): string | undefine
     case 'interrupted':
       return t('The app restarted before this task finished. It was stopped and will not rerun.');
     case 'timeout':
-      return t('Timed out after 4 hours.');
+      return t('Timed out after {{n}} minutes.', { n: record.timeoutMinutes ?? 240 });
     case 'denied':
       return t('Denied.');
     default:

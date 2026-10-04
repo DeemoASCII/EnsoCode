@@ -1,10 +1,15 @@
-import type { BotBudget } from '@shared/types/bot';
+import { type BotBudget, type BotProfile, isDelegationTimeoutMinutes } from '@shared/types/bot';
 import type { BotBudgetVerdict, BotUsageOverview } from '@shared/usage/botUsage';
 
 /** 表单里以字符串编辑，留空 = 不限 */
 export interface BudgetForm {
   budgetCost: string;
   budgetTokens: string;
+}
+
+/** 成员级上限：留空 = 默认 */
+export interface LimitsForm {
+  delegationTimeout: string;
 }
 
 export interface BotUsageSnapshot {
@@ -45,6 +50,25 @@ export function budgetDraft(
     budget.dailyTokens = value;
   }
   return { ok: true, budget: Object.keys(budget).length > 0 ? budget : null };
+}
+
+export function limitsFormOf(bot: Pick<BotProfile, 'delegationTimeoutMinutes'>): LimitsForm {
+  return {
+    delegationTimeout:
+      bot.delegationTimeoutMinutes !== undefined ? String(bot.delegationTimeoutMinutes) : '',
+  };
+}
+
+/** null = 默认；ok:false = 有非法输入 */
+export function limitsDraft(
+  form: LimitsForm
+): { ok: true; delegationTimeoutMinutes: number | null } | { ok: false } {
+  const timeout = form.delegationTimeout.trim();
+  if (!timeout) return { ok: true, delegationTimeoutMinutes: null };
+  const value = Number(timeout);
+  return isDelegationTimeoutMinutes(value)
+    ? { ok: true, delegationTimeoutMinutes: value }
+    : { ok: false };
 }
 
 export function budgetAlerts(

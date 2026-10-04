@@ -859,6 +859,11 @@ export const zhTranslations: Record<string, string> = {
     '按本地时间零点重置。用完后新消息会被拒绝，正在进行的回复会被停止。',
   "Today's budget is used up": '今日预算已用完',
   'Budget must be a positive number': '预算必须是正数',
+  'Delegation time limit (minutes)': '委派时限（分钟）',
+  'Empty = 240': '留空 = 240',
+  'When other members delegate to this one, the task fails with a timeout after this long. A delegator can ask for less, not more.':
+    '其他成员委派给该成员时，超过这个时长未完成即判超时失败。发起方只能要求更短，不能更长。',
+  'Delegation time limit must be 1–1440 whole minutes': '委派时限须为 1–1440 的整数分钟',
   "This member's daily budget is used up. Try again tomorrow or raise the budget.":
     '该成员今日预算已用完，请明天再试或调高预算。',
   'Over budget': '超出预算',
@@ -2323,7 +2328,7 @@ export const zhTranslations: Record<string, string> = {
   Interrupted: '中断',
   'The app restarted before this task finished. It was stopped and will not rerun.':
     '应用重启时任务未完成，已停止，不会自动重做。',
-  'Timed out after 4 hours.': '超过 4 小时未完成，已超时。',
+  'Timed out after {{n}} minutes.': '超过 {{n}} 分钟未完成，已超时。',
   'Denied.': '已被拒绝。',
   'Cancel failed': '取消失败',
   'Retry failed': '重试失败',

@@ -20,6 +20,7 @@ export type BotDraft = Partial<
     | 'delegation'
     | 'memory'
     | 'budget'
+    | 'delegationTimeoutMinutes'
   >
 > & { persona?: string };
 

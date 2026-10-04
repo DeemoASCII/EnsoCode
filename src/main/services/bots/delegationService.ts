@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { botNameKey, type Delegation } from '../../../shared/types/bot';
+import { botNameKey, DELEGATION_TIMEOUT_MINUTES, type Delegation } from '../../../shared/types/bot';
 import type { BotEvent, BotSendResult } from '../../../shared/types/botIpc';
 import type { BotAuthorityPort, BotSessionHost } from './botSessionHost';
 import type { BotStore } from './botStore';
@@ -23,7 +23,8 @@ interface Deps {
   host: BotSessionHost;
   store: DelegationStore;
   emit: (event: BotEvent) => void;
-  timeoutMs?: number;
+  /** 一分钟的毫秒数，测试用来压缩时限 */
+  minuteMs?: number;
   /** 群任务看板联动：taskId 校验与每次落盘后的状态同步 */
   tasks?: {
     gate(
@@ -45,6 +46,8 @@ export interface DelegateInput {
   context?: string;
   /** 看板任务（#N 或 id）；委派创建 / 终态同步任务状态 */
   taskId?: string;
+  /** 期望时限（分钟），不超过目标成员的委派时限 */
+  deadlineMinutes?: number;
 }
 export type DelegateResult =
   | { ok: true; delegationId: string; warning?: string }
@@ -136,6 +139,11 @@ export class DelegationService {
       return { ok: false, error: 'Parent bot session unavailable.' };
     if (!target) return { ok: false, error: `Unknown member: ${input.to}` };
     if (!input.task.trim()) return { ok: false, error: 'Task must not be empty.' };
+    const deadline = input.deadlineMinutes;
+    if (deadline !== undefined && !(Number.isFinite(deadline) && deadline > 0))
+      return { ok: false, error: 'deadlineMinutes must be a positive number.' };
+    const limit = target.delegationTimeoutMinutes ?? DELEGATION_TIMEOUT_MINUTES;
+    const timeoutMinutes = Math.min(deadline ?? limit, limit);
     const ancestor =
       conversation.bot.delegationId && this.deps.store.get(conversation.bot.delegationId);
     if (conversation.bot.delegationId && !ancestor)
@@ -211,6 +219,7 @@ export class DelegationService {
       ...(batchId ? { batchId } : {}),
       ...(taskId ? { taskId } : {}),
       ...(options.retryOf ? { retryOf: options.retryOf } : {}),
+      timeoutMinutes,
     };
     this.save(record);
     const timer = setTimeout(
@@ -221,7 +230,7 @@ export class DelegationService {
           void this.deps.host.abortConversation(child.conversationId).catch(console.warn);
         }
       },
-      this.deps.timeoutMs ?? 4 * 60 * 60 * 1000
+      timeoutMinutes * (this.deps.minuteMs ?? 60_000)
     );
     timer.unref?.();
     this.timers.set(id, timer);
@@ -239,12 +248,16 @@ export class DelegationService {
         if (current && active(current))
           this.finish(current, 'failed', 'error', undefined, String(cause));
       });
+    const warnings = [
+      ...((input.context?.length ?? 0) > 8000 ? ['Context truncated to 8000 characters.'] : []),
+      ...(deadline !== undefined && deadline > limit
+        ? [`Deadline capped at ${limit} minutes (${target.name}'s delegation limit).`]
+        : []),
+    ];
     return {
       ok: true,
       delegationId: id,
-      ...((input.context?.length ?? 0) > 8000
-        ? { warning: 'Context truncated to 8000 characters.' }
-        : {}),
+      ...(warnings.length ? { warning: warnings.join(' ') } : {}),
     };
   }
 
@@ -298,6 +311,7 @@ export class DelegationService {
         task: record.task,
         context: record.context,
         ...(taskId ? { taskId } : {}),
+        ...(record.timeoutMinutes ? { deadlineMinutes: record.timeoutMinutes } : {}),
       },
       { standalone: true, retryOf: id }
     );

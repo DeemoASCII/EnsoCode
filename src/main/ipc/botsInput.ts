@@ -13,6 +13,7 @@ import {
   type BotList,
   type BotRoutingMode,
   isBotId,
+  isDelegationTimeoutMinutes,
   parseBotBudget,
 } from '@shared/types/bot';
 import type { BotChatUpdateInput, BotChatWorkspaceInput } from '@shared/types/botIpc';
@@ -61,6 +62,7 @@ const DRAFT_KEYS = [
   'memory',
   'persona',
   'budget',
+  'delegationTimeoutMinutes',
 ] as const;
 
 export function parseBotDraftInput(value: unknown): BotDraft | null {
@@ -150,6 +152,12 @@ export function parseBotDraftInput(value: unknown): BotDraft | null {
         return null;
       draft.budget = parseBotBudget(budget);
     }
+  }
+  if (input.delegationTimeoutMinutes !== undefined) {
+    if (input.delegationTimeoutMinutes === null) draft.delegationTimeoutMinutes = undefined;
+    else if (isDelegationTimeoutMinutes(input.delegationTimeoutMinutes))
+      draft.delegationTimeoutMinutes = input.delegationTimeoutMinutes;
+    else return null;
   }
   return draft;
 }

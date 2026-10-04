@@ -17,7 +17,7 @@ import { useI18n } from '@/i18n';
 import { cn } from '@/lib/utils';
 import { Z_INDEX } from '@/lib/z-index';
 import { useBotsStore } from '@/stores/bots';
-import { budgetDraft } from '@/stores/bots/budget';
+import { budgetDraft, limitsDraft } from '@/stores/bots/budget';
 import { parseCharacterCard } from '@/stores/bots/characterCard';
 import { BOT_TEMPLATES, type BotTemplate, templateDraft } from '@/stores/bots/templates';
 import { type AbilityForm, BotAbilityFields, DEFAULT_ABILITIES } from './BotAbilities';
@@ -121,12 +121,20 @@ export function NewBotDialog({
       setError(t('Budget must be a positive number'));
       return;
     }
+    const limits = limitsDraft(draft);
+    if (!limits.ok) {
+      setError(t('Delegation time limit must be 1–1440 whole minutes'));
+      return;
+    }
     setBusy(true);
     try {
       const result = await window.electronAPI.bots.create({
         name: draft.name.trim(),
         title: draft.title.trim(),
         scope: draft.scope.trim(),
+        ...(limits.delegationTimeoutMinutes
+          ? { delegationTimeoutMinutes: limits.delegationTimeoutMinutes }
+          : {}),
         persona: draft.persona,
         avatar: { color: draft.color },
         engine: draft.engine,

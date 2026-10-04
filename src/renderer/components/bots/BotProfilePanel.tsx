@@ -10,7 +10,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { addToast } from '@/components/ui/toast';
 import { useI18n } from '@/i18n';
 import { useBotsStore } from '@/stores/bots';
-import { budgetDraft, budgetFormOf } from '@/stores/bots/budget';
+import { budgetDraft, budgetFormOf, limitsDraft, limitsFormOf } from '@/stores/bots/budget';
 import { type AbilityForm, BotAbilityFields } from './BotAbilities';
 import { BotAvatar } from './BotAvatar';
 import { ColorPicker, EngineField, FieldLabel, nameError } from './BotFields';
@@ -46,12 +46,14 @@ function formOf(bot: BotProfile, persona: string): FormState {
     acceptFrom: bot.delegation.acceptFrom,
     memoryEnabled: bot.memory.enabled,
     ...budgetFormOf(bot.budget),
+    ...limitsFormOf(bot),
   };
 }
 
 function draftOf(form: FormState): BotDraftInput | null {
   const budget = budgetDraft(form);
-  if (!budget.ok) return null;
+  const limits = limitsDraft(form);
+  if (!budget.ok || !limits.ok) return null;
   return {
     name: form.name.trim(),
     title: form.title.trim(),
@@ -66,6 +68,7 @@ function draftOf(form: FormState): BotDraftInput | null {
     delegation: { canDelegateTo: form.canDelegateTo, acceptFrom: form.acceptFrom },
     memory: { enabled: form.memoryEnabled },
     budget: budget.budget,
+    delegationTimeoutMinutes: limits.delegationTimeoutMinutes,
   };
 }
 
@@ -157,7 +160,12 @@ export function BotProfilePanel({ botId, chat, onOpenHistory }: BotProfilePanelP
   const save = async () => {
     const draft = draftOf(form);
     if (!draft) {
-      addToast({ type: 'error', title: t('Budget must be a positive number') });
+      addToast({
+        type: 'error',
+        title: limitsDraft(form).ok
+          ? t('Budget must be a positive number')
+          : t('Delegation time limit must be 1–1440 whole minutes'),
+      });
       return;
     }
     setSaving(true);

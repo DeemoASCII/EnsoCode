@@ -65,6 +65,8 @@ export type BotDraftInput = Partial<
   persona?: string;
   /** null / 缺省 = 不限 */
   budget?: BotProfile['budget'] | null;
+  /** null = 默认时限 */
+  delegationTimeoutMinutes?: number | null;
 };
 
 /** renderer 选工作区：chat-home 的项目由 Main 建，不收 projectId */

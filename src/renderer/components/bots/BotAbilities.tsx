@@ -19,13 +19,13 @@ import { Switch } from '@/components/ui/switch';
 import { addToast } from '@/components/ui/toast';
 import { type TFunction, useI18n } from '@/i18n';
 import { useBotsStore } from '@/stores/bots';
-import type { BudgetForm } from '@/stores/bots/budget';
+import type { BudgetForm, LimitsForm } from '@/stores/bots/budget';
 import { useSettingsStore } from '@/stores/settings';
 import { BotAvatar } from './BotAvatar';
 import { ApprovalSelect, FieldLabel, Segmented } from './BotFields';
 
 /** 成员能力（模型除外）：新建对话框与资料面板共用 */
-export interface AbilityForm extends AbilityValues, BudgetForm {
+export interface AbilityForm extends AbilityValues, BudgetForm, LimitsForm {
   memoryEnabled: boolean;
 }
 
@@ -39,6 +39,7 @@ export const DEFAULT_ABILITIES: AbilityForm = {
   memoryEnabled: true,
   budgetCost: '',
   budgetTokens: '',
+  delegationTimeout: '',
 };
 
 export interface AbilityProfile {
@@ -135,6 +136,25 @@ export function BotAbilityFields({
         <p className="mt-1 text-muted-foreground text-xs">
           {t(
             'Resets at local midnight. Once reached, new messages to this member are refused and a running reply is stopped.'
+          )}
+        </p>
+      </div>
+      <div>
+        <FieldLabel>{t('Delegation time limit (minutes)')}</FieldLabel>
+        <Input
+          type="number"
+          min={1}
+          max={1440}
+          step="1"
+          inputMode="numeric"
+          value={value.delegationTimeout}
+          placeholder={t('Empty = 240')}
+          aria-label={t('Delegation time limit (minutes)')}
+          onChange={(event) => onChange({ delegationTimeout: event.target.value })}
+        />
+        <p className="mt-1 text-muted-foreground text-xs">
+          {t(
+            'When other members delegate to this one, the task fails with a timeout after this long. A delegator can ask for less, not more.'
           )}
         </p>
       </div>

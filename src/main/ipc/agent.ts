@@ -1162,13 +1162,17 @@ export function registerAgentHandlers(): void {
           typeof input.to === 'string' &&
           typeof input.task === 'string' &&
           (input.context === undefined || typeof input.context === 'string') &&
-          (input.taskId === undefined || typeof input.taskId === 'string')
+          (input.taskId === undefined || typeof input.taskId === 'string') &&
+          (input.deadlineMinutes === undefined || typeof input.deadlineMinutes === 'number')
         ) {
           result = service.delegate(identity.sessionId, {
             to: input.to,
             task: input.task,
             ...(typeof input.context === 'string' ? { context: input.context } : {}),
             ...(typeof input.taskId === 'string' ? { taskId: input.taskId } : {}),
+            ...(typeof input.deadlineMinutes === 'number'
+              ? { deadlineMinutes: input.deadlineMinutes }
+              : {}),
           });
         } else if (
           op === 'check_delegation' &&

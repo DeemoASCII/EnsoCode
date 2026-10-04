@@ -55,6 +55,16 @@ describe('parseBotProfile', () => {
     expect(parseBotProfile(profile)?.budget).toBeUndefined();
   });
 
+  it('keeps a positive integer delegation timeout within a day and drops the rest', () => {
+    expect(parseBotProfile({ ...profile, delegationTimeoutMinutes: 30 })).toMatchObject({
+      delegationTimeoutMinutes: 30,
+    });
+    for (const bad of [0, -1, 1.5, 1441, '30', null])
+      expect(parseBotProfile({ ...profile, delegationTimeoutMinutes: bad })).not.toHaveProperty(
+        'delegationTimeoutMinutes'
+      );
+  });
+
   it('keeps a positive daily budget and drops invalid caps', () => {
     expect(
       parseBotProfile({ ...profile, budget: { dailyCostUsd: 0.5, dailyTokens: 2000 } })?.budget

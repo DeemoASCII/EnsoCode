@@ -34,6 +34,8 @@ export interface BotProfile {
   delegation: { canDelegateTo: BotList; acceptFrom: BotList };
   memory: { enabled: boolean };
   budget?: BotBudget;
+  /** 作为被委派方时单次委派的时限（分钟），缺省 DELEGATION_TIMEOUT_MINUTES */
+  delegationTimeoutMinutes?: number;
   archivedAt?: number;
   createdAt: number;
   updatedAt: number;
@@ -81,6 +83,16 @@ export interface BotChat {
 }
 
 export const DELEGATION_STATES = ['queued', 'running', 'completed', 'failed', 'canceled'] as const;
+export const DELEGATION_TIMEOUT_MINUTES = 240;
+export const DELEGATION_TIMEOUT_MAX_MINUTES = 1440;
+
+export function isDelegationTimeoutMinutes(value: unknown): value is number {
+  return (
+    Number.isSafeInteger(value) &&
+    (value as number) >= 1 &&
+    (value as number) <= DELEGATION_TIMEOUT_MAX_MINUTES
+  );
+}
 export type DelegationState = (typeof DELEGATION_STATES)[number];
 export type BotPermissions = Pick<
   BotProfile,
@@ -111,6 +123,8 @@ export interface Delegation {
   taskId?: string;
   /** 由哪条委派重试而来；被指向的记录视为已重试，不能再次重试 */
   retryOf?: string;
+  /** 本次委派的时限（分钟）：发起方 deadlineMinutes 与目标上限取小 */
+  timeoutMinutes?: number;
 }
 
 export function parseDelegation(value: unknown): Delegation | undefined {
@@ -161,6 +175,8 @@ export function parseDelegation(value: unknown): Delegation | undefined {
   if (isText(value.batchId)) record.batchId = value.batchId;
   if (isBotId(value.taskId)) record.taskId = value.taskId;
   if (isText(value.retryOf)) record.retryOf = value.retryOf;
+  if (typeof value.timeoutMinutes === 'number' && value.timeoutMinutes > 0)
+    record.timeoutMinutes = value.timeoutMinutes;
   if (value.effectivePermissions !== undefined) {
     const permissions = value.effectivePermissions;
     if (
@@ -340,6 +356,8 @@ export function parseBotProfile(value: unknown): BotProfile | undefined {
   if (engine) profile.engine = engine;
   const budget = parseBotBudget(value.budget);
   if (budget) profile.budget = budget;
+  if (isDelegationTimeoutMinutes(value.delegationTimeoutMinutes))
+    profile.delegationTimeoutMinutes = value.delegationTimeoutMinutes;
   if (isTime(value.archivedAt)) profile.archivedAt = value.archivedAt;
   return profile;
 }

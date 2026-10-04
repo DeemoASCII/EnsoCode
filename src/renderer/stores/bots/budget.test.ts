@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { budgetAlerts, budgetDraft, budgetFormOf } from './budget';
+import { budgetAlerts, budgetDraft, budgetFormOf, limitsDraft, limitsFormOf } from './budget';
 
 describe('budget form', () => {
   it('round-trips a stored budget and treats blanks as unlimited', () => {
@@ -28,6 +28,23 @@ describe('budget form', () => {
       { budgetCost: '', budgetTokens: '0' },
     ])
       expect(budgetDraft(form).ok, JSON.stringify(form)).toBe(false);
+  });
+});
+
+describe('limits form', () => {
+  it('round-trips the delegation time limit; blank = default (null)', () => {
+    expect(limitsFormOf({})).toEqual({ delegationTimeout: '' });
+    expect(limitsFormOf({ delegationTimeoutMinutes: 30 })).toEqual({ delegationTimeout: '30' });
+    expect(limitsDraft({ delegationTimeout: ' ' })).toEqual({
+      ok: true,
+      delegationTimeoutMinutes: null,
+    });
+    expect(limitsDraft({ delegationTimeout: '90' })).toEqual({
+      ok: true,
+      delegationTimeoutMinutes: 90,
+    });
+    for (const delegationTimeout of ['0', '1.5', '1441', 'x'])
+      expect(limitsDraft({ delegationTimeout }).ok, delegationTimeout).toBe(false);
   });
 });
 
