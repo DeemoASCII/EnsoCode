@@ -1,5 +1,5 @@
 import type { BotChat, BotProfile } from '@shared/types/bot';
-import { MessageSquarePlus, PanelRight, Shield, Sparkles } from 'lucide-react';
+import { MessageSquarePlus, Shield, Sparkles } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { ApprovalBar } from '@/components/chat/ApprovalBar';
 import { APPROVAL_MODE_META } from '@/components/chat/ApprovalModePicker';
@@ -23,8 +23,6 @@ import { LiveSessionDialog, LiveSessionTimeline } from './LiveSessionTimeline';
 import { SessionHistoryDialog } from './SessionHistoryDialog';
 import { WorkspaceMenu } from './WorkspaceMenu';
 
-const PANEL_KEY = 'enso-bot-panel';
-
 export function useModelLabel(bot: BotProfile | undefined): string {
   const { t } = useI18n();
   const providers = useSettingsStore((s) => s.providers);
@@ -44,7 +42,7 @@ export function BotChatView({ chat }: { chat: BotChat }) {
   const timeline = useBotsStore((s) => s.timelines[chat.id]);
   const runtime = useBotsStore((s) => s.runtime[chat.id]);
   const markRead = useBotsStore((s) => s.markRead);
-  const [panelOpen, setPanelOpen] = useState(() => localStorage.getItem(PANEL_KEY) !== '0');
+  const panelOpen = useBotsStore((s) => s.panelOpen);
   const [history, setHistory] = useState<{ id: string; title: string } | null>(null);
   const [live, setLive] = useState<{ id: string; botId: string } | null>(null);
 
@@ -89,11 +87,6 @@ export function BotChatView({ chat }: { chat: BotChat }) {
       void useBotsStore.getState().refreshRuntime(chat.id);
     }
   }, [chat.id, chat.kind]);
-
-  const togglePanel = () => {
-    localStorage.setItem(PANEL_KEY, panelOpen ? '0' : '1');
-    setPanelOpen(!panelOpen);
-  };
 
   const direct = chat.kind === 'direct' ? members[0] : undefined;
   const archived = chat.archivedAt !== undefined;
@@ -179,17 +172,6 @@ export function BotChatView({ chat }: { chat: BotChat }) {
               {t('New conversation')}
             </button>
           )}
-          <button
-            type="button"
-            onClick={togglePanel}
-            className={cn(
-              'flex h-7 w-7 items-center justify-center rounded-md transition-colors hover:bg-muted',
-              panelOpen ? 'text-foreground' : 'text-muted-foreground'
-            )}
-            title={chat.kind === 'group' ? t('Group info') : t('Member profile')}
-          >
-            <PanelRight className="h-4 w-4" />
-          </button>
         </header>
 
         {direct ? (

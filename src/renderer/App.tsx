@@ -47,6 +47,7 @@ import {
   closeActiveSidePanelTab,
 } from '@/lib/sidePanelDock';
 import { cn } from '@/lib/utils';
+import { useBotsStore } from '@/stores/bots';
 import { isBotModeActive, useAppModeStore, useBotModeActive } from '@/stores/bots/mode';
 import { bindPairCatalogSync } from '@/stores/pairCatalog';
 import { useRemoteNodesStore } from '@/stores/remoteNodes';
@@ -92,6 +93,8 @@ export default function App() {
   );
   const sideFullscreen = useSidePanelStore((s) => s.fullscreen);
   const toggleSidePanel = useSidePanelStore((s) => s.toggleOpen);
+  const botPanelOpen = useBotsStore((s) => s.panelOpen);
+  const toggleBotPanel = useBotsStore((s) => s.togglePanel);
   useEffect(() => {
     if (sideFullscreen && !sideOpen) useSidePanelStore.getState().setFullscreen(false);
   }, [sideOpen, sideFullscreen]);
@@ -198,6 +201,11 @@ export default function App() {
       if (!pressed) return;
       // 远程节点 / Bot 模式：本机 Code 会话相关的快捷键不响应（新对话/tab 切换/右侧面板/查找）
       const remote = useRemoteNodesStore.getState().activeNodeId !== 'local' || isBotModeActive();
+      if (isBotModeActive() && pressed === bindings['toggle-side-panel']) {
+        e.preventDefault();
+        useBotsStore.getState().togglePanel();
+        return;
+      }
       if (
         remote &&
         [
@@ -306,14 +314,16 @@ export default function App() {
                 <UnfoldHorizontal className="h-4 w-4" />
               )}
             </button>
-            {!remoteNodeActive && !botModeActive && (
+            {!remoteNodeActive && (
               <button
                 type="button"
                 className={cn(
                   'flex h-7 w-7 items-center justify-center rounded-md transition-colors hover:bg-accent/50',
-                  sideOpen ? 'text-foreground' : 'text-muted-foreground'
+                  (botModeActive ? botPanelOpen : sideOpen)
+                    ? 'text-foreground'
+                    : 'text-muted-foreground'
                 )}
-                onClick={toggleSidePanel}
+                onClick={botModeActive ? toggleBotPanel : toggleSidePanel}
                 aria-label={t('Toggle side panel')}
                 title={t('Toggle side panel')}
               >

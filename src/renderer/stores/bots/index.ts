@@ -35,6 +35,7 @@ export type BotView = { kind: 'chat'; chatId: string } | { kind: 'inbox' } | nul
 
 const TIMELINE_PAGE = 50;
 const READS_KEY = 'enso-bot-reads';
+const PANEL_KEY = 'enso-bot-panel';
 const VIEW_KEY = 'enso-bot-view';
 const DISMISSED_KEY = 'enso-bot-dismissed-delegations';
 
@@ -79,6 +80,8 @@ interface BotsState {
   sessionHistoryLoading: Record<string, boolean>;
   reads: Record<string, number>;
   view: BotView;
+  /** 聊天右侧的成员资料 / 群信息面板 */
+  panelOpen: boolean;
 
   /** 订阅 Bot 事件与 agent 事件流并拉一次全量；返回清理函数 */
   bind: () => () => void;
@@ -94,6 +97,7 @@ interface BotsState {
   trackSession: (conversationId: string) => Promise<void>;
   loadOlderSession: (conversationId: string) => Promise<void>;
   setView: (view: BotView) => void;
+  togglePanel: () => void;
   markRead: (key: string, marker: number) => void;
   send: (chatId: string, text: string, images: AttachedImage[]) => Promise<BotSendResult>;
   stop: (chatId: string) => Promise<void>;
@@ -191,6 +195,7 @@ export const useBotsStore = create<BotsState>()((set, get) => {
     sessionHistoryLoading: {},
     reads: storedReads ?? {},
     view: loadView(),
+    panelOpen: localStorage.getItem(PANEL_KEY) !== '0',
 
     bind: () => {
       let active = true;
@@ -383,6 +388,12 @@ export const useBotsStore = create<BotsState>()((set, get) => {
       else if (view?.kind === 'inbox') localStorage.setItem(VIEW_KEY, 'inbox');
       else localStorage.removeItem(VIEW_KEY);
       set({ view });
+    },
+
+    togglePanel: () => {
+      const panelOpen = !get().panelOpen;
+      localStorage.setItem(PANEL_KEY, panelOpen ? '1' : '0');
+      set({ panelOpen });
     },
 
     markRead: (key, marker) => {
