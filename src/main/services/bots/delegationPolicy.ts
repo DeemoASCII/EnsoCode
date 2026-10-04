@@ -24,16 +24,11 @@ export function delegationPolicy(
   return undefined;
 }
 
-export function intersectBotPermissions(parent: BotProfile, target: BotProfile): BotProfile {
+/** 委派按目标成员自身能力执行（工具、技能、MCP 取目标档案），审批档取两者更严 */
+export function delegatedBotPermissions(parent: BotProfile, target: BotProfile): BotProfile {
   const a = parent.approvalMode,
     b = target.approvalMode;
   // assistant is policy-driven, not a total ordering relative to auto-edits.
   const approvalMode = a === b ? a : a === 'full' ? b : b === 'full' ? a : 'supervised';
-  return {
-    ...target,
-    tools: parent.tools === 'readonly' || target.tools === 'readonly' ? 'readonly' : 'all',
-    approvalMode,
-    skillIds: target.skillIds.filter((id) => parent.skillIds.includes(id)),
-    mcpServerIds: target.mcpServerIds.filter((id) => parent.mcpServerIds.includes(id)),
-  };
+  return { ...target, approvalMode };
 }

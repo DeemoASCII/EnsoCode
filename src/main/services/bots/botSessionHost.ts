@@ -72,6 +72,8 @@ export interface BotSessionHostDeps {
   runtime: BotRuntimePort;
   emit: (event: BotEvent) => void;
   maxRunningTurns?: number;
+  /** 轮次只收到 idle/failed 状态而迟迟没有 turn-completed/turn-failed 时的兜底结算延迟 */
+  settleGraceMs?: number;
 }
 
 export interface BotDeliverOptions {
@@ -82,7 +84,14 @@ export interface BotDeliverOptions {
 }
 
 export type BotDeliverResult =
-  | { ok: true; conversationId: string; queued?: boolean; turnId?: string }
+  | {
+      ok: true;
+      conversationId: string;
+      queued?: boolean;
+      turnId?: string;
+      /** 同一 deliveryId 已被该会话处理过，本次没有发出 */
+      duplicate?: true;
+    }
   | Fail;
 
 export interface BotTurnFinished {
@@ -127,6 +136,8 @@ export class BotSessionHost {
   private readonly locks = new Map<string, Promise<unknown>>();
   private readonly listeners = new Set<(event: BotTurnFinished) => void>();
   private readonly maxRunning: number;
+  private readonly settleGraceMs: number;
+  private readonly settleTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private readonly independentSpecs = new Map<string, BotSpawnSpec>();
   private readonly liveProfiles = new Map<string, BotProfile>();
   private readonly activeDeliveries = new Map<string, string>();
@@ -201,6 +212,7 @@ export class BotSessionHost {
 
   constructor(private readonly deps: BotSessionHostDeps) {
     this.maxRunning = deps.maxRunningTurns ?? BOT_MAX_RUNNING_TURNS;
+    this.settleGraceMs = deps.settleGraceMs ?? 2000;
   }
 
   onTurnFinished(listener: (event: BotTurnFinished) => void): () => void {
@@ -395,7 +407,7 @@ export class BotSessionHost {
       if (this.disposed) return { ok: false, error: 'disabled' };
       if (options.deliveryId) {
         if (this.hasStartedDelivery(conversationId, options.deliveryId))
-          return { ok: true, conversationId };
+          return { ok: true, conversationId, duplicate: true };
         if (
           this.deliveries.get(conversationId)?.has(options.deliveryId) ||
           this.queue.some(
@@ -483,6 +495,7 @@ export class BotSessionHost {
     if (this.disposed) return;
     if (event.type === 'worker-exited') {
       const interrupted = [...this.slots.keys()];
+      for (const id of [...this.settleTimers.keys()]) this.cancelSettle(id);
       this.live.clear();
       this.running.clear();
       this.slots.clear();
@@ -498,12 +511,18 @@ export class BotSessionHost {
       case 'status': {
         const slot = this.slots.get(id);
         if (event.status === 'running') {
+          this.cancelSettle(id);
           if (!this.running.has(id) && !slot?.sawRunning) this.lastAssistant.delete(id);
           this.running.add(id);
           if (slot) slot.sawRunning = true;
           this.deliveryStarted(id);
           return;
         }
+        this.running.delete(id);
+        // idle 先于 turn-completed 到达，正常由后者结算；中断等路径只有 idle/failed，到期兜底
+        if (slot && (slot.sawRunning || event.status === 'failed'))
+          this.scheduleSettle(id, slot, event.status === 'failed' ? event.error : undefined);
+        else if (!slot) this.pump();
         return;
       }
       case 'message-upsert': {
@@ -695,8 +714,27 @@ export class BotSessionHost {
   }
 
   private release(conversationId: string): void {
+    this.cancelSettle(conversationId);
     if (!this.slots.delete(conversationId)) return;
     this.pump();
+  }
+
+  private scheduleSettle(id: string, slot: { sawRunning: boolean }, error?: string): void {
+    this.cancelSettle(id);
+    const timer = setTimeout(() => {
+      this.settleTimers.delete(id);
+      if (this.disposed || this.slots.get(id) !== slot || this.running.has(id)) return;
+      this.finish(id, undefined, false, error ?? 'interrupted', this.lastAssistant.get(id)?.text);
+      this.lastAssistant.delete(id);
+      this.release(id);
+    }, this.settleGraceMs);
+    timer.unref?.();
+    this.settleTimers.set(id, timer);
+  }
+
+  private cancelSettle(id: string): void {
+    clearTimeout(this.settleTimers.get(id));
+    this.settleTimers.delete(id);
   }
 
   private pump(): void {
@@ -830,6 +868,7 @@ export class BotSessionHost {
   }
 
   private cancelActive(id: string): void {
+    this.cancelSettle(id);
     if (this.turnActive(id)) this.finish(id, undefined, false, 'canceled');
     this.running.delete(id);
     this.slots.delete(id);
@@ -837,6 +876,7 @@ export class BotSessionHost {
   }
 
   private clearSession(id: string): void {
+    this.cancelSettle(id);
     this.running.delete(id);
     this.slots.delete(id);
     this.lastAssistant.delete(id);

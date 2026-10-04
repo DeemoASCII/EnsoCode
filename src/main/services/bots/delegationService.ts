@@ -4,7 +4,7 @@ import type { BotEvent, BotSendResult } from '../../../shared/types/botIpc';
 import type { BotAuthorityPort, BotSessionHost } from './botSessionHost';
 import type { BotStore } from './botStore';
 import type { BotChatStore } from './chatStore';
-import { delegationPolicy, intersectBotPermissions } from './delegationPolicy';
+import { delegatedBotPermissions, delegationPolicy } from './delegationPolicy';
 import type { DelegationStore } from './delegationStore';
 
 interface Deps {
@@ -104,16 +104,9 @@ export class DelegationService {
     if (conversation.bot.delegationId && !ancestor)
       return { ok: false, error: 'Parent delegation record unavailable.' };
     if (ancestor) {
-      parent = intersectBotPermissions(
-        {
-          ...parent,
-          ...(ancestor.effectivePermissions ?? {
-            tools: 'readonly',
-            approvalMode: 'supervised',
-            skillIds: [],
-            mcpServerIds: [],
-          }),
-        },
+      // 重启后 effectiveBot 回落到原始档案，审批档仍按祖先委派快照收紧
+      parent = delegatedBotPermissions(
+        { ...parent, approvalMode: ancestor.effectivePermissions?.approvalMode ?? 'supervised' },
         parent
       );
     }
@@ -141,7 +134,7 @@ export class DelegationService {
       chatId: null,
       delegationId: id,
     });
-    const effective = intersectBotPermissions(parent, target);
+    const effective = delegatedBotPermissions(parent, target);
     if (!child || !this.deps.host.registerDelegation(child.conversationId, effective))
       return { ok: false, error: 'Delegation workspace unavailable.' };
     const record: Delegation = {
@@ -269,10 +262,8 @@ export class DelegationService {
         if (
           !bot ||
           !this.deps.host.registerDelegation(parent.conversationId, {
-            ...intersectBotPermissions(
-              { ...bot, ...(saved ?? { skillIds: [], mcpServerIds: [] }) },
-              bot
-            ),
+            ...bot,
+            ...(saved ? { skillIds: saved.skillIds, mcpServerIds: saved.mcpServerIds } : {}),
             tools: 'readonly',
             approvalMode: 'supervised',
           })

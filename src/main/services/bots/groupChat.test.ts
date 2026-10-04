@@ -102,6 +102,18 @@ it('failed delivery is not a skip and continues to the next member', async () =>
     expect.arrayContaining([expect.objectContaining({ kind: 'system', text: 'Bob 暂时无法回复' })])
   );
 });
+it('relays use fresh delivery ids and a duplicate delivery is reported instead of hanging', async () => {
+  await group.send(id, 'hello', { deliveryId: 'human' });
+  expect(deliver.mock.calls[0][3]).toMatchObject({ deliveryId: 'human' });
+  deliver.mockResolvedValueOnce({ ok: true, conversationId: b, duplicate: true });
+  await done(a, '@Bob go');
+  expect(deliver.mock.calls[1][3].deliveryId).not.toBe('human');
+  expect(entries().at(-1)).toMatchObject({
+    kind: 'system',
+    text: 'Bob 的投递已处理过，本次未发出',
+  });
+  expect(group.state(id)).toMatchObject({ current: null });
+});
 it('disposing prevents background relay and settles autonomous waiters', async () => {
   await group.send(id, 'hello');
   const pending = group.runAs(id, b, 'routine', 'routine');

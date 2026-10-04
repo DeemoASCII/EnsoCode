@@ -127,6 +127,50 @@ describe('BotSessionHost.ensureSession', () => {
     expect(host.hasStartedDelivery(sent.conversationId, 'absent')).toBe(false);
     await host.deliver(chat.id, alice.id, 'do not replay', { deliveryId: 'persisted' });
     expect(runtime.steers).toHaveLength(0);
+    expect(
+      await host.deliver(chat.id, alice.id, 'do not replay', { deliveryId: 'persisted' })
+    ).toMatchObject({ ok: true, duplicate: true });
+  });
+  it('settles a turn that ends with only idle/failed status and sends work queued behind it', async () => {
+    host = new BotSessionHost({
+      bots,
+      chats,
+      authority: registry,
+      runtime,
+      emit: () => {},
+      settleGraceMs: 5,
+    });
+    const alice = bot('Alice');
+    const chat = direct(alice.id);
+    const results: BotTurnFinished[] = [];
+    host.onTurnFinished((event) => results.push(event));
+    const first = await host.deliver(chat.id, alice.id, 'first', { deliveryId: 'first' });
+    if (!first.ok) throw new Error(first.error);
+    await host.deliver(chat.id, alice.id, 'next', { queueIfBusy: true, deliveryId: 'next' });
+    host.observe(ev({ type: 'status', status: 'running' }, first.conversationId));
+    // 中断：worker 只发 idle，不发 turn-completed
+    host.observe(ev({ type: 'status', status: 'idle' }, first.conversationId));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(results).toMatchObject([{ deliveryId: 'first', ok: false, error: 'interrupted' }]);
+    expect(runtime.prompts.map((item) => item.text)).toEqual(['first', 'next']);
+    // worker 命令失败：只有 failed 状态，没有 running 也没有 turn-failed
+    host.observe(ev({ type: 'status', status: 'failed', error: 'boom' }, first.conversationId));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(results.at(-1)).toMatchObject({ deliveryId: 'next', ok: false, error: 'boom' });
+    expect(host.runningCount()).toBe(0);
+    expect(host.isBusy(first.conversationId)).toBe(false);
+  });
+  it('an idle session without a host turn sends deliveries queued behind its autonomous run', async () => {
+    const alice = bot('Alice');
+    const chat = direct(alice.id);
+    const session = host.ensureSession(chat.id, alice.id);
+    if (!session.ok) throw new Error(session.error);
+    host.observe(ev({ type: 'status', status: 'running' }, session.conversationId));
+    await host.deliver(chat.id, alice.id, 'routine', { queueIfBusy: true, deliveryId: 'r' });
+    expect(runtime.prompts).toHaveLength(0);
+    host.observe(ev({ type: 'status', status: 'idle' }, session.conversationId));
+    await flush();
+    expect(runtime.prompts.map((item) => item.text)).toEqual(['routine']);
   });
   it('idle does not start queued routines or misattribute the completed result', async () => {
     const alice = bot('Alice');

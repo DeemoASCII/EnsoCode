@@ -56,6 +56,12 @@ const empty = (): RouterState => ({
   turnsByBot: {},
   noticed: [],
 });
+/** 本轮首个投递之后的接力：deliveryId 与 onlyIfIdle 只属于触发这一轮的那条投递 */
+const relayOptions = (options: BotDeliverOptions | undefined): BotDeliverOptions | undefined => {
+  if (!options) return options;
+  const { deliveryId: _deliveryId, onlyIfIdle: _onlyIfIdle, ...rest } = options;
+  return rest;
+};
 
 /** 每群串行归并；router.json 只用于崩溃恢复，不重放未完成的工作。 */
 export class GroupChatService {
@@ -295,10 +301,12 @@ export class GroupChatService {
           .deliver(chatId, job.botId, job.text, round.options)
           .catch((error) => ({ ok: false as const, error: String(error) }));
         job.resolve(sent);
-        if (sent.ok) {
+        round.options = relayOptions(round.options);
+        if (sent.ok && !sent.duplicate) {
           this.persist(chatId);
           return;
         }
+        if (sent.ok) this.system(chatId, `${bot.name} 的投递已处理过，本次未发出`);
         round.state = empty();
         return this.dispatch(chatId);
       }
@@ -320,8 +328,12 @@ export class GroupChatService {
       round.generation++;
       this.persist(chatId);
       const sent = await this.deliver(chat, botId, round.options);
-      if (sent.ok) return;
-      this.system(chatId, `${bot.name} 暂时无法回复`);
+      round.options = relayOptions(round.options);
+      if (sent.ok && !sent.duplicate) return;
+      this.system(
+        chatId,
+        sent.ok ? `${bot.name} 的投递已处理过，本次未发出` : `${bot.name} 暂时无法回复`
+      );
       this.advance(chat, '');
     }
     if (unavailable) this.system(chatId, '请先指定群主');
@@ -351,7 +363,8 @@ export class GroupChatService {
     // ensureSession 首建会话会设到末尾；失败也要恢复投递前水位。
     this.deps.chats.update(chat.id, (draft) => {
       const session = draft.sessions[botId];
-      if (session) session.cursor = result.ok && !result.queued ? delta.cursor : cursor;
+      if (session)
+        session.cursor = result.ok && !result.queued && !result.duplicate ? delta.cursor : cursor;
       return draft;
     });
     if (!result.ok || !result.queued) this.cursors.delete(deliveryId);

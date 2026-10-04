@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { type Delegation, parseBotProfile, parseDelegation } from '../../../shared/types/bot';
-import { delegationPolicy, intersectBotPermissions } from './delegationPolicy';
+import { delegatedBotPermissions, delegationPolicy } from './delegationPolicy';
 import { DelegationStore } from './delegationStore';
 
 const a = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa';
@@ -59,9 +59,9 @@ describe('delegation policy', () => {
     expect(delegationPolicy(parent, target, 2, 3)).toBeDefined();
     expect(delegationPolicy(parent, target, 2, 2, [a, b])).toBeUndefined();
   });
-  it('never widens parent permissions and intersects target assets', () => {
+  it("runs with the target's own tools and assets under the stricter approval mode", () => {
     expect(
-      intersectBotPermissions(
+      delegatedBotPermissions(
         {
           ...profile(a),
           tools: 'readonly',
@@ -72,13 +72,20 @@ describe('delegation policy', () => {
         { ...profile(b), skillIds: ['target', 'shared'], mcpServerIds: ['mcp', 'common'] }
       )
     ).toMatchObject({
-      tools: 'readonly',
+      id: b,
+      tools: 'all',
       approvalMode: 'supervised',
-      skillIds: ['shared'],
-      mcpServerIds: ['common'],
+      skillIds: ['target', 'shared'],
+      mcpServerIds: ['mcp', 'common'],
     });
     expect(
-      intersectBotPermissions(
+      delegatedBotPermissions(
+        { ...profile(a), tools: 'all' },
+        { ...profile(b), tools: 'readonly', approvalMode: 'full' }
+      )
+    ).toMatchObject({ tools: 'readonly', approvalMode: profile(a).approvalMode });
+    expect(
+      delegatedBotPermissions(
         { ...profile(a), approvalMode: 'assistant' },
         { ...profile(b), approvalMode: 'auto-edits' }
       ).approvalMode

@@ -116,7 +116,7 @@ it('truncates context, finishes once, and waits for the busy parent', async () =
   expect(f.prompts.filter((p) => p.text.includes('<delegation-result'))).toHaveLength(1);
   f.service.dispose();
 });
-it('persists permission intersections and keeps nested delegations restricted after restore', async () => {
+it("runs delegations with the target's own capabilities and keeps the stricter approval after restore", async () => {
   const f = fixture();
   const alice = f.deps.bots.list().find((bot) => bot.name === 'Alice')!;
   const bob = f.deps.bots.list().find((bot) => bot.name === 'Bob')!;
@@ -135,21 +135,26 @@ it('persists permission intersections and keeps nested delegations restricted af
   if (!first.ok) throw new Error(first.error);
   const record = f.store.get(first.delegationId)!;
   expect(record.effectivePermissions).toEqual({
-    tools: 'readonly',
+    tools: 'all',
     approvalMode: 'supervised',
-    skillIds: ['shared'],
-    mcpServerIds: ['common'],
+    skillIds: ['shared', 'bob'],
+    mcpServerIds: ['common', 'bob'],
   });
   await vi.advanceTimersByTimeAsync(0);
   f.deps.bots.update(
     alice.id,
-    { tools: 'all', skillIds: ['shared', 'bob'], mcpServerIds: ['common', 'bob'] },
+    { tools: 'all', approvalMode: 'full', skillIds: ['alice'], mcpServerIds: [] },
     []
   );
   const nested = f.service.delegate(record.childConversationId, { to: 'Alice', task: 'nested' });
   if (!nested.ok) throw new Error(nested.error);
   const child = f.store.get(nested.delegationId)!;
-  expect(child.effectivePermissions).toEqual(record.effectivePermissions);
+  expect(child.effectivePermissions).toEqual({
+    tools: 'all',
+    approvalMode: 'supervised',
+    skillIds: ['alice'],
+    mcpServerIds: [],
+  });
   await vi.advanceTimersByTimeAsync(0);
   f.finish(record.childConversationId);
   f.finish(child.childConversationId);
