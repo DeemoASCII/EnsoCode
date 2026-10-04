@@ -10,11 +10,13 @@ import type Database from 'better-sqlite3';
 import { deleteMemoryPermanently } from '../memoryAdmin';
 import { createCrystal } from './crystal';
 import type { Complete } from './distill';
+import { type PendingWriteInput, queuePendingWrite } from './pending';
+import { sanitizeMemoryWrite } from './safety';
 import { searchMemories } from './search';
 import { createSearchAssist } from './searchLlm';
 import { defaultCaptureSpace, type MemorySpaceContext, resolveSpaceIds } from './space';
 import { createMemory, getMemory } from './store';
-import { type Embedder, type Memory, MemoryValidationError } from './types';
+import { type Embedder, GLOBAL_SPACE, type Memory, MemoryValidationError } from './types';
 
 /** projectId：Main 权威 Project.id，会话不属于任何项目（或项目已失效）时为 null；botId/chatId 仅 Bot 模式 */
 export interface MemoryBridgeContext extends MemorySpaceContext {
@@ -24,9 +26,40 @@ export interface MemoryBridgeContext extends MemorySpaceContext {
   onCreated?: (memory: Memory) => void;
   /** 删除成功后的通知（刷新记忆视图） */
   onDeleted?: (id: string) => void;
+  /** Bot 会话写 project / global 进入待审批后的通知（刷新收件箱 / 记忆审批入口） */
+  onPending?: (id: string) => void;
   /** deep 检索的 instruct LLM；不可用时检索退回本地意图 */
   complete?: (() => Complete | null | Promise<Complete | null>) | null;
 }
+
+/** Bot 会话写共享空间（项目 / 全局）需用户审批；自己的 bot / chat 空间直接写 */
+function needsReview(ctx: MemoryBridgeContext, spaceId: string): boolean {
+  return Boolean(ctx.botId) && (spaceId === GLOBAL_SPACE || spaceId.startsWith('proj:'));
+}
+
+function queueForReview(
+  db: Database.Database,
+  ctx: MemoryBridgeContext,
+  input: Omit<PendingWriteInput, 'botId' | 'chatId'>
+): unknown {
+  const pending = queuePendingWrite(
+    db,
+    { ...input, botId: ctx.botId ?? null, chatId: ctx.chatId ?? null },
+    ctx.now
+  );
+  ctx.onPending?.(pending.id);
+  return {
+    status: 'pending_review',
+    written: false,
+    ...(input.redacted ? { redacted: true } : {}),
+    pendingId: pending.id,
+    message:
+      `Not written yet: writes from Bot members to the ${input.spaceId === GLOBAL_SPACE ? 'global' : 'project'} ` +
+      'memory space need user approval. It is queued in the inbox and will be saved once the user approves; do not resubmit it.',
+  };
+}
+
+const REDACTED_NOTE = 'Secrets in the content were replaced with [REDACTED] before saving.';
 
 /**
  * worker `memory-invoke` 的 Main 侧执行入口。载荷按 unknown 收窄（桥两端都归一/校验，不信任 worker），
@@ -84,11 +117,31 @@ export async function executeMemoryOp(
         "this session has no project; use spaceId 'global' instead"
       );
     }
+    const safe = sanitizeMemoryWrite({ title: request.title ?? null, content: request.content });
+    if (needsReview(ctx, spaceId)) {
+      return queueForReview(db, ctx, {
+        kind: 'capture',
+        spaceId,
+        title: safe.title,
+        content: safe.content,
+        redacted: safe.redacted,
+        payload: {
+          unitType: request.unitType,
+          unitTypeSource: request.unitTypeSource,
+          importance: request.importance,
+          ...(request.eventStart ? { eventStart: request.eventStart } : {}),
+          ...(request.eventEnd ? { eventEnd: request.eventEnd } : {}),
+          ...(request.force ? { force: true } : {}),
+          ...(request.evolvesFromId ? { evolvesFromId: request.evolvesFromId } : {}),
+          ...(request.evolvesRelation ? { evolvesRelation: request.evolvesRelation } : {}),
+        },
+      });
+    }
     const result = await createMemory(
       db,
       {
-        content: request.content,
-        title: request.title ?? null,
+        content: safe.content,
+        title: safe.title,
         unitType: request.unitType,
         unitTypeSource: request.unitTypeSource,
         importance: request.importance,
@@ -124,6 +177,7 @@ export async function executeMemoryOp(
     return {
       status: 'inserted',
       ...(result.deduplicated ? { deduplicated: true } : {}),
+      ...(safe.redacted ? { redacted: true, note: REDACTED_NOTE } : {}),
       ...(result.evolves
         ? { evolves: { relation: result.evolves.relation, olderId: result.evolves.olderId } }
         : {}),
@@ -165,11 +219,22 @@ export async function executeMemoryOp(
       );
     }
     const [spaceId] = spaceIds;
+    const safe = sanitizeMemoryWrite({ title: request.title, content: request.content });
+    if (needsReview(ctx, spaceId)) {
+      return queueForReview(db, ctx, {
+        kind: 'crystallize',
+        spaceId,
+        title: safe.title,
+        content: safe.content,
+        redacted: safe.redacted,
+        payload: { sourceIds: request.sourceIds, ...(request.force ? { force: true } : {}) },
+      });
+    }
     const result = await createCrystal(
       db,
       {
-        content: request.content,
-        title: request.title,
+        content: safe.content,
+        title: safe.title ?? request.title,
         sourceIds: request.sourceIds,
         spaceId,
         force: request.force,

@@ -2,6 +2,7 @@ import type { AttachedImage } from '@shared/types/agent';
 import type { BotChat, BotProfile, Delegation, GroupEntry, GroupTask } from '@shared/types/bot';
 import type { BotEvent, BotQueueItem, BotSearchHit, BotSendResult } from '@shared/types/botIpc';
 import { create } from 'zustand';
+import { usePendingMemoryWrites } from '@/stores/memoryReview';
 import { applyHistoryPage, emptyProjection } from '@/stores/sessions/reducer';
 import { resizeSidePanelWidth, SIDE_PANEL_DEFAULT_WIDTH } from '@/stores/sidePanel/width';
 import type { BotUsageSnapshot } from './budget';
@@ -577,4 +578,5 @@ export const useBotsStore = create<BotsState>()((set, get) => {
   };
 });
 
-export const useBotPendingCount = (): number => useBotsStore(botPendingCount);
+export const useBotPendingCount = (): number =>
+  useBotsStore(botPendingCount) + usePendingMemoryWrites().length;

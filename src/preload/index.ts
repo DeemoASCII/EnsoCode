@@ -28,6 +28,8 @@ import type {
   MemoryListResult,
   MemoryMutationResult,
   MemoryStats,
+  PendingMemoryWriteDecision,
+  PendingMemoryWriteDto,
 } from '@shared/memory/dto';
 import type {
   CrystallizeRequest,
@@ -339,6 +341,13 @@ const electronAPI = {
       ipcRenderer.invoke(IPC_CHANNELS.MEMORY_EVOLVES_PENDING),
     evolvesReview: (id: string, state: 'accepted' | 'rejected'): Promise<MemoryMutationResult> =>
       ipcRenderer.invoke(IPC_CHANNELS.MEMORY_EVOLVES_REVIEW, id, state),
+    pendingWrites: (): Promise<PendingMemoryWriteDto[]> =>
+      ipcRenderer.invoke(IPC_CHANNELS.MEMORY_PENDING_WRITES),
+    reviewPendingWrite: (
+      id: string,
+      decision: PendingMemoryWriteDecision
+    ): Promise<MemoryMutationResult> =>
+      ipcRenderer.invoke(IPC_CHANNELS.MEMORY_PENDING_WRITE_REVIEW, id, decision),
     models: (): Promise<EmbeddingModelDto[]> => ipcRenderer.invoke(IPC_CHANNELS.MEMORY_MODELS),
     downloadModel: (modelId: string): Promise<boolean> =>
       ipcRenderer.invoke(IPC_CHANNELS.MEMORY_MODEL_DOWNLOAD, modelId),

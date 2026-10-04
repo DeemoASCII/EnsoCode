@@ -18,6 +18,7 @@ import {
 } from '@shared/memory/prompts';
 import { normalizeTemporalDate } from '@shared/memory/temporal';
 import type Database from 'better-sqlite3';
+import { scanMemoryInjection } from './injectionScan';
 import { createMemory } from './store';
 import type { CreateMemoryInput, Embedder, Memory } from './types';
 
@@ -319,9 +320,11 @@ export function parseDistillResponse(raw: string): DistilledMemory[] | null {
     const content = str(o.content);
     const importance = num(o.importance);
     if (!content || importance === null) continue;
+    const title = str(o.title);
+    // 蒸馏输入来自会话正文，可能夹带外部网页 / 文件里的注入文本；命中就整条丢弃
+    if (scanMemoryInjection(`${title ?? ''}\n${content}`).length > 0) continue;
     const t =
       o.temporal && typeof o.temporal === 'object' ? (o.temporal as Record<string, unknown>) : null;
-    const title = str(o.title);
     out.push({
       title: title === null ? null : redactSecrets(title),
       content: redactSecrets(content),

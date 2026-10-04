@@ -41,6 +41,7 @@ import {
   listResumableKgJobs,
   runKgJob,
 } from './memory/kg';
+import { approvePendingWrite } from './memory/pending';
 import { getReembedJob, type ReembedJob, runReembedJob } from './memory/reembed';
 import { distillSpaces, type MemorySpaceContext } from './memory/space';
 import type { Embedder, Memory } from './memory/types';
@@ -691,6 +692,19 @@ export async function invokeMemory(
     embedder: await memoryEmbedder(),
     onCreated: onMemoryCreated,
     onDeleted: notifyMemoryChanged,
+    onPending: notifyMemoryChanged,
     complete: () => getMemoryCompletion(),
   });
+}
+
+/** 批准 Bot 成员写共享空间的待审批记忆：走与工具写入同一条创建链路（向量、KG 排队、变更通知） */
+export async function approvePendingMemoryWrite(
+  id: string
+): Promise<{ ok: boolean; error?: string }> {
+  const result = await approvePendingWrite(memoryDb(), id, {
+    embedder: await memoryEmbedder(),
+    onCreated: onMemoryCreated,
+  });
+  notifyMemoryChanged();
+  return result.ok ? { ok: true } : { ok: false, error: result.error };
 }

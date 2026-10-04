@@ -10,9 +10,11 @@ import { useBotsStore } from '@/stores/bots';
 import { type BudgetAlert, budgetAlerts } from '@/stores/bots/budget';
 import { interruptedDelegations, pendingOwners } from '@/stores/bots/delegations';
 import { type PendingItem, pendingItems } from '@/stores/bots/selectors';
+import { usePendingMemoryWrites } from '@/stores/memoryReview';
 import { BotAvatar } from './BotAvatar';
 import { chatTitle } from './botText';
 import { DelegationBadge, failureText, retryDelegation } from './DelegationCard';
+import { MemoryWriteCard } from './MemoryWriteCard';
 import { SessionHistoryDialog } from './SessionHistoryDialog';
 
 /** 收件箱：成员会话与委派会话里待你处理的审批、提问，以及重启中断的委派 */
@@ -37,6 +39,7 @@ export function BotInbox() {
     [delegations, dismissed]
   );
   const budgets = useMemo(() => budgetAlerts(usage, dismissedBudgets), [usage, dismissedBudgets]);
+  const memoryWrites = usePendingMemoryWrites();
   const byId = useMemo(() => new Map(bots.map((bot) => [bot.id, bot])), [bots]);
   const chatName = (chatId: string | null) => {
     const chat = chats.find((entry) => entry.id === chatId);
@@ -53,12 +56,15 @@ export function BotInbox() {
       </header>
       <div className="min-h-0 flex-1 overflow-y-auto">
         <div className="mx-auto w-full max-w-2xl space-y-2.5 px-6 py-4">
-          {items.length === 0 && interrupted.length === 0 && budgets.length === 0 && (
-            <div className="flex flex-col items-center gap-2 py-16 text-muted-foreground">
-              <Inbox className="h-6 w-6" />
-              <p className="text-sm">{t('Nothing needs your attention')}</p>
-            </div>
-          )}
+          {items.length === 0 &&
+            interrupted.length === 0 &&
+            budgets.length === 0 &&
+            memoryWrites.length === 0 && (
+              <div className="flex flex-col items-center gap-2 py-16 text-muted-foreground">
+                <Inbox className="h-6 w-6" />
+                <p className="text-sm">{t('Nothing needs your attention')}</p>
+              </div>
+            )}
           {items.map((item) => (
             <InboxCard
               key={`${item.conversationId}:${item.request.requestId}`}
@@ -70,6 +76,14 @@ export function BotInbox() {
           ))}
           {budgets.map((alert) => (
             <BudgetCard key={alert.key} alert={alert} bot={byId.get(alert.botId)} />
+          ))}
+          {memoryWrites.map((write) => (
+            <MemoryWriteCard
+              key={write.id}
+              write={write}
+              bot={write.botId ? byId.get(write.botId) : undefined}
+              chatName={chatName(write.chatId)}
+            />
           ))}
           {interrupted.length > 0 && (
             <div className="pt-3 font-medium text-muted-foreground text-xs">

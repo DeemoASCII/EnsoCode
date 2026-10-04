@@ -692,6 +692,8 @@ export const IPC_PRODUCT_COVERAGE = {
   MEMORY_JOBS_CLEAR: excluded('Memory desktop UI; not an Enso capability.'),
   MEMORY_EVOLVES_PENDING: excluded('Memory desktop UI; not an Enso capability.'),
   MEMORY_EVOLVES_REVIEW: excluded('Memory desktop UI; not an Enso capability.'),
+  MEMORY_PENDING_WRITES: excluded('Memory desktop UI; not an Enso capability.'),
+  MEMORY_PENDING_WRITE_REVIEW: excluded('Memory desktop UI; not an Enso capability.'),
   MEMORY_MODELS: excluded('Memory desktop UI; not an Enso capability.'),
   MEMORY_MODEL_DOWNLOAD: excluded('Memory desktop UI; not an Enso capability.'),
   MEMORY_MODEL_CANCEL: excluded('Memory desktop UI; not an Enso capability.'),

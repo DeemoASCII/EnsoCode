@@ -141,6 +141,11 @@ export const zhTranslations: Record<string, string> = {
   'Protected: payment': '受保护：付款',
   'Protected: deploy / production': '受保护：部署 / 生产',
   'Protected: secrets': '受保护：密钥',
+  'Memory write': '记忆写入',
+  'Secrets redacted': '已脱敏密钥',
+  'Memory writes awaiting approval': '待批准的记忆写入',
+  'Bot members need your approval before writing to project or global memory.':
+    'Bot 成员写入项目或全局记忆前需要你批准。',
   Compressed: '已压缩',
   Unchanged: '未改变',
   'Background task started': '后台任务已启动',

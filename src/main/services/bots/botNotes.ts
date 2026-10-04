@@ -2,6 +2,8 @@ import { createHash } from 'node:crypto';
 import { existsSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { BOT_NOTES_MAX_CHARS } from '@shared/bots/notes';
+import { redactSecrets } from '../memory/distill';
+import { scanMemoryInjection } from '../memory/injectionScan';
 import type { AbilityCompleter } from './abilitySuggester';
 import { writeAtomic } from './files';
 
@@ -125,12 +127,22 @@ export class BotNotesService {
   }
 
   async merge(target: BotNotesTarget, conclusions: readonly string[]): Promise<boolean> {
+    // 笔记每轮注入系统提示：带注入特征的结论不进改写，改写结果再脱敏、再扫一遍
+    const safeConclusions = conclusions.filter((item) => scanMemoryInjection(item).length === 0);
+    if (safeConclusions.length === 0) return false;
     // 群笔记可能被多个成员同时改：版本冲突时按最新笔记重来
     for (let attempt = 0; attempt < 3; attempt++) {
       const current = this.deps.store.read(target);
-      const rewritten = await this.rewrite(target, current.content, conclusions);
+      const rewritten = await this.rewrite(target, current.content, safeConclusions);
       if (!rewritten) return false;
-      const saved = this.deps.store.write(target, rewritten, current.version);
+      // 用户手写的笔记可能本就像注入（无法区分），只拦改写新引入的
+      if (
+        scanMemoryInjection(rewritten).length > 0 &&
+        scanMemoryInjection(current.content).length === 0
+      ) {
+        return false;
+      }
+      const saved = this.deps.store.write(target, redactSecrets(rewritten), current.version);
       if (saved.ok) {
         if (saved.notes.version !== current.version) this.deps.onChange?.(target);
         return true;

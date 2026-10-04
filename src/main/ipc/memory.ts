@@ -6,10 +6,12 @@ import {
   isEvolvesReviewState,
   isMemoryListQuery,
   isMemoryRetrievalMode,
+  isPendingMemoryWriteDecision,
   type MemoryJobsSnapshot,
   type MemoryListResult,
   type MemoryMutationResult,
   type MemoryStats,
+  type PendingMemoryWriteDto,
 } from '@shared/memory/dto';
 import {
   type CrystallizeResult,
@@ -42,6 +44,7 @@ import {
   memoriesForEntity,
   memoriesForPrompt,
 } from '../services/memory/graph';
+import { listPendingWrites, rejectPendingWrite } from '../services/memory/pending';
 import { createSearchAssist } from '../services/memory/searchLlm';
 import { getMemory } from '../services/memory/store';
 import {
@@ -59,6 +62,7 @@ import {
   toMemoryJobsSnapshot,
 } from '../services/memoryAdmin';
 import {
+  approvePendingMemoryWrite,
   distillSessionNow,
   getMemoryCompletion,
   getMemoryDistillJobs,
@@ -308,6 +312,46 @@ export function registerMemoryHandlers(): void {
         (db) => {
           const edge = reviewEvolvesEdge(db, id, state);
           return edge ? { ok: true, edge } : { ok: false, error: 'Evolves edge not found.' };
+        }
+      );
+    }
+  );
+
+  ipcMain.handle(
+    IPC_CHANNELS.MEMORY_PENDING_WRITES,
+    async (event): Promise<PendingMemoryWriteDto[]> => {
+      if (!isTrustedWindow(event.sender.id)) return [];
+      const rows = withExistingDb([], listPendingWrites);
+      if (rows.length === 0) return [];
+      const label = await spaceLabeler();
+      return rows.map(({ payload: _payload, ...row }) => ({
+        ...row,
+        spaceLabel: label(row.spaceId),
+        originLabel: row.botId ? label(`bot:${row.botId}`) : '',
+      }));
+    }
+  );
+
+  ipcMain.handle(
+    IPC_CHANNELS.MEMORY_PENDING_WRITE_REVIEW,
+    async (event, id: unknown, decision: unknown): Promise<MemoryMutationResult> => {
+      if (
+        !isTrustedWindow(event.sender.id) ||
+        typeof id !== 'string' ||
+        !id ||
+        !isPendingMemoryWriteDecision(decision)
+      ) {
+        return invalidRequest();
+      }
+      if (decision === 'approve') return approvePendingMemoryWrite(id);
+      return withExistingDb<MemoryMutationResult>(
+        { ok: false, error: 'Memory database is not available.' },
+        (db) => {
+          if (!rejectPendingWrite(db, id)) {
+            return { ok: false, error: 'Pending memory write not found.' };
+          }
+          memoryChanged();
+          return { ok: true };
         }
       );
     }
