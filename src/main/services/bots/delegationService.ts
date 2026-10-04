@@ -109,6 +109,17 @@ export class DelegationService {
     });
   }
 
+  private upstreamBots(record: Delegation): Set<string> {
+    const ids = new Set<string>();
+    for (let item: Delegation | undefined = record; item && !ids.has(item.parentBotId); ) {
+      ids.add(item.parentBotId);
+      const above: string | undefined = this.deps.authority.conversation(item.parentConversationId)
+        ?.bot?.delegationId;
+      item = above ? this.deps.store.get(above) : undefined;
+    }
+    return ids;
+  }
+
   /** 同一轮发起的委派共享 batchId（父会话轮次键），结果齐了合并回传；standalone 自成一批 */
   delegate(
     parentConversationId: string,
@@ -136,6 +147,12 @@ export class DelegationService {
         parent
       );
     }
+    // 结果本来就会自动回传给上游，往回委派只会绕圈
+    if (ancestor && this.upstreamBots(ancestor).has(target.id))
+      return {
+        ok: false,
+        error: `${target.name} delegated this work to you; your final reply is returned to them automatically.`,
+      };
     const depth = (ancestor ? ancestor.depth : 0) + 1;
     const chatId = conversation.bot.chatId ?? (ancestor ? ancestor.chatId : null);
     const chat = chatId ? this.deps.chats.get(chatId) : undefined;

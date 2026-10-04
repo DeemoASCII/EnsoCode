@@ -194,7 +194,7 @@ interface Delegation {
 
 bot 会话额外挂两个工具：
 
-- `delegate({to, task, context?, wait?})`：校验 `canDelegateTo/acceptFrom`；群聊里只能委派给本群成员；深度 ≤ 2，单个父会话并发 ≤ 3。通过后为目标成员新建一个**委派会话**（根会话，`bot.chatId = null`，`parentDelegationId` 有值，不出现在聊天列表），立刻返回 `delegationId`。
+- `delegate({to, task, context?, wait?})`：校验 `canDelegateTo/acceptFrom`；群聊里只能委派给本群成员；不能委派给委派链上游的成员（结果本来就自动回传，真机里被委派方曾反向委派「汇报完成」绕圈）；深度 ≤ 2，单个父会话并发 ≤ 3。通过后为目标成员新建一个**委派会话**（根会话，`bot.chatId = null`，`parentDelegationId` 有值，不出现在聊天列表），立刻返回 `delegationId`。
 - `check_delegation({id?, cancel?})`：查看状态或取消。
 
 **权限**按目标成员自身能力执行：工具集（tools）、技能（skillIds）、MCP（mcpServerIds）都用目标成员自己的配置，审批档取父子两者中更严的一档；能不能委派只由 `canDelegateTo/acceptFrom` 控制。工作区沿用父会话的工作区（被委派的人在委托方的目录里干活）。之所以不取交集：委派的意义就是把自己做不了的事交给有能力的成员，真机里只读的项目经理委派全栈工程师改文件，交集后子会话只剩只读，委派形同虚设；风险由委派授权名单和更严的审批档兜住。这条只管委派会话，readonly 成员自己的 `subagent` 子代理仍保持只读。

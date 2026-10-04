@@ -141,18 +141,18 @@ it("runs delegations with the target's own capabilities and keeps the stricter a
     mcpServerIds: ['common', 'bob'],
   });
   await vi.advanceTimersByTimeAsync(0);
-  f.deps.bots.update(
-    alice.id,
-    { tools: 'all', approvalMode: 'full', skillIds: ['alice'], mcpServerIds: [] },
+  const carol = f.deps.bots.create(
+    { name: 'Carol', tools: 'all', approvalMode: 'full', skillIds: ['carol'], mcpServerIds: [] },
     []
   );
-  const nested = f.service.delegate(record.childConversationId, { to: 'Alice', task: 'nested' });
+  if (!carol.ok) throw new Error('carol');
+  const nested = f.service.delegate(record.childConversationId, { to: 'Carol', task: 'nested' });
   if (!nested.ok) throw new Error(nested.error);
   const child = f.store.get(nested.delegationId)!;
   expect(child.effectivePermissions).toEqual({
     tools: 'all',
     approvalMode: 'supervised',
-    skillIds: ['alice'],
+    skillIds: ['carol'],
     mcpServerIds: [],
   });
   await vi.advanceTimersByTimeAsync(0);
@@ -420,4 +420,15 @@ it('links a board task: gate rejects before any record, sync sees every save, re
   if (!again.ok) throw new Error(again.error);
   expect(f.store.get(again.delegationId)).not.toHaveProperty('taskId');
   service.dispose();
+});
+it('rejects delegating back up the chain to a member who delegated to you', async () => {
+  const f = fixture();
+  const sent = f.service.delegate(f.parent, { to: 'Bob', task: 'write file' });
+  if (!sent.ok) throw new Error(sent.error);
+  await vi.advanceTimersByTimeAsync(0);
+  const child = f.store.get(sent.delegationId)!.childConversationId;
+  const back = f.service.delegate(child, { to: 'Alice', task: 'report done' });
+  expect(back).toEqual({ ok: false, error: expect.stringContaining('delegated this work to you') });
+  expect(f.store.list()).toHaveLength(1);
+  f.service.dispose();
 });
