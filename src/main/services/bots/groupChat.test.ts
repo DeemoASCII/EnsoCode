@@ -661,3 +661,27 @@ describe('压缩后补群状态', () => {
     expect(text(1)).not.toContain('<group-state>');
   });
 });
+
+it('reports one settled batch per relay round with every participant, skipping [skip] replies', async () => {
+  const batches: unknown[] = [];
+  group = new GroupChatService({
+    bots,
+    chats,
+    host,
+    emit,
+    onBatchSettled: (batch) => batches.push(batch),
+  });
+  await group.send(id, '@Bob @Alice hello');
+  await done(b, 'from bob');
+  expect(batches).toEqual([]);
+  await done(a, '[skip]');
+  expect(batches).toEqual([
+    { chatId: id, botIds: [b], failed: [], lastBotId: b, lastText: 'from bob' },
+  ]);
+  await group.send(id, '@Bob ping');
+  await done(b, 'boom', false);
+  expect(batches.at(-1)).toEqual({ chatId: id, botIds: [], failed: [b] });
+  await group.send(id, '@Alice stop me');
+  await group.stop(id);
+  expect(batches).toHaveLength(2);
+});

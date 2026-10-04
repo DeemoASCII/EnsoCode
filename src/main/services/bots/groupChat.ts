@@ -53,6 +53,8 @@ interface Round {
   routing?: { entry: HumanEntry; abort: AbortController };
   /** 本轮由智能选人选出、尚未发言的成员；其发言标 routedBy */
   smartPicked?: string[];
+  /** 本批（一条人类消息 / 例行任务引发的整串接力）已结束的发言，批次结束时合并通知 */
+  batch?: { botIds: string[]; failed: string[]; last?: { botId: string; text: string } };
   /** 智能选人判定的意图，写进 routedBy */
   smartIntent?: SmartRouteIntent;
   /** build 被选中的成员：其下一次投递附「先动手」指令 */
@@ -70,12 +72,22 @@ export interface GroupResponderSelector {
   timeoutMs(): number;
   select(input: SmartRouteInput, signal: AbortSignal): Promise<SmartRouteDecision>;
 }
+export interface GroupBatchSettled {
+  chatId: string;
+  /** 有正文发言的成员（去重，按首次发言顺序）；[skip] 不算 */
+  botIds: string[];
+  failed: string[];
+  lastBotId?: string;
+  lastText?: string;
+}
 interface GroupChatDeps {
   bots: BotStore;
   chats: BotChatStore;
   host: Pick<BotSessionHost, 'deliver' | 'onTurnFinished' | 'stopTurn' | 'onDeliverySent'>;
   emit: (event: BotEvent) => void;
   responder?: GroupResponderSelector;
+  /** 接力整批结束（无人在回复、无排队、无待路由消息）；用户停止的批次不报 */
+  onBatchSettled?: (batch: GroupBatchSettled) => void;
   /** 某会话某一轮（BotTurnFinished.turnKey）新建委派的目标成员；正文 @ 他们不再接力 */
   delegatedTargets?: (conversationId: string, turnKey: string) => readonly string[];
   /** 压缩后补群状态用：进行中的委派与看板未完成任务 */
@@ -269,6 +281,7 @@ export class GroupChatService {
       round.generation++;
       round.state = empty();
       round.pending = [];
+      delete round.batch;
       this.cancelRouting(round);
       this.clearSmart(round);
       for (const job of this.autonomous.get(chatId) ?? [])
@@ -325,6 +338,7 @@ export class GroupChatService {
       });
     }
     round.smartPicked = round.smartPicked?.filter((botId) => botId !== event.botId);
+    this.recordBatch(round, event);
     this.advance(
       chat,
       event.ok ? event.text : '',
@@ -336,6 +350,44 @@ export class GroupChatService {
       await this.begin(chat, pending);
     } else await this.dispatch(chat.id);
     this.persist(chat.id);
+    this.settleBatch(chat.id);
+  }
+
+  private recordBatch(round: Round, event: BotTurnFinished): void {
+    const batch = round.batch ?? { botIds: [], failed: [] };
+    round.batch = batch;
+    if (!event.ok) {
+      if (!batch.failed.includes(event.botId)) batch.failed.push(event.botId);
+    } else if (!isSkipReply(event.text) && event.text.trim()) {
+      if (!batch.botIds.includes(event.botId)) batch.botIds.push(event.botId);
+      batch.last = { botId: event.botId, text: event.text };
+    }
+  }
+
+  /** 无人回复、无排队、无待路由的人类消息、无例行任务：本批结束 */
+  private settleBatch(chatId: string): void {
+    const round = this.round(chatId);
+    const batch = round.batch;
+    if (
+      !batch ||
+      round.state.current ||
+      round.routing ||
+      round.pending.length > 0 ||
+      this.autonomous.get(chatId)?.length
+    )
+      return;
+    delete round.batch;
+    if (batch.botIds.length === 0 && batch.failed.length === 0) return;
+    try {
+      this.deps.onBatchSettled?.({
+        chatId,
+        botIds: batch.botIds,
+        failed: batch.failed,
+        ...(batch.last ? { lastBotId: batch.last.botId, lastText: batch.last.text } : {}),
+      });
+    } catch (error) {
+      console.warn('[bots] batch listener failed', error);
+    }
   }
 
   /** 新一轮：需要智能选人时异步分类（不占锁），否则按 @ / 群主直接开始 */

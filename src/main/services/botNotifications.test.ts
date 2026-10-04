@@ -29,7 +29,7 @@ vi.mock('../windows/MainWindow', () => ({
 }));
 vi.mock('../windows/createAppWindow', () => ({ sendToWindow: env.send }));
 
-import { maybeNotifyBot } from './notifications';
+import { maybeNotifyBot, notifyBotChat } from './notifications';
 
 const event = {
   type: 'ask-request' as const,
@@ -80,4 +80,15 @@ it('does not notify foreground or disabled bot mode', async () => {
     conversationId: 's',
   });
   expect(env.show).not.toHaveBeenCalled();
+});
+it('bot chat notices use the language setting, open the chat on click and stay quiet in the foreground', async () => {
+  const build = vi.fn((lang: 'zh' | 'en') => ({ title: `t-${lang}`, body: 'b' }));
+  await notifyBotChat('chat', build);
+  expect(build).toHaveBeenCalledWith('zh');
+  expect(env.show).toHaveBeenCalledOnce();
+  env.click();
+  expect(env.send).toHaveBeenCalledWith(undefined, 'bots:event', { kind: 'open', chatId: 'chat' });
+  env.focused = true;
+  await notifyBotChat('chat', build);
+  expect(env.show).toHaveBeenCalledOnce();
 });

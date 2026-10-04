@@ -106,6 +106,19 @@ export async function maybeNotifyBot(
   });
 }
 
+/** Bot 聊天的回合 / 接力批次 / 稍后提醒通知：主窗口聚焦时不弹，点击切到 Bot 模式打开该聊天 */
+export async function notifyBotChat(
+  chatId: string,
+  build: (lang: 'zh' | 'en') => { title: string; body: string }
+): Promise<void> {
+  const { focusMainWindow, getMainWindow } = await import('../windows/MainWindow');
+  if (getMainWindow()?.isFocused()) return;
+  const { title, body } = build(texts() === TEXTS.zh ? 'zh' : 'en');
+  notify(`bot-chat:${chatId}`, title, body, () => {
+    sendToWindow(focusMainWindow(), IPC_CHANNELS.BOT_EVENT, { kind: 'open', chatId });
+  });
+}
+
 /**
  * 后台通知：对待审批/轮完成/会话失败弹系统通知。
  * 仅当「主窗口聚焦且用户正看着事件所属会话」时抑制——看别的会话/设置页照弹。

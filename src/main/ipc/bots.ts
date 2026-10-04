@@ -63,6 +63,7 @@ import {
 } from '../services/bots/botPrompt';
 import { type BotRuntimePort, BotSessionHost } from '../services/bots/botSessionHost';
 import { BotStore } from '../services/bots/botStore';
+import { directTurnNotice, groupBatchNotice } from '../services/bots/botTurnNotice';
 import { BotUsageService } from '../services/bots/botUsage';
 import { BotChatStore } from '../services/bots/chatStore';
 import { turnDelegationTargets } from '../services/bots/delegationBatch';
@@ -86,6 +87,7 @@ import { createSmartRouter } from '../services/bots/smartRouter';
 import { createTeam } from '../services/bots/teamCreate';
 import { resolveGlobalInstruction } from '../services/instructionStore';
 import { listMemories } from '../services/memory/store';
+import { notifyBotChat } from '../services/notifications';
 import { readStoredOauthCredentialKeys } from '../services/oauthProviders';
 import { remoteCandidates, resolveRemoteModels } from '../services/remoteModels';
 import { removeConversationSessionFiles } from '../services/sessionFileCleanup';
@@ -180,6 +182,12 @@ export function observeBotEvents(observer: (event: BotEvent) => void): () => voi
 }
 
 const sessionDir = () => path.join(app.getPath('userData'), 'agent', 'sessions');
+
+function notifyQuietly(chatId: string, build: Parameters<typeof notifyBotChat>[1]): void {
+  void notifyBotChat(chatId, build).catch((error) =>
+    console.warn('[bots] notification failed', error)
+  );
+}
 
 function rootIdentity(conversationId: string): SessionIdentity | undefined {
   const identity = agentSessionIndex.currentIdentity(conversationId);
@@ -312,6 +320,23 @@ export function getBotServices(): BotServices | null {
     chats,
     host,
     emit: emitBotEvent,
+    onBatchSettled: (batch) => {
+      const chat = chats.get(batch.chatId);
+      if (!chat) return;
+      const name = (id: string) => bots.get(id)?.name ?? '?';
+      notifyQuietly(chat.id, (lang) =>
+        groupBatchNotice(
+          {
+            chatTitle: chat.title,
+            names: batch.botIds.map(name),
+            failedNames: batch.failed.map(name),
+            ...(batch.lastBotId ? { lastName: name(batch.lastBotId) } : {}),
+            ...(batch.lastText ? { lastText: batch.lastText } : {}),
+          },
+          lang
+        )
+      );
+    },
     delegatedTargets: (conversationId, turnKey) =>
       turnDelegationTargets(delegationStore.list(), conversationId, turnKey),
     groupState: (chatId) => ({
@@ -357,6 +382,18 @@ export function getBotServices(): BotServices | null {
   host.onDiscard((scope) => {
     if (scope.chatId) groups.discard(scope.chatId);
     groups.clearCompacted(scope);
+  });
+  host.onTurnFinished((event) => {
+    // 私聊每轮一条；群聊按接力批次合并（onBatchSettled）；委派结果回到发起方再通知；用户停止不报
+    const chat = event.chatId && !event.delegationId ? chats.get(event.chatId) : undefined;
+    if (chat?.kind !== 'direct' || event.error === 'canceled') return;
+    const name = bots.get(event.botId)?.name ?? '?';
+    notifyQuietly(chat.id, (lang) =>
+      directTurnNotice(
+        { name, ok: event.ok, text: event.text, ...(event.error ? { error: event.error } : {}) },
+        lang
+      )
+    );
   });
   let delegationsRef: DelegationService | undefined;
   const tasks = new GroupTaskService({

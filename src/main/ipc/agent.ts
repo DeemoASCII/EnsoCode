@@ -253,7 +253,8 @@ function broadcastAgentEvent(event: RendererAgentEvent): void {
       conversationId,
       name: (enabled ? getBotServices()?.bots.get(binding.botId)?.name : undefined) ?? '成员',
     }).catch((error) => console.warn('[bots] notification failed', error));
-  } else maybeNotify(event);
+    // bot 会话的回合完成 / 失败由 Bot 服务按聊天发带成员名的通知（群接力整批合并）
+  } else if (!binding) maybeNotify(event);
   // 手机第二屏：按订阅过滤后加密下发（host 在 main，不依赖窗口焦点）
   forwardAgentEvent(event);
   handlePairHeadlessAgentEvent(event);
