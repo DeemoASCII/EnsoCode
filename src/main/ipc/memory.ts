@@ -25,7 +25,7 @@ import {
 import { CRYSTALLIZE_PROMPT, INSIGHT_PROMPT, withMemoryLanguage } from '@shared/memory/prompts';
 import { IPC_CHANNELS } from '@shared/types';
 import type Database from 'better-sqlite3';
-import { app, BrowserWindow, ipcMain } from 'electron';
+import { app, ipcMain } from 'electron';
 import { BotStore } from '../services/bots/botStore';
 import { BotChatStore } from '../services/bots/chatStore';
 import {
@@ -82,6 +82,7 @@ import {
   setEmbeddingProgressSink,
   startEmbeddingModelDownload,
 } from '../services/memoryModels';
+import { sendToAllWindows } from '../windows/createAppWindow';
 import { isMainWebContents } from '../windows/MainWindow';
 import { isSettingsWebContents } from '../windows/SettingsWindow';
 import { readSettings } from './settings';
@@ -139,9 +140,8 @@ function invalidRequest(): MemoryMutationResult {
 }
 
 function broadcast(channel: string, payload?: unknown): void {
-  for (const win of BrowserWindow.getAllWindows()) {
-    if (!win.isDestroyed()) win.webContents.send(channel, payload);
-  }
+  // 主窗口渲染层在 WebContentsView 里，必须经 sendToAllWindows 投递，直发 shell webContents 收不到
+  sendToAllWindows(channel, payload);
 }
 
 /** 写入路径统一走这里：记忆库变了就让所有窗口的记忆视图重拉 */

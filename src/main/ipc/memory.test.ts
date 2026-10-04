@@ -30,12 +30,14 @@ const mocks = vi.hoisted(() => ({
   registry: null as { projection: () => unknown } | null,
   settings: null as Record<string, unknown> | null,
   send: vi.fn(),
+  shellSend: vi.fn(),
 }));
 
 vi.mock('electron', () => ({
   app: { getPath: vi.fn(() => '/user-data') },
   BrowserWindow: {
-    getAllWindows: () => [{ isDestroyed: () => false, webContents: { send: mocks.send } }],
+    // 主窗口是 shell + WebContentsView：直接发给 shell webContents 渲染层收不到
+    getAllWindows: () => [{ isDestroyed: () => false, webContents: { send: mocks.shellSend } }],
   },
   ipcMain: {
     handle: vi.fn((channel: string, handler: (...args: any[]) => unknown) => {
@@ -50,6 +52,9 @@ vi.mock('./agent', () => ({
 vi.mock('./settings', () => ({ readSettings: () => mocks.settings }));
 vi.mock('../windows/MainWindow', () => ({ isMainWebContents: (id: number) => id === 1 }));
 vi.mock('../windows/SettingsWindow', () => ({ isSettingsWebContents: () => false }));
+vi.mock('../windows/createAppWindow', () => ({
+  sendToAllWindows: (channel: string, ...args: unknown[]) => mocks.send(channel, ...args),
+}));
 vi.mock('../services/memoryAdmin', () => ({
   openExistingMemoryDb: mocks.openExistingMemoryDb,
   listMemoriesForAdmin: mocks.listMemoriesForAdmin,
