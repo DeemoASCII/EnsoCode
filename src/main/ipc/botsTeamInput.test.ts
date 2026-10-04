@@ -62,4 +62,37 @@ describe('parseTeamCreateInput', () => {
       parseTeamCreateInput({ team: { ...team, members: [] }, workspace: { kind: 'chat-home' } })
     ).toBeNull();
   });
+
+  it('assets 只接受本队成员 key 下的技能 / MCP 字符串列表', () => {
+    const key = (team as { members: { key: string }[] }).members[0].key;
+    const ws = { kind: 'chat-home' };
+    expect(
+      parseTeamCreateInput({
+        team,
+        workspace: ws,
+        assets: { [key]: { skillIds: ['s1'], mcpServerIds: [] } },
+      })
+    ).toMatchObject({ assets: { [key]: { skillIds: ['s1'], mcpServerIds: [] } } });
+    expect(
+      parseTeamCreateInput({
+        team,
+        workspace: ws,
+        assets: { nobody: { skillIds: [], mcpServerIds: [] } },
+      })
+    ).toBeNull();
+    expect(
+      parseTeamCreateInput({
+        team,
+        workspace: ws,
+        assets: { [key]: { skillIds: [1], mcpServerIds: [] } },
+      })
+    ).toBeNull();
+    expect(
+      parseTeamCreateInput({
+        team,
+        workspace: ws,
+        assets: { [key]: { skillIds: [], mcpServerIds: [], extra: [] } },
+      })
+    ).toBeNull();
+  });
 });

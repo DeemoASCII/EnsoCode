@@ -1,10 +1,20 @@
 import {
   selectTeamMembers,
   type TeamFileError,
+  type TeamMemberAssets,
   type TeamRename,
   type TeamSpec,
 } from '@shared/bots/team';
-import { ArrowLeft, Crown, FileJson, Info, Loader2 } from 'lucide-react';
+import {
+  ArrowLeft,
+  ChevronDown,
+  ChevronRight,
+  Crown,
+  FileJson,
+  Info,
+  Loader2,
+  Sparkles,
+} from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { APPROVAL_MODE_META } from '@/components/chat/ApprovalModePicker';
 import { Button } from '@/components/ui/button';
@@ -26,15 +36,20 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
+import { addToast } from '@/components/ui/toast';
 import { type TFunction, useI18n } from '@/i18n';
 import { cn } from '@/lib/utils';
 import { Z_INDEX } from '@/lib/z-index';
 import { useBotsStore } from '@/stores/bots';
 import { TEAM_TEMPLATES, teamTemplateSpec } from '@/stores/bots/teamTemplates';
 import { useSettingsStore } from '@/stores/settings';
+import { AssetPickers, suggestErrorText } from './BotAbilities';
 import { BotAvatar } from './BotAvatar';
 import { FieldLabel, nameError } from './BotFields';
 import { botErrorText, chatErrorText, localProjects } from './botText';
+
+type Assets = Record<string, { skillIds: string[]; mcpServerIds: string[] }>;
+const NO_ASSETS = { skillIds: [] as string[], mcpServerIds: [] as string[] };
 
 interface Preview {
   team: TeamSpec;
@@ -80,6 +95,9 @@ export function NewTeamDialog({
   const [projectId, setProjectId] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [assets, setAssets] = useState<Assets>({});
+  const [expanded, setExpanded] = useState<string | null>(null);
+  const [suggesting, setSuggesting] = useState(false);
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: 每次打开重置
   useEffect(() => {
@@ -88,6 +106,8 @@ export function NewTeamDialog({
     setProjectId(projects[0]?.id ?? '');
     setBusy(false);
     setError(null);
+    setAssets({});
+    setExpanded(null);
     const template = TEAM_TEMPLATES.find((item) => item.id === seedTemplateId);
     if (template) void load({ team: teamTemplateSpec(template, locale === 'zh' ? 'zh' : 'en') });
   }, [open]);
@@ -106,6 +126,8 @@ export function NewTeamDialog({
         renamed: result.renamed,
         picked: result.team.members.map((member) => member.key),
       });
+      setAssets({});
+      setExpanded(null);
       setWorkspace(
         result.team.workspace === 'project' && projects.length > 0 ? 'project' : 'chat-home'
       );
@@ -139,16 +161,84 @@ export function NewTeamDialog({
     picked !== null &&
     nameIssues.size === 0 &&
     (workspace === 'chat-home' || Boolean(projectId)) &&
-    !busy;
+    !busy &&
+    !suggesting;
+
+  const assetsOf = (key: string) => assets[key] ?? NO_ASSETS;
+  const setMemberAssets = (key: string, next: Partial<typeof NO_ASSETS>) =>
+    setAssets((current) => ({ ...current, [key]: { ...(current[key] ?? NO_ASSETS), ...next } }));
+
+  /** 逐个成员问 Bot 助理模型，只取技能 / MCP 推荐；工具与审批由模板决定 */
+  const autoAssets = async () => {
+    if (!picked) return;
+    setSuggesting(true);
+    try {
+      const language = locale === 'zh' ? 'zh' : 'en';
+      const results = await Promise.all(
+        picked.members.map(async (member) => {
+          try {
+            const result = await window.electronAPI.bots.suggestAbilities({
+              name: member.name,
+              title: member.title,
+              scope: member.scope,
+              persona: member.persona,
+              language,
+            });
+            return { key: member.key, result };
+          } catch {
+            return { key: member.key, result: null };
+          }
+        })
+      );
+      let set = 0;
+      let failed = 0;
+      let firstError: string | undefined;
+      const next: Assets = { ...assets };
+      for (const { key, result } of results) {
+        if (!result?.ok) {
+          failed++;
+          if (result && !firstError) firstError = suggestErrorText(result, t);
+          continue;
+        }
+        const skillIds = result.suggestion.skillIds?.value ?? assetsOf(key).skillIds;
+        const mcpServerIds = result.suggestion.mcpServerIds?.value ?? assetsOf(key).mcpServerIds;
+        next[key] = { skillIds: [...skillIds], mcpServerIds: [...mcpServerIds] };
+        if (skillIds.length + mcpServerIds.length > 0) set++;
+      }
+      setAssets(next);
+      if (failed > 0)
+        addToast({
+          type: 'error',
+          title: t('Suggestions failed for {{n}} members', { n: failed }),
+          ...(firstError ? { description: firstError } : {}),
+        });
+      if (failed < results.length)
+        addToast({
+          type: set > 0 ? 'success' : 'info',
+          title:
+            set > 0
+              ? t('Set skills and MCP for {{n}} members', { n: set })
+              : t('No skills or MCP fit these members'),
+        });
+    } finally {
+      setSuggesting(false);
+    }
+  };
 
   const create = async () => {
     if (!picked || !canCreate) return;
     setBusy(true);
     setError(null);
     try {
+      const chosen: TeamMemberAssets = Object.fromEntries(
+        picked.members
+          .map((member) => [member.key, assetsOf(member.key)] as const)
+          .filter(([, value]) => value.skillIds.length + value.mcpServerIds.length > 0)
+      );
       const result = await window.electronAPI.bots.createTeam({
         team: { ...picked, title: picked.title.trim() },
         workspace: workspace === 'project' ? { kind: 'project', projectId } : { kind: 'chat-home' },
+        ...(Object.keys(chosen).length > 0 ? { assets: chosen } : {}),
       });
       if (!result.ok) {
         setError(botErrorText(result.error, chatErrorText(result.error, t), t));
@@ -176,7 +266,7 @@ export function NewTeamDialog({
           <DialogTitle>{t('Create team from template')}</DialogTitle>
           <DialogDescription>
             {t(
-              'Creates the members and their group chat in one go. Members follow the default model; skills and MCP are not preset.'
+              'Creates the members and their group chat in one go. Members follow the default model; pick skills and MCP per member, or let AI set them.'
             )}
           </DialogDescription>
         </DialogHeader>
@@ -241,9 +331,20 @@ export function NewTeamDialog({
               </div>
 
               <div>
-                <FieldLabel hint={t('Uncheck members you do not need; the owner stays')}>
-                  {t('Members')}
-                </FieldLabel>
+                <div className="flex items-start justify-between gap-2">
+                  <FieldLabel hint={t('Uncheck members you do not need; the owner stays')}>
+                    {t('Members')}
+                  </FieldLabel>
+                  <Button
+                    size="xs"
+                    variant="outline"
+                    disabled={!picked || suggesting || busy}
+                    onClick={() => void autoAssets()}
+                  >
+                    {suggesting ? <Loader2 className="animate-spin" /> : <Sparkles />}
+                    {t('AI auto-configure')}
+                  </Button>
+                </div>
                 <div className="space-y-1">
                   {preview.team.members.map((member) => {
                     const checked = preview.picked.includes(member.key);
@@ -255,6 +356,8 @@ export function NewTeamDialog({
                       targets === 'any'
                         ? []
                         : targets.filter((key) => preview.picked.includes(key));
+                    const chosen = assetsOf(member.key);
+                    const open = checked && expanded === member.key;
                     return (
                       <div
                         key={member.key}
@@ -323,6 +426,34 @@ export function NewTeamDialog({
                             </p>
                           )}
                           {issue && <p className="text-destructive text-xs">{issue}</p>}
+                          <button
+                            type="button"
+                            disabled={!checked}
+                            onClick={() => setExpanded(open ? null : member.key)}
+                            className="flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground disabled:pointer-events-none"
+                          >
+                            {open ? (
+                              <ChevronDown className="h-3 w-3" />
+                            ) : (
+                              <ChevronRight className="h-3 w-3" />
+                            )}
+                            {t('Skills & MCP')}
+                            {' · '}
+                            {chosen.skillIds.length + chosen.mcpServerIds.length === 0
+                              ? t('No skills or MCP')
+                              : t('{{n}} skills · {{m}} MCP', {
+                                  n: chosen.skillIds.length,
+                                  m: chosen.mcpServerIds.length,
+                                })}
+                          </button>
+                          {open && (
+                            <div className="space-y-3 pt-1">
+                              <AssetPickers
+                                value={chosen}
+                                onChange={(next) => setMemberAssets(member.key, next)}
+                              />
+                            </div>
+                          )}
                         </div>
                       </div>
                     );

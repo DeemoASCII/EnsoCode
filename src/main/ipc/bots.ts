@@ -1237,6 +1237,7 @@ export function registerBotHandlers(): void {
       if (!input) return INVALID;
       const result = createTeam(services, input.team, {
         reserved: reservedNames(),
+        ...(input.assets ? { assets: input.assets } : {}),
         resolveWorkspace: (chatId) => resolveWorkspaceInput(services, chatId, input.workspace),
         releaseWorkspace: (chatId, workspace) => {
           if (workspace.kind !== 'chat-home') return;

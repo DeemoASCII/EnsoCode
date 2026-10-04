@@ -193,6 +193,17 @@ describe('teamMemberDrafts', () => {
     });
     expect('engine' in drafts[0].draft).toBe(false);
   });
+
+  it('按成员 key 带上建队时选的技能与 MCP', () => {
+    const team = parseTeamSpec(spec()) as TeamSpec;
+    const drafts = teamMemberDrafts(
+      team,
+      { pm: id(1), fe: id(2), be: id(3) },
+      { fe: { skillIds: ['s1'], mcpServerIds: ['m1'] } }
+    );
+    expect(drafts[1].draft).toMatchObject({ skillIds: ['s1'], mcpServerIds: ['m1'] });
+    expect(drafts[0].draft).toMatchObject({ skillIds: [], mcpServerIds: [] });
+  });
 });
 
 describe('buildTeamFile', () => {

@@ -1,5 +1,10 @@
 import { randomUUID } from 'node:crypto';
-import { assignTeamNames, type TeamSpec, teamMemberDrafts } from '../../../shared/bots/team';
+import {
+  assignTeamNames,
+  type TeamMemberAssets,
+  type TeamSpec,
+  teamMemberDrafts,
+} from '../../../shared/bots/team';
 import type { BotChat, BotChatWorkspace, BotProfile } from '../../../shared/types/bot';
 import type { BotStore } from './botStore';
 import type { BotChatStore } from './chatStore';
@@ -9,6 +14,7 @@ export interface TeamCreateOptions {
   resolveWorkspace: (chatId: string) => BotChatWorkspace | { error: string };
   /** 回滚：撤销 resolveWorkspace 新建的工作区 */
   releaseWorkspace: (chatId: string, workspace: BotChatWorkspace) => void;
+  assets?: TeamMemberAssets;
 }
 
 export type TeamCreateResult =
@@ -41,7 +47,7 @@ export function createTeam(
     return { ok: false, error };
   };
   try {
-    for (const { id, draft } of teamMemberDrafts(team, ids)) {
+    for (const { id, draft } of teamMemberDrafts(team, ids, options.assets)) {
       const result = stores.bots.create(draft, options.reserved, id);
       if (!result.ok) return rollback(result.reason);
       created.push(result.bot);

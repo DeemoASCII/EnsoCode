@@ -1,7 +1,7 @@
 import type { AbilitySuggestion } from '../bots/abilitySuggest';
 import type { GoalSuggestion, GoalSuggestTemplate } from '../bots/goalSuggest';
 import type { PersonaSuggestion } from '../bots/personaSuggest';
-import type { TeamFileError, TeamRename, TeamSpec } from '../bots/team';
+import type { TeamFileError, TeamMemberAssets, TeamRename, TeamSpec } from '../bots/team';
 import type {
   ApprovalRequestInfo,
   AskRequestInfo,
@@ -376,6 +376,7 @@ export type BotTeamPreviewResult =
 export interface BotTeamCreateRequest {
   team: TeamSpec;
   workspace: { kind: 'chat-home' } | { kind: 'project'; projectId: string };
+  assets?: TeamMemberAssets;
 }
 /** 成员与群一次性创建，任一步失败全部回滚 */
 export type BotTeamCreateResult = { ok: true; chat: BotChat; bots: BotProfile[] } | BotIpcError;

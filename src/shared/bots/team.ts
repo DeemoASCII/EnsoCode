@@ -263,9 +263,15 @@ export function selectTeamMembers(team: TeamSpec, keys: readonly string[]): Team
 }
 
 /** 成员 key → bot id；不带模型（跟随默认）、技能、MCP */
+/** 建队时按成员 key 选的技能 / MCP（本机 id，不进团队文件） */
+export type TeamMemberAssets = Readonly<
+  Record<string, { skillIds: string[]; mcpServerIds: string[] }>
+>;
+
 export function teamMemberDrafts(
   team: TeamSpec,
-  ids: Readonly<Record<string, BotId>>
+  ids: Readonly<Record<string, BotId>>,
+  assets: TeamMemberAssets = {}
 ): { key: string; id: BotId; draft: TeamMemberDraft }[] {
   const map = (list: TeamRefList) => (list === 'any' ? 'any' : list.map((key) => ids[key]));
   return team.members.map((member) => ({
@@ -279,8 +285,8 @@ export function teamMemberDrafts(
       avatar: { color: member.avatar.color },
       tools: member.tools,
       approvalMode: member.approvalMode,
-      skillIds: [],
-      mcpServerIds: [],
+      skillIds: [...(assets[member.key]?.skillIds ?? [])],
+      mcpServerIds: [...(assets[member.key]?.mcpServerIds ?? [])],
       delegation: {
         canDelegateTo: map(member.delegation.canDelegateTo),
         acceptFrom: map(member.delegation.acceptFrom),

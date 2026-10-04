@@ -373,12 +373,14 @@ function ChangeValue({ change }: { change: AbilityChange }) {
   );
 }
 
-function AssetPickers({
+type AssetValue = Pick<AbilityForm, 'skillIds' | 'mcpServerIds'>;
+
+export function AssetPickers({
   value,
   onChange,
 }: {
-  value: AbilityForm;
-  onChange: (next: Partial<AbilityForm>) => void;
+  value: AssetValue;
+  onChange: (next: Partial<AssetValue>) => void;
 }) {
   const { t } = useI18n();
   const skills = useSettingsStore((s) => s.skills);
