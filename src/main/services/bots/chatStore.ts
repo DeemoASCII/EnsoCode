@@ -212,6 +212,12 @@ export class BotChatStore {
     return entries.reverse();
   }
 
+  /** renderer 增量拉取：缺口超过 limit 时退回最新一页（由调用方按缺口合并） */
+  readSince(chatId: string, afterSeq: number, limit: number): GroupEntry[] {
+    if (this.lastSeq(chatId) - afterSeq > limit) return this.readEntries(chatId, { limit });
+    return this.readAfter(chatId, afterSeq);
+  }
+
   /** 从新到旧逐条产出；提前 break 即停止读盘。给 beforeSeq 时可从已知检查点开始读 */
   *backward(chatId: string, beforeSeq = Number.POSITIVE_INFINITY): Generator<GroupEntry> {
     if (!isBotChatId(chatId)) return;

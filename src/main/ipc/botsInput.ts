@@ -345,16 +345,23 @@ export function parseSendInput(
 
 export function parseTimelineInput(
   value: unknown
-): { chatId: string; beforeSeq?: number; limit: number } | null {
+): { chatId: string; beforeSeq?: number; afterSeq?: number; limit: number } | null {
   const input = record(value);
-  if (!input || !onlyKeys(input, ['chatId', 'beforeSeq', 'limit']) || !isBotId(input.chatId)) {
+  if (
+    !input ||
+    !onlyKeys(input, ['chatId', 'beforeSeq', 'afterSeq', 'limit']) ||
+    !isBotId(input.chatId)
+  ) {
     return null;
   }
   if (input.beforeSeq !== undefined && !seq(input.beforeSeq)) return null;
+  if (input.afterSeq !== undefined && (!seq(input.afterSeq) || input.beforeSeq !== undefined))
+    return null;
   if (input.limit !== undefined && !seq(input.limit)) return null;
   return {
     chatId: input.chatId,
     ...(input.beforeSeq !== undefined ? { beforeSeq: input.beforeSeq } : {}),
+    ...(input.afterSeq !== undefined ? { afterSeq: input.afterSeq } : {}),
     limit: Math.min(200, Math.max(1, (input.limit as number | undefined) ?? 100)),
   };
 }

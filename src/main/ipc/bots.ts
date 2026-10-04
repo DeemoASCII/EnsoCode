@@ -651,7 +651,10 @@ export function readBotTimeline({ chats }: BotServices, request: unknown): BotTi
   if (!input || !chats.get(input.chatId)) return INVALID;
   return {
     ok: true,
-    entries: chats.readEntries(input.chatId, input),
+    entries:
+      input.afterSeq !== undefined
+        ? chats.readSince(input.chatId, input.afterSeq, input.limit)
+        : chats.readEntries(input.chatId, input),
     lastSeq: chats.lastSeq(input.chatId),
   };
 }

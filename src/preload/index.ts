@@ -1247,6 +1247,8 @@ const electronAPI = {
     timeline: (request: {
       chatId: string;
       beforeSeq?: number;
+      /** 只要该 seq 之后的增量；缺口超过 limit 时返回最新一页 */
+      afterSeq?: number;
       limit?: number;
     }): Promise<BotTimelineResult> => ipcRenderer.invoke(IPC_CHANNELS.BOT_CHAT_TIMELINE, request),
     send: (request: BotSendRequest): Promise<BotSendResult> =>

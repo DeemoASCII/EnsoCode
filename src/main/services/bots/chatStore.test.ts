@@ -178,6 +178,15 @@ describe('BotChatStore timeline', () => {
     ]);
   });
 
+  it('reads only entries after a seq, falling back to the latest page when the gap is too large', () => {
+    const chat = group();
+    for (let i = 1; i <= 8; i++)
+      store.appendEntry(chat.id, { id: `e${i}`, at: i, kind: 'system', text: String(i) });
+    expect(store.readSince(chat.id, 6, 3).map((entry) => entry.seq)).toEqual([7, 8]);
+    expect(store.readSince(chat.id, 8, 3)).toEqual([]);
+    expect(store.readSince(chat.id, 1, 3).map((entry) => entry.seq)).toEqual([6, 7, 8]);
+  });
+
   it('indexes entry ids for dedupe and lookup, surviving restart and appends', () => {
     const chat = group();
     store.appendEntry(chat.id, { id: 'delegation:d1', at: 1, kind: 'system', text: 'a' });

@@ -19,6 +19,7 @@ import { usePendingMemoryWrites } from '@/stores/memoryReview';
 import { applyHistoryPage, emptyProjection } from '@/stores/sessions/reducer';
 import { resizeSidePanelWidth, SIDE_PANEL_DEFAULT_WIDTH } from '@/stores/sidePanel/width';
 import type { BotUsageSnapshot } from './budget';
+import { createCoalescer } from './coalesce';
 import { botPendingCount, isActiveDelegation } from './delegations';
 import { mergeLatest, mergeOlder } from './groupTimeline';
 import { applyBotAgentEvent, type BotSessions, seedHistory } from './projection';
@@ -157,6 +158,8 @@ interface BotsState {
 
 export const useBotsStore = create<BotsState>()((set, get) => {
   const historyInFlight = new Set<string>();
+  /** Bot 事件常成串到达：同一刷新约 50ms 内合并为一次 */
+  const coalesce = createCoalescer(50);
   const seeding = new Map<string, Promise<void>>();
   let storedReads = loadReads();
   let bindings = 0;
@@ -227,7 +230,12 @@ export const useBotsStore = create<BotsState>()((set, get) => {
         void get().refreshRoutines();
         break;
       case 'timeline':
-        if (event.chatId) void get().loadLatest(event.chatId);
+        // 已拉到该 seq 的推送是过期提示，不再请求
+        if (
+          event.chatId &&
+          !(event.seq !== undefined && event.seq <= (get().timelines[event.chatId]?.lastSeq ?? -1))
+        )
+          void get().loadLatest(event.chatId);
         break;
       case 'delegation':
         void get().refreshDelegations();
@@ -332,34 +340,36 @@ export const useBotsStore = create<BotsState>()((set, get) => {
       if (result.ok) set({ bots: result.bots, enabled: result.enabled });
     },
 
-    refreshChats: async () => {
-      const result = await window.electronAPI.bots.chats();
-      if (!result.ok) return;
-      set({
-        chats: result.chats,
-        queue: result.queue,
-        silences: result.silences ?? [],
-        enabled: result.enabled,
-      });
-      void trackChats(result.chats);
-      for (const chat of result.chats) {
-        if (chat.kind === 'group' && !get().runtime[chat.id]) void get().refreshRuntime(chat.id);
-      }
-    },
+    refreshChats: () =>
+      coalesce('chats', async () => {
+        const result = await window.electronAPI.bots.chats();
+        if (!result.ok) return;
+        set({
+          chats: result.chats,
+          queue: result.queue,
+          silences: result.silences ?? [],
+          enabled: result.enabled,
+        });
+        void trackChats(result.chats);
+        for (const chat of result.chats) {
+          if (chat.kind === 'group' && !get().runtime[chat.id]) void get().refreshRuntime(chat.id);
+        }
+      }),
 
-    refreshDelegations: async () => {
-      const result = await window.electronAPI.bots.delegations();
-      if (!result?.ok) return;
-      set({ delegations: result.delegations });
-      for (const item of result.delegations) {
-        if (
-          item.chatId &&
-          isActiveDelegation(item.state) &&
-          !get().sessions[item.childConversationId]
-        )
-          void get().trackSession(item.childConversationId);
-      }
-    },
+    refreshDelegations: () =>
+      coalesce('delegations', async () => {
+        const result = await window.electronAPI.bots.delegations();
+        if (!result?.ok) return;
+        set({ delegations: result.delegations });
+        for (const item of result.delegations) {
+          if (
+            item.chatId &&
+            isActiveDelegation(item.state) &&
+            !get().sessions[item.childConversationId]
+          )
+            void get().trackSession(item.childConversationId);
+        }
+      }),
 
     refreshTasks: async (chatId) => {
       const result = await window.electronAPI.bots.tasks.list(chatId).catch(() => null);
@@ -373,14 +383,15 @@ export const useBotsStore = create<BotsState>()((set, get) => {
       set({ dismissedDelegations: next });
     },
 
-    refreshUsage: async () => {
-      try {
-        const result = await window.electronAPI.bots.usage();
-        if (result.ok) set({ usage: { day: result.day, bots: result.bots } });
-      } catch {
-        // 用量概览只影响收件箱提示与资料面板，失败不阻断其余加载
-      }
-    },
+    refreshUsage: () =>
+      coalesce('usage', async () => {
+        try {
+          const result = await window.electronAPI.bots.usage();
+          if (result.ok) set({ usage: { day: result.day, bots: result.bots } });
+        } catch {
+          // 用量概览只影响收件箱提示与资料面板，失败不阻断其余加载
+        }
+      }),
 
     dismissBudget: (key) => {
       // 只留最近的键，避免逐日累积
@@ -389,36 +400,44 @@ export const useBotsStore = create<BotsState>()((set, get) => {
       set({ dismissedBudgets: next });
     },
 
-    refreshRoutines: async () => {
-      try {
-        const result = await window.electronAPI.bots.routines.list();
-        if (result.ok) set({ routines: result.routines });
-      } catch {
-        // 只影响收件箱提示与提议卡片
-      }
-    },
+    refreshRoutines: () =>
+      coalesce('routines', async () => {
+        try {
+          const result = await window.electronAPI.bots.routines.list();
+          if (result.ok) set({ routines: result.routines });
+        } catch {
+          // 只影响收件箱提示与提议卡片
+        }
+      }),
 
-    loadLatest: async (chatId) => {
-      const result = await window.electronAPI.bots.timeline({ chatId, limit: TIMELINE_PAGE });
-      if (!result.ok) return;
-      set((state) => {
-        const current = state.timelines[chatId];
-        const merged = mergeLatest(current?.entries ?? [], result.entries);
-        const hasOlder =
-          current && !merged.gap ? current.hasOlder : result.entries.length >= TIMELINE_PAGE;
-        return {
-          timelines: {
-            ...state.timelines,
-            [chatId]: {
-              entries: merged.entries,
-              lastSeq: result.lastSeq,
-              hasOlder,
-              loading: current?.loading ?? false,
+    loadLatest: (chatId) =>
+      coalesce(`timeline:${chatId}`, async () => {
+        const known = get().timelines[chatId];
+        // 已有时间线只拉 lastSeq 之后的增量；缺口过大时 Main 退回最新一页，由 mergeLatest 按空洞替换
+        const result = await window.electronAPI.bots.timeline({
+          chatId,
+          ...(known ? { afterSeq: known.lastSeq } : {}),
+          limit: TIMELINE_PAGE,
+        });
+        if (!result.ok) return;
+        set((state) => {
+          const current = state.timelines[chatId];
+          const merged = mergeLatest(current?.entries ?? [], result.entries);
+          const hasOlder =
+            current && !merged.gap ? current.hasOlder : result.entries.length >= TIMELINE_PAGE;
+          return {
+            timelines: {
+              ...state.timelines,
+              [chatId]: {
+                entries: merged.entries,
+                lastSeq: result.lastSeq,
+                hasOlder,
+                loading: current?.loading ?? false,
+              },
             },
-          },
-        };
-      });
-    },
+          };
+        });
+      }),
 
     loadOlder: async (chatId) => {
       const current = get().timelines[chatId];
@@ -450,14 +469,15 @@ export const useBotsStore = create<BotsState>()((set, get) => {
       }
     },
 
-    refreshRuntime: async (chatId) => {
-      const chat = get().chats.find((item) => item.id === chatId);
-      if (chat && chat.kind !== 'group') return;
-      const result = await window.electronAPI.bots.chatState?.(chatId);
-      if (!result?.ok) return;
-      const { ok: _ok, ...runtime } = result;
-      set((state) => ({ runtime: { ...state.runtime, [chatId]: runtime } }));
-    },
+    refreshRuntime: (chatId) =>
+      coalesce(`runtime:${chatId}`, async () => {
+        const chat = get().chats.find((item) => item.id === chatId);
+        if (chat && chat.kind !== 'group') return;
+        const result = await window.electronAPI.bots.chatState?.(chatId);
+        if (!result?.ok) return;
+        const { ok: _ok, ...runtime } = result;
+        set((state) => ({ runtime: { ...state.runtime, [chatId]: runtime } }));
+      }),
 
     trackSession: (conversationId) => {
       const existing = seeding.get(conversationId);

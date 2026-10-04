@@ -191,6 +191,13 @@ describe('send / timeline / workspace / history inputs', () => {
       limit: 200,
     });
     expect(parseTimelineInput({ chatId: A, beforeSeq: -1 })).toBeNull();
+    expect(parseTimelineInput({ chatId: A, afterSeq: 0, limit: 20 })).toEqual({
+      chatId: A,
+      afterSeq: 0,
+      limit: 20,
+    });
+    expect(parseTimelineInput({ chatId: A, afterSeq: 1, beforeSeq: 5 })).toBeNull();
+    expect(parseTimelineInput({ chatId: A, afterSeq: 1.5 })).toBeNull();
   });
 
   it('打开工作区与会话历史只收标识符', () => {

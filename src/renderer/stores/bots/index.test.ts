@@ -1,5 +1,6 @@
 import type { ProjectedMessage, RendererAgentEvent } from '@shared/types/agent';
-import type { BotChat } from '@shared/types/bot';
+import type { BotChat, GroupEntry } from '@shared/types/bot';
+import type { BotEvent } from '@shared/types/botIpc';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { chatSummary } from './selectors';
 import { isUnread } from './unread';
@@ -36,6 +37,14 @@ async function fixture() {
     .fn()
     .mockResolvedValue({ ok: true, baseIndex: 0, messages: [message('old')] });
   const requestSnapshot = vi.fn().mockResolvedValue({ ok: true });
+  const delegations = vi.fn(async () => ({ ok: true, delegations: [] }));
+  const timeline = vi.fn(
+    async (_request: unknown): Promise<{ ok: true; entries: GroupEntry[]; lastSeq: number }> => ({
+      ok: true,
+      entries: [],
+      lastSeq: 0,
+    })
+  );
   vi.stubGlobal('window', {
     electronAPI: {
       bots: {
@@ -45,7 +54,8 @@ async function fixture() {
         },
         list: async () => ({ ok: true, enabled: true, bots: [] }),
         chats: async () => ({ ok: true, enabled: true, chats: [chat], queue: [] }),
-        delegations: async () => ({ ok: true, delegations: [] }),
+        delegations,
+        timeline,
         sessionHistory,
       },
       agent: {
@@ -66,8 +76,13 @@ async function fixture() {
     off,
     sessionHistory,
     requestSnapshot,
+    delegations,
+    timeline,
     listeners,
     botListeners,
+    bot: (event: BotEvent) => {
+      for (const listener of botListeners) (listener as (event: BotEvent) => void)(event);
+    },
     emit: (event: RendererAgentEvent) => {
       for (const listener of listeners) listener(event);
     },
@@ -155,5 +170,36 @@ describe('Bot mode subscription lifecycle', () => {
     });
     expect(f.store.getState().sessions.s.messages.at(-1)).toEqual(message('new'));
     off();
+  });
+
+  it('Bot 事件按聊天合并刷新，时间线只拉 seq 之后的增量，过期 seq 不再拉', async () => {
+    const f = await fixture();
+    const entry = (seq: number): GroupEntry => ({
+      seq,
+      id: `e${seq}`,
+      at: seq,
+      kind: 'system',
+      text: String(seq),
+    });
+    f.store.setState({
+      timelines: {
+        g: { entries: [entry(1), entry(2), entry(3)], lastSeq: 3, hasOlder: false, loading: false },
+      },
+    });
+    f.delegations.mockClear();
+    f.timeline.mockClear();
+    f.timeline.mockResolvedValue({ ok: true, entries: [entry(4), entry(5)], lastSeq: 5 });
+    f.bot({ kind: 'timeline', chatId: 'g', seq: 2 });
+    for (const seq of [4, 5]) f.bot({ kind: 'timeline', chatId: 'g', seq });
+    for (let i = 0; i < 3; i++) f.bot({ kind: 'delegation', chatId: 'g' });
+    await vi.waitFor(() => expect(f.store.getState().timelines.g.lastSeq).toBe(5));
+    await vi.waitFor(() => expect(f.delegations).toHaveBeenCalledTimes(1));
+    expect(f.timeline).toHaveBeenCalledTimes(1);
+    expect(f.timeline).toHaveBeenCalledWith({ chatId: 'g', afterSeq: 3, limit: 50 });
+    expect(f.store.getState().timelines.g.entries.map((item) => item.seq)).toEqual([1, 2, 3, 4, 5]);
+    f.bot({ kind: 'timeline', chatId: 'g', seq: 5 });
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    expect(f.timeline).toHaveBeenCalledTimes(1);
+    f.off();
   });
 });
