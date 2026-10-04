@@ -4,6 +4,7 @@ import type { BotEvent, BotQueueItem, BotSearchHit, BotSendResult } from '@share
 import { create } from 'zustand';
 import { applyHistoryPage, emptyProjection } from '@/stores/sessions/reducer';
 import { resizeSidePanelWidth, SIDE_PANEL_DEFAULT_WIDTH } from '@/stores/sidePanel/width';
+import type { BotUsageSnapshot } from './budget';
 import { botPendingCount, isActiveDelegation } from './delegations';
 import { mergeLatest, mergeOlder } from './groupTimeline';
 import { applyBotAgentEvent, type BotSessions, seedHistory } from './projection';
@@ -48,6 +49,7 @@ const PANEL_KEY = 'enso-bot-panel';
 const PANEL_WIDTH_KEY = 'enso-bot-panel-width';
 const VIEW_KEY = 'enso-bot-view';
 const DISMISSED_KEY = 'enso-bot-dismissed-delegations';
+const DISMISSED_BUDGETS_KEY = 'enso-bot-dismissed-budgets';
 
 function loadReads(): Record<string, number> | null {
   try {
@@ -66,9 +68,9 @@ function loadView(): BotView {
   return raw ? { kind: 'chat', chatId: raw } : null;
 }
 
-function loadDismissed(): string[] {
+function loadDismissed(key = DISMISSED_KEY): string[] {
   try {
-    const parsed = JSON.parse(localStorage.getItem(DISMISSED_KEY) ?? '[]');
+    const parsed = JSON.parse(localStorage.getItem(key) ?? '[]');
     return Array.isArray(parsed) ? parsed.filter((id) => typeof id === 'string') : [];
   } catch {
     return [];
@@ -84,6 +86,10 @@ interface BotsState {
   delegations: Delegation[];
   /** 收件箱里被忽略的中断委派 */
   dismissedDelegations: string[];
+  /** 成员用量概览（今日 / 7 天 / 30 天 + 今日是否超预算） */
+  usage: BotUsageSnapshot | null;
+  /** 收件箱里被忽略的预算提示，键为 botId:YYYY-MM-DD */
+  dismissedBudgets: string[];
   timelines: Record<string, TimelineState>;
   runtime: Record<string, ChatRuntime>;
   /** 群任务看板；只缓存打开过看板的群 */
@@ -105,6 +111,8 @@ interface BotsState {
   /** 拉委派列表，并跟踪进行中委派的子会话（审批/提问归属发起聊天） */
   refreshDelegations: () => Promise<void>;
   dismissDelegation: (id: string) => void;
+  refreshUsage: () => Promise<void>;
+  dismissBudget: (key: string) => void;
   refreshTasks: (chatId: string) => Promise<void>;
   loadLatest: (chatId: string) => Promise<void>;
   loadOlder: (chatId: string) => Promise<void>;
@@ -187,6 +195,7 @@ export const useBotsStore = create<BotsState>()((set, get) => {
     switch (event.kind) {
       case 'catalog':
         void get().refreshCatalog();
+        void get().refreshUsage();
         break;
       case 'chat':
       case 'queue':
@@ -203,6 +212,9 @@ export const useBotsStore = create<BotsState>()((set, get) => {
         break;
       case 'tasks':
         if (event.chatId && get().tasks[event.chatId]) void get().refreshTasks(event.chatId);
+        break;
+      case 'budget':
+        void get().refreshUsage();
         break;
     }
   };
@@ -231,7 +243,12 @@ export const useBotsStore = create<BotsState>()((set, get) => {
         .catch(() => {});
     }
     void (async () => {
-      await Promise.all([get().refreshCatalog(), get().refreshChats(), get().refreshDelegations()]);
+      await Promise.all([
+        get().refreshCatalog(),
+        get().refreshChats(),
+        get().refreshDelegations(),
+        get().refreshUsage(),
+      ]);
       const groups = get().chats.filter((chat) => chat.kind === 'group');
       await Promise.all([
         ...groups.map((chat) => get().loadLatest(chat.id)),
@@ -255,6 +272,8 @@ export const useBotsStore = create<BotsState>()((set, get) => {
     queue: [],
     delegations: [],
     dismissedDelegations: loadDismissed(),
+    usage: null,
+    dismissedBudgets: loadDismissed(DISMISSED_BUDGETS_KEY),
     timelines: {},
     runtime: {},
     tasks: {},
@@ -321,6 +340,22 @@ export const useBotsStore = create<BotsState>()((set, get) => {
       const next = [...get().dismissedDelegations.filter((item) => item !== id), id];
       localStorage.setItem(DISMISSED_KEY, JSON.stringify(next));
       set({ dismissedDelegations: next });
+    },
+
+    refreshUsage: async () => {
+      try {
+        const result = await window.electronAPI.bots.usage();
+        if (result.ok) set({ usage: { day: result.day, bots: result.bots } });
+      } catch {
+        // 用量概览只影响收件箱提示与资料面板，失败不阻断其余加载
+      }
+    },
+
+    dismissBudget: (key) => {
+      // 只留最近的键，避免逐日累积
+      const next = [...get().dismissedBudgets.filter((item) => item !== key), key].slice(-200);
+      localStorage.setItem(DISMISSED_BUDGETS_KEY, JSON.stringify(next));
+      set({ dismissedBudgets: next });
     },
 
     loadLatest: async (chatId) => {

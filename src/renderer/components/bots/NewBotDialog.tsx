@@ -17,6 +17,7 @@ import { useI18n } from '@/i18n';
 import { cn } from '@/lib/utils';
 import { Z_INDEX } from '@/lib/z-index';
 import { useBotsStore } from '@/stores/bots';
+import { budgetDraft } from '@/stores/bots/budget';
 import { parseCharacterCard } from '@/stores/bots/characterCard';
 import { BOT_TEMPLATES, type BotTemplate, templateDraft } from '@/stores/bots/templates';
 import { type AbilityForm, BotAbilityFields, DEFAULT_ABILITIES } from './BotAbilities';
@@ -115,6 +116,11 @@ export function NewBotDialog({
   const create = async () => {
     setTouched(true);
     if (nameIssue) return;
+    const budget = budgetDraft(draft);
+    if (!budget.ok) {
+      setError(t('Budget must be a positive number'));
+      return;
+    }
     setBusy(true);
     try {
       const result = await window.electronAPI.bots.create({
@@ -130,6 +136,7 @@ export function NewBotDialog({
         mcpServerIds: draft.mcpServerIds,
         delegation: { canDelegateTo: draft.canDelegateTo, acceptFrom: draft.acceptFrom },
         memory: { enabled: draft.memoryEnabled },
+        ...(budget.budget ? { budget: budget.budget } : {}),
       });
       if (!result.ok) {
         setError(botErrorText(result.reason, result.error, t));

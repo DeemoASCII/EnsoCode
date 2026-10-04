@@ -1,6 +1,7 @@
 import { missedRuns, nextRun, parseCron } from '../../../shared/bots/cron';
 import type { BotRoutine } from '../../../shared/types/bot';
 import type { BotEvent } from '../../../shared/types/botIpc';
+import { BOT_BUDGET_ERROR } from '../../../shared/usage/botUsage';
 import type { BotRoutineStore } from './routineStore';
 
 interface Deps {
@@ -67,7 +68,11 @@ export class RoutineScheduler {
     } catch (error) {
       result = { ok: false, error: String(error) };
     }
-    this.deps.store.markRun(routine.botId, routine.id, result.ok ? 'ok' : 'error');
+    this.deps.store.markRun(
+      routine.botId,
+      routine.id,
+      result.ok ? 'ok' : result.error === BOT_BUDGET_ERROR ? 'budget' : 'error'
+    );
     this.deps.emit({ kind: 'routine' });
     return result;
   }

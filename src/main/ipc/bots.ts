@@ -26,6 +26,7 @@ import type {
   BotTimelineResult,
   BotWriteIpcResult,
 } from '@shared/types/botIpc';
+import { isUsageRangeDays } from '@shared/usage/types';
 import { app, ipcMain, shell } from 'electron';
 import {
   abortCompleteText,
@@ -56,6 +57,7 @@ import {
 } from '../services/bots/botPrompt';
 import { type BotRuntimePort, BotSessionHost } from '../services/bots/botSessionHost';
 import { BotStore } from '../services/bots/botStore';
+import { BotUsageService } from '../services/bots/botUsage';
 import { BotChatStore } from '../services/bots/chatStore';
 import { turnDelegationTargets } from '../services/bots/delegationBatch';
 import { DelegationService } from '../services/bots/delegationService';
@@ -74,6 +76,7 @@ import { readStoredOauthCredentialKeys } from '../services/oauthProviders';
 import { remoteCandidates, resolveRemoteModels } from '../services/remoteModels';
 import { removeConversationSessionFiles } from '../services/sessionFileCleanup';
 import { botAssistantModelCandidates } from '../services/titleSummary';
+import { getUsagePricing, loadUsageSession } from '../services/usage/usageService';
 import { sendToAllWindows } from '../windows/createAppWindow';
 import { isMainWebContents } from '../windows/MainWindow';
 import {
@@ -108,6 +111,7 @@ interface BotServices {
   scheduler: RoutineScheduler;
   runner: RoutineRunner;
   tasks: GroupTaskService;
+  usage: BotUsageService;
 }
 
 type GroupSender = (
@@ -257,12 +261,19 @@ export function getBotServices(): BotServices | null {
   const botsRoot = path.join(userData, 'bots');
   const bots = new BotStore(botsRoot);
   const chats = new BotChatStore(path.join(userData, 'bot-chats'));
+  const usage = new BotUsageService({
+    bots,
+    conversations: () => authority.botConversations(),
+    load: loadUsageSession,
+    pricing: getUsagePricing,
+  });
   const host = new BotSessionHost({
     bots,
     chats,
     authority,
     runtime: createRuntime(botsRoot),
     emit: emitBotEvent,
+    budget: usage,
   });
   const delegationStore = new DelegationStore(
     path.join(userData, 'bot-chats', 'delegations.jsonl')
@@ -412,6 +423,7 @@ export function getBotServices(): BotServices | null {
     scheduler,
     runner,
     tasks,
+    usage,
   };
   if (botModeEnabled()) scheduler.start();
   return services;
@@ -1087,5 +1099,18 @@ export function registerBotHandlers(): void {
   );
   handle(IPC_CHANNELS.BOT_ARTIFACT_OPEN, 'write', (_sender, request, services) =>
     openArtifact(services, request)
+  );
+  handle(
+    IPC_CHANNELS.BOT_USAGE_SUMMARY,
+    'read',
+    async (_sender, days, services) =>
+      isUsageRangeDays(days) ? { ok: true, rows: await services.usage.summary(days) } : INVALID,
+    { ok: true, rows: [] }
+  );
+  handle(
+    IPC_CHANNELS.BOT_USAGE,
+    'read',
+    async (_sender, _request, services) => ({ ok: true, ...(await services.usage.overview()) }),
+    { ok: true, day: '', bots: {} }
   );
 }

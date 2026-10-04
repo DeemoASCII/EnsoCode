@@ -22,6 +22,7 @@ describe('parseBotRoutine', () => {
     expect(parseBotRoutine({ ...base, lastResult: 'boom', missed: -1, lastRunAt: 'x' })).toEqual(
       base
     );
+    expect(parseBotRoutine({ ...base, lastResult: 'budget' })?.lastResult).toBe('budget');
   });
 
   it('脏输入拒绝', () => {

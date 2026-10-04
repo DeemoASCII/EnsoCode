@@ -582,3 +582,119 @@ it('群聊成员会话挂群任务看板，私聊不挂', async () => {
   expect(runtime.spawns[0]).toMatchObject({ groupTasks: true });
   expect(runtime.spawns[0].instructionText).toContain('group_tasks');
 });
+
+describe('BotSessionHost budget gate', () => {
+  function budgeted(over: Set<string>) {
+    const checked: string[] = [];
+    host = new BotSessionHost({
+      bots,
+      chats,
+      authority: registry,
+      runtime,
+      emit: (event) => events.push(event),
+      budget: {
+        exceeded: async (botId) => {
+          checked.push(botId);
+          return over.has(botId) ? 'tokens' : null;
+        },
+      },
+    });
+    return checked;
+  }
+
+  it('rejects a delivery before it reaches the worker and announces it', async () => {
+    const over = new Set<string>();
+    budgeted(over);
+    const alice = bot('Alice');
+    const chat = direct(alice.id);
+    over.add(alice.id);
+    expect(await host.deliver(chat.id, alice.id, 'hi')).toEqual({
+      ok: false,
+      error: 'budget-exceeded',
+    });
+    expect(runtime.spawns).toHaveLength(0);
+    expect(runtime.prompts).toHaveLength(0);
+    expect(events).toContainEqual({ kind: 'budget', chatId: chat.id });
+  });
+
+  it('checks a delegation child against the target member', async () => {
+    const over = new Set<string>();
+    const checked = budgeted(over);
+    const alice = bot('Alice');
+    const bob = bot('Bob');
+    const chat = direct(alice.id);
+    const parent = host.ensureSession(chat.id, alice.id);
+    if (!parent.ok) throw new Error(parent.error);
+    const projectId = registry.conversation(parent.conversationId)!.projectId;
+    const child = registry.createBotConversation(projectId, {
+      botId: bob.id,
+      chatId: null,
+      delegationId: 'd1',
+    })!;
+    expect(host.registerDelegation(child.conversationId, bob)).toBe(true);
+    over.add(bob.id);
+    expect(await host.deliverConversation(child.conversationId, 'task')).toEqual({
+      ok: false,
+      error: 'budget-exceeded',
+    });
+    expect(checked).toEqual([bob.id]);
+  });
+
+  it('settles a queued delivery with the budget error when it would start', async () => {
+    const over = new Set<string>();
+    budgeted(over);
+    const alice = bot('Alice');
+    const chat = direct(alice.id);
+    const results: BotTurnFinished[] = [];
+    host.onTurnFinished((event) => results.push(event));
+    const first = await host.deliver(chat.id, alice.id, 'first', { deliveryId: 'first' });
+    if (!first.ok) throw new Error(first.error);
+    await host.deliver(chat.id, alice.id, 'routine', { queueIfBusy: true, deliveryId: 'r' });
+    over.add(alice.id);
+    host.observe(ev({ type: 'status', status: 'running' }, first.conversationId));
+    host.observe(ev({ type: 'turn-completed', turnId: 't1' }, first.conversationId));
+    await flush();
+    await flush();
+    expect(runtime.prompts.map((item) => item.text)).toEqual(['first']);
+    expect(results.at(-1)).toMatchObject({ deliveryId: 'r', ok: false, error: 'budget-exceeded' });
+  });
+
+  it('stops the running turn once a finished assistant message pushes usage over the cap', async () => {
+    const over = new Set<string>();
+    budgeted(over);
+    const alice = bot('Alice');
+    const chat = direct(alice.id);
+    const results: BotTurnFinished[] = [];
+    host.onTurnFinished((event) => results.push(event));
+    const sent = await host.deliver(chat.id, alice.id, 'work', { deliveryId: 'w' });
+    if (!sent.ok) throw new Error(sent.error);
+    host.observe(ev({ type: 'status', status: 'running' }, sent.conversationId));
+    const upsert = (index: number) =>
+      host.observe(
+        ev(
+          {
+            type: 'message-upsert',
+            index,
+            message: {
+              role: 'assistant',
+              content: [{ type: 'text', text: 'step' }],
+              stopReason: 'toolUse',
+              usage: { input: 10, output: 10, cacheRead: 0, cacheWrite: 0, totalTokens: 20 },
+            },
+          },
+          sent.conversationId
+        )
+      );
+    upsert(1);
+    await flush();
+    expect(runtime.aborted).toEqual([]);
+    over.add(alice.id);
+    upsert(3);
+    await flush();
+    await flush();
+    expect(runtime.aborted).toEqual([sent.conversationId]);
+    expect(results).toMatchObject([{ deliveryId: 'w', ok: false, error: 'budget-exceeded' }]);
+    expect(events).toContainEqual({ kind: 'budget', chatId: chat.id });
+    expect(host.isBusy(sent.conversationId)).toBe(false);
+  });
+});

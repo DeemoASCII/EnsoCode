@@ -280,6 +280,17 @@ Main 在 `spawnSession` 里根据 `ConversationAuthority.bot` 组装提示词，
 - **压缩后补群状态**：群聊成员会话压缩成功后，`GroupChatService` 在内存里给该会话打标记；下一次向该成员投递群增量时在前面追加 `<group-state>`，由 Main 权威数据确定性生成：成员与分工、群主、本轮待回应顺序、进行中委派（谁→谁、任务）、看板未完成任务（#N、状态、负责人）、当前时间线 seq 与 `group_history` 提示；条目 / 条数 / 总长（4000 字）都有上限。已达成的约定由群记忆（chat 空间）承载，不在这里生成。投递成功（含排队）后清标记，失败保留；删群、会话退役、删成员时清标记；重启后标记丢失（可接受，最多少补一次）。私聊不做。
 - **手动压缩**：桌面 `AGENT_COMPACT` 对 bot 会话放行（不改执行与策略，忙碌时 worker 排队）；手机 pair 仍拒绝，不加 UI 入口。
 
+### 成员用量与日预算
+
+参考 akeru-bot 单 bot 账本 + 硬上限中断、OpenGrokBot 按员工汇总用量。不新建账本，用量的权威仍是 pi jsonl。
+
+- **归属**：按 `ConversationAuthority.bot.botId` 归集——私聊、群聊、例行任务（投进私聊 / 群聊会话）都记在该成员名下；委派子会话 binding 记的是目标成员，归目标。Code 会话、Code 里拉 bot 当 coworker 的 child 不计入，Code 的按模型 / 按项目统计不变。纯函数在 `shared/usage/botUsage.ts`（同一 jsonl entry id 只计一次）；`services/bots/botUsage.ts` 逐个 bot 会话 `sessionFile` 走用量页的解析缓存（`loadUsageSession`），单价复用用量页同一张表（`getUsagePricing`：catalog + 本地补丁 + 用户覆盖）。tokens = input + output + cacheRead + cacheWrite，与用量页一致。
+- **展示**：`BOT_USAGE_SUMMARY(days)` 给用量页「按成员」排行（周期沿用页面选择，仅 botModeEnabled 时显示）；`BOT_USAGE()` 给每个成员今日 / 近 7 天 / 近 30 天 token 与估算成本及今日是否超额，资料面板「资料」页顶部展示，并带今日预算进度。
+- **预算**：`BotProfile.budget?: { dailyCostUsd?; dailyTokens? }`，正数才算上限，按本地时区自然日（`startOfLocalDay`）重置；缺省 / 旧数据 = 不限。新建成员与资料「能力」页可填（留空 = 不限，`budget:null` 清除）。未定价模型的成本为 null，不触发成本上限，只能靠 token 上限。
+- **执行点**：统一在 `BotSessionHost`。`deliverConversation`（私聊、群聊接力、委派任务、委派结果回投、例行任务都经过）在去重之后、steer / 排队 / 启动之前检查；排队项真正启动前（pump）再查一次。超额返回 `budget-exceeded`，不发给 worker（renderer 不做乐观回显，提示「该成员今日预算已用完」）。运行中：每条带 `usage` 且已有 `stopReason` 的 assistant `message-upsert` 到达后检查，超额则以 `budget-exceeded` 结算并停掉该会话当前回合（与 `stopTurn` 同一路径，清掉它的排队项）。
+- **各入口表现**：群聊写 system「X 今日预算已用完」并跳过该成员继续队列（投递被拒与回合被停都一样；例行任务在群里同样写这条）；例行任务 `lastResult = 'budget'`；委派以 `failed / error` 结束，`error = 'budget-exceeded'`，卡片显示预算用完。拒绝或停止时推 `BOT_EVENT {kind:'budget'}`（不转发到手机），renderer 刷新概览，收件箱按「成员 + 自然日」出现一条可忽略的预算提示（忽略记录在 localStorage）。
+- **不做**：成员会话里 subagent 子代理的用量（pi child jsonl 不带父会话标识，无法可靠归属）；私聊没有时间线，不写 system 条目，只有发送提示与收件箱；预算只看今日，不做周 / 月上限。
+
 ## UI
 
 - **模式切换**：侧栏顶部 NodeSwitcher 旁边放 `Code | Bot` 分段控件，存到 `localStorage['enso-mode']`。只在本机生效：切到远程节点时隐藏切换并回到 Code 视图。快捷键、标题栏按钮、SidePanel 照远程节点的做法按模式屏蔽。

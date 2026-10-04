@@ -40,7 +40,9 @@ export function failureText(record: Delegation, t: TFunction): string | undefine
     case 'denied':
       return t('Denied.');
     default:
-      return record.error;
+      return record.error === 'budget-exceeded'
+        ? t("The member's daily budget is used up.")
+        : record.error;
   }
 }
 

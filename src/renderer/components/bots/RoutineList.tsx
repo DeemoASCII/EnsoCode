@@ -209,7 +209,9 @@ export function RoutineList({
                           ? '✓'
                           : routine.lastResult === 'error'
                             ? t('Error')
-                            : t('Skipped'),
+                            : routine.lastResult === 'budget'
+                              ? t('Over budget')
+                              : t('Skipped'),
                     })
                   : t('Never run')}
               </span>

@@ -29,6 +29,8 @@ export function chatErrorText(error: string, t: TFunction): string {
       return t('Group chat is not available right now.');
     case 'conflict':
       return t('This chat was changed elsewhere. Refresh and try again.');
+    case 'budget-exceeded':
+      return t("This member's daily budget is used up. Try again tomorrow or raise the budget.");
     default:
       return error;
   }

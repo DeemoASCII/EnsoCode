@@ -127,6 +127,13 @@ describe('botPendingCount', () => {
     expect(
       botPendingCount({ sessions: {}, chats: [], delegations: [], dismissedDelegations: [] })
     ).toBe(0);
+    const zero = { tokens: 0, cost: null, messages: 0, sessions: 0 };
+    const usage = {
+      day: '2026-10-04',
+      bots: { ops: { today: zero, week: zero, month: zero, exhausted: 'cost' as const } },
+    };
+    expect(botPendingCount({ ...state, usage, dismissedBudgets: [] })).toBe(4);
+    expect(botPendingCount({ ...state, usage, dismissedBudgets: ['ops:2026-10-04'] })).toBe(3);
   });
 });
 

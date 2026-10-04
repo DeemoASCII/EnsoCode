@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   BOT_ROUTING_DEFAULTS,
   checkBotName,
+  parseBotBudget,
   parseBotChat,
   parseBotProfile,
   parseGroupEntry,
@@ -48,6 +49,20 @@ describe('parseBotProfile', () => {
     });
     expect(parsed?.avatar.color).toMatch(/^#[0-9a-f]{6}$/u);
     expect(parsed?.engine).toBeUndefined();
+  });
+
+  it('treats legacy profiles without budget as unlimited', () => {
+    expect(parseBotProfile(profile)?.budget).toBeUndefined();
+  });
+
+  it('keeps a positive daily budget and drops invalid caps', () => {
+    expect(
+      parseBotProfile({ ...profile, budget: { dailyCostUsd: 0.5, dailyTokens: 2000 } })?.budget
+    ).toEqual({ dailyCostUsd: 0.5, dailyTokens: 2000 });
+    expect(parseBotProfile({ ...profile, budget: { dailyTokens: 1.5 } })?.budget).toBeUndefined();
+    expect(parseBotBudget({ dailyCostUsd: -1, dailyTokens: 10 })).toEqual({ dailyTokens: 10 });
+    for (const bad of [null, 'x', [], {}, { dailyCostUsd: 0 }, { dailyTokens: Number.NaN }])
+      expect(parseBotBudget(bad)).toBeUndefined();
   });
 
   it('keeps a valid engine and drops an invalid thinking level', () => {

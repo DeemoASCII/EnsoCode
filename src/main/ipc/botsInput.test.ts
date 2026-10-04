@@ -52,6 +52,22 @@ describe('parseBotDraftInput', () => {
     expect(parseBotDraftInput('Alice')).toBeNull();
   });
 
+  it('日预算：正数上限，null / 空对象 = 不限，脏值拒绝', () => {
+    expect(parseBotDraftInput({ budget: { dailyCostUsd: 1.5, dailyTokens: 1000 } })).toEqual({
+      budget: { dailyCostUsd: 1.5, dailyTokens: 1000 },
+    });
+    expect(parseBotDraftInput({ budget: null })).toEqual({ budget: undefined });
+    expect(parseBotDraftInput({ budget: {} })).toEqual({ budget: undefined });
+    for (const budget of [
+      { dailyCostUsd: -1 },
+      { dailyTokens: 1.5 },
+      { dailyTokens: '10' },
+      { daily: 1 },
+      'x',
+    ])
+      expect(parseBotDraftInput({ budget }), JSON.stringify(budget)).toBeNull();
+  });
+
   it('更新请求带 botId 与可选 expectedVersion', () => {
     expect(parseBotUpdateInput({ botId: A, expectedVersion: 2, draft: { title: 't' } })).toEqual({
       botId: A,

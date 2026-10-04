@@ -14,16 +14,18 @@ import { APPROVAL_MODE_META } from '@/components/chat/ApprovalModePicker';
 import { DetailRows, PickList, setFilteredIds } from '@/components/settings/PresetsSettings';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
+import { Input } from '@/components/ui/input';
 import { Switch } from '@/components/ui/switch';
 import { addToast } from '@/components/ui/toast';
 import { type TFunction, useI18n } from '@/i18n';
 import { useBotsStore } from '@/stores/bots';
+import type { BudgetForm } from '@/stores/bots/budget';
 import { useSettingsStore } from '@/stores/settings';
 import { BotAvatar } from './BotAvatar';
 import { ApprovalSelect, FieldLabel, Segmented } from './BotFields';
 
 /** 成员能力（模型除外）：新建对话框与资料面板共用 */
-export interface AbilityForm extends AbilityValues {
+export interface AbilityForm extends AbilityValues, BudgetForm {
   memoryEnabled: boolean;
 }
 
@@ -35,6 +37,8 @@ export const DEFAULT_ABILITIES: AbilityForm = {
   canDelegateTo: 'any',
   acceptFrom: 'any',
   memoryEnabled: true,
+  budgetCost: '',
+  budgetTokens: '',
 };
 
 export interface AbilityProfile {
@@ -104,6 +108,36 @@ export function BotAbilityFields({
           onCheckedChange={(memoryEnabled) => onChange({ memoryEnabled })}
         />
       </label>
+      <div>
+        <FieldLabel>{t('Daily budget')}</FieldLabel>
+        <div className="grid grid-cols-2 gap-2">
+          <Input
+            type="number"
+            min={0}
+            step="0.01"
+            inputMode="decimal"
+            value={value.budgetCost}
+            placeholder={t('Cost (USD), empty = unlimited')}
+            aria-label={t('Daily cost limit (USD)')}
+            onChange={(event) => onChange({ budgetCost: event.target.value })}
+          />
+          <Input
+            type="number"
+            min={0}
+            step="1"
+            inputMode="numeric"
+            value={value.budgetTokens}
+            placeholder={t('Tokens, empty = unlimited')}
+            aria-label={t('Daily token limit')}
+            onChange={(event) => onChange({ budgetTokens: event.target.value })}
+          />
+        </div>
+        <p className="mt-1 text-muted-foreground text-xs">
+          {t(
+            'Resets at local midnight. Once reached, new messages to this member are refused and a running reply is stopped.'
+          )}
+        </p>
+      </div>
     </div>
   );
 }

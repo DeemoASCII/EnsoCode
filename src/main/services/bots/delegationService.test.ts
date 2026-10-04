@@ -18,7 +18,7 @@ afterEach(() => {
   vi.useRealTimers();
   rmSync(root, { recursive: true, force: true });
 });
-function fixture(autoStart = true) {
+function fixture(autoStart = true, over = new Set<string>()) {
   const bots = new BotStore(join(root, 'bots'));
   const a = bots.create({ name: 'Alice' }, []),
     b = bots.create({ name: 'Bob' }, []);
@@ -39,6 +39,7 @@ function fixture(autoStart = true) {
     chats,
     authority,
     emit: () => {},
+    budget: { exceeded: async (botId) => (over.has(botId) ? 'tokens' : null) },
     runtime: {
       spawn: async () => ({ ok: true }),
       prompt: (id, text, _images, deliveryId) => {
@@ -87,6 +88,7 @@ function fixture(autoStart = true) {
     prompts,
     finish,
     abort,
+    bob: b.bot.id,
     deps: { bots, chats, authority, host, store, emit: () => {}, timeoutMs: 1000 },
   };
 }
@@ -430,5 +432,21 @@ it('rejects delegating back up the chain to a member who delegated to you', asyn
   const back = f.service.delegate(child, { to: 'Alice', task: 'report done' });
   expect(back).toEqual({ ok: false, error: expect.stringContaining('delegated this work to you') });
   expect(f.store.list()).toHaveLength(1);
+  f.service.dispose();
+});
+
+it('fails the delegation with the budget reason when the target is over its daily cap', async () => {
+  const over = new Set<string>();
+  const f = fixture(true, over);
+  over.add(f.bob);
+  const sent = f.service.delegate(f.parent, { to: 'Bob', task: 'do work' });
+  if (!sent.ok) throw new Error(sent.error);
+  await vi.advanceTimersByTimeAsync(0);
+  expect(f.store.get(sent.delegationId)).toMatchObject({
+    state: 'failed',
+    failure: 'error',
+    error: 'budget-exceeded',
+  });
+  expect(f.prompts.filter((p) => p.text.includes('<delegation-task'))).toHaveLength(0);
   f.service.dispose();
 });

@@ -209,6 +209,7 @@ import type {
   WorkspaceBranchSwitchResult,
   WorktreeStatus,
 } from '@shared/types/worktree';
+import type { BotUsageOverviewResult, BotUsageSummaryResult } from '@shared/usage/botUsage';
 import type { UsageRangeDays, UsageSummaryResult } from '@shared/usage/types';
 import type {
   WorkspaceSearchQueryRequest,
@@ -1220,6 +1221,9 @@ const electronAPI = {
       ipcRenderer.invoke(IPC_CHANNELS.BOT_SESSION_HISTORY, request),
     search: (request: BotSearchRequest): Promise<BotSearchResult> =>
       ipcRenderer.invoke(IPC_CHANNELS.BOT_SEARCH, request),
+    usageSummary: (days: UsageRangeDays): Promise<BotUsageSummaryResult> =>
+      ipcRenderer.invoke(IPC_CHANNELS.BOT_USAGE_SUMMARY, days),
+    usage: (): Promise<BotUsageOverviewResult> => ipcRenderer.invoke(IPC_CHANNELS.BOT_USAGE),
     artifacts: {
       list: (target: BotArtifactTarget): Promise<BotArtifactsResult> =>
         ipcRenderer.invoke(IPC_CHANNELS.BOT_ARTIFACTS_LIST, target),

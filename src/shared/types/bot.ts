@@ -11,6 +11,12 @@ export interface BotEngine {
   thinkingLevel?: ThinkingLevel;
 }
 
+/** 本地时区自然日的用量上限；缺省字段 = 不限 */
+export interface BotBudget {
+  dailyCostUsd?: number;
+  dailyTokens?: number;
+}
+
 export interface BotProfile {
   id: BotId;
   /** 群内 @ 用，唯一（大小写不敏感） */
@@ -27,6 +33,7 @@ export interface BotProfile {
   mcpServerIds: string[];
   delegation: { canDelegateTo: BotList; acceptFrom: BotList };
   memory: { enabled: boolean };
+  budget?: BotBudget;
   archivedAt?: number;
   createdAt: number;
   updatedAt: number;
@@ -319,8 +326,21 @@ export function parseBotProfile(value: unknown): BotProfile | undefined {
   };
   const engine = parseEngine(value.engine);
   if (engine) profile.engine = engine;
+  const budget = parseBotBudget(value.budget);
+  if (budget) profile.budget = budget;
   if (isTime(value.archivedAt)) profile.archivedAt = value.archivedAt;
   return profile;
+}
+
+/** 正数才算上限，tokens 须为整数；一个都不合法返回 undefined（= 不限） */
+export function parseBotBudget(value: unknown): BotBudget | undefined {
+  if (!isObject(value)) return undefined;
+  const budget: BotBudget = {};
+  const cost = value.dailyCostUsd;
+  if (typeof cost === 'number' && Number.isFinite(cost) && cost > 0) budget.dailyCostUsd = cost;
+  const tokens = value.dailyTokens;
+  if (Number.isSafeInteger(tokens) && (tokens as number) > 0) budget.dailyTokens = tokens as number;
+  return budget.dailyCostUsd === undefined && budget.dailyTokens === undefined ? undefined : budget;
 }
 
 function parseWorkspace(value: unknown): BotChatWorkspace | undefined {
@@ -447,7 +467,7 @@ export function parseGroupEntry(value: unknown): GroupEntry | undefined {
   }
 }
 
-export const BOT_ROUTINE_RESULTS = ['ok', 'error', 'skipped'] as const;
+export const BOT_ROUTINE_RESULTS = ['ok', 'error', 'skipped', 'budget'] as const;
 export type BotRoutineResult = (typeof BOT_ROUTINE_RESULTS)[number];
 
 /** userData/bots/<botId>/routines.json 的一条；触发后作为系统消息投进 chatId */

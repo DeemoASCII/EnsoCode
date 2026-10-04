@@ -6,6 +6,7 @@ import { Input } from '@/components/ui/input';
 import { useI18n } from '@/i18n';
 import { toolLabel } from '@/lib/toolLabels';
 import { useBotsStore } from '@/stores/bots';
+import { type BudgetAlert, budgetAlerts } from '@/stores/bots/budget';
 import { interruptedDelegations, pendingOwners } from '@/stores/bots/delegations';
 import { type PendingItem, pendingItems } from '@/stores/bots/selectors';
 import { BotAvatar } from './BotAvatar';
@@ -21,6 +22,8 @@ export function BotInbox() {
   const bots = useBotsStore((s) => s.bots);
   const delegations = useBotsStore((s) => s.delegations);
   const dismissed = useBotsStore((s) => s.dismissedDelegations);
+  const usage = useBotsStore((s) => s.usage);
+  const dismissedBudgets = useBotsStore((s) => s.dismissedBudgets);
   const [history, setHistory] = useState<{ id: string; title: string; bot?: BotProfile } | null>(
     null
   );
@@ -32,6 +35,7 @@ export function BotInbox() {
     () => interruptedDelegations(delegations, dismissed),
     [delegations, dismissed]
   );
+  const budgets = useMemo(() => budgetAlerts(usage, dismissedBudgets), [usage, dismissedBudgets]);
   const byId = useMemo(() => new Map(bots.map((bot) => [bot.id, bot])), [bots]);
   const chatName = (chatId: string | null) => {
     const chat = chats.find((entry) => entry.id === chatId);
@@ -48,7 +52,7 @@ export function BotInbox() {
       </header>
       <div className="min-h-0 flex-1 overflow-y-auto">
         <div className="mx-auto w-full max-w-2xl space-y-2.5 px-6 py-4">
-          {items.length === 0 && interrupted.length === 0 && (
+          {items.length === 0 && interrupted.length === 0 && budgets.length === 0 && (
             <div className="flex flex-col items-center gap-2 py-16 text-muted-foreground">
               <Inbox className="h-6 w-6" />
               <p className="text-sm">{t('Nothing needs your attention')}</p>
@@ -62,6 +66,9 @@ export function BotInbox() {
               owner={item.delegation ? byId.get(item.delegation.parentBotId) : undefined}
               chatName={chatName(item.chatId)}
             />
+          ))}
+          {budgets.map((alert) => (
+            <BudgetCard key={alert.key} alert={alert} bot={byId.get(alert.botId)} />
           ))}
           {interrupted.length > 0 && (
             <div className="pt-3 font-medium text-muted-foreground text-xs">
@@ -93,6 +100,40 @@ export function BotInbox() {
         }
         onClose={() => setHistory(null)}
       />
+    </div>
+  );
+}
+
+function BudgetCard({ alert, bot }: { alert: BudgetAlert; bot: BotProfile | undefined }) {
+  const { t } = useI18n();
+  const dismiss = useBotsStore((s) => s.dismissBudget);
+  const openDirect = useBotsStore((s) => s.openDirect);
+  const name = bot?.name ?? t('Deleted member');
+  return (
+    <div className="rounded-xl border bg-card p-3">
+      <div className="flex items-center gap-2 text-muted-foreground text-xs">
+        <BotAvatar bot={bot} size="sm" />
+        <span className="text-foreground">{name}</span>
+        <span className="rounded bg-destructive/15 px-1.5 text-[11px] text-destructive">
+          {t('Budget')}
+        </span>
+      </div>
+      <div className="mt-2 text-sm">{t("{{name}}'s budget for today is used up", { name })}</div>
+      <div className="mt-1 text-muted-foreground text-xs">
+        {alert.reason === 'cost'
+          ? t('Daily cost limit reached. New messages are refused until local midnight.')
+          : t('Daily token limit reached. New messages are refused until local midnight.')}
+      </div>
+      <div className="mt-2.5 flex flex-wrap items-center justify-end gap-1.5">
+        <Button size="xs" variant="ghost" onClick={() => dismiss(alert.key)}>
+          {t('Dismiss')}
+        </Button>
+        {bot && (
+          <Button size="xs" variant="outline" onClick={() => void openDirect(bot.id)}>
+            {t('Go to chat')}
+          </Button>
+        )}
+      </div>
     </div>
   );
 }

@@ -26,6 +26,7 @@ import type {
   BotEvent,
   BotSendResult,
 } from '../../../shared/types/botIpc';
+import { BOT_BUDGET_ERROR } from '../../../shared/usage/botUsage';
 import type {
   BotDeliverOptions,
   BotDeliverResult,
@@ -93,6 +94,7 @@ const relayOptions = (options: BotDeliverOptions | undefined): BotDeliverOptions
   const { deliveryId: _deliveryId, onlyIfIdle: _onlyIfIdle, ...rest } = options;
   return rest;
 };
+const budgetNotice = (name: string) => `${name} 今日预算已用完`;
 
 /** 每群串行归并；router.json 只用于崩溃恢复，不重放未完成的工作。 */
 export class GroupChatService {
@@ -282,12 +284,15 @@ export class GroupChatService {
       chat.sessions[event.botId]?.conversationId !== event.conversationId
     )
       return;
-    if (!event.ok)
+    if (!event.ok) {
+      const name = this.deps.bots.get(event.botId)?.name ?? '已删除成员';
       this.system(
         chat.id,
-        `${this.deps.bots.get(event.botId)?.name ?? '已删除成员'} 回复失败：${event.error ?? '未知错误'}`
+        event.error === BOT_BUDGET_ERROR
+          ? budgetNotice(name)
+          : `${name} 回复失败：${event.error ?? '未知错误'}`
       );
-    else if (!isSkipReply(event.text) && event.turnId) {
+    } else if (!isSkipReply(event.text) && event.turnId) {
       const smart = round.smartPicked?.includes(event.botId) ?? false;
       this.append(chat.id, {
         kind: 'bot',
@@ -441,6 +446,7 @@ export class GroupChatService {
           return;
         }
         if (sent.ok) this.system(chatId, `${bot.name} 的投递已处理过，本次未发出`);
+        else if (sent.error === BOT_BUDGET_ERROR) this.system(chatId, budgetNotice(bot.name));
         round.state = empty();
         return this.dispatch(chatId);
       }
@@ -466,7 +472,11 @@ export class GroupChatService {
       if (sent.ok && !sent.duplicate) return;
       this.system(
         chatId,
-        sent.ok ? `${bot.name} 的投递已处理过，本次未发出` : `${bot.name} 暂时无法回复`
+        sent.ok
+          ? `${bot.name} 的投递已处理过，本次未发出`
+          : sent.error === BOT_BUDGET_ERROR
+            ? budgetNotice(bot.name)
+            : `${bot.name} 暂时无法回复`
       );
       this.advance(chat, '');
     }

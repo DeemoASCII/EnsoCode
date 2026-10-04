@@ -58,3 +58,14 @@ it('recomputes on edits and truncates very long delays without firing early', as
   expect(f.run).toHaveBeenCalledTimes(1);
   f.scheduler.stop();
 });
+it('records a budget refusal as its own result', async () => {
+  const f = setup();
+  f.scheduler.start();
+  f.run.mockResolvedValueOnce({ ok: false, error: 'budget-exceeded' } as never);
+  expect(await f.scheduler.runNow('b', 'r')).toMatchObject({ ok: false });
+  expect(f.markRun).toHaveBeenLastCalledWith('b', 'r', 'budget');
+  f.run.mockResolvedValueOnce({ ok: false, error: 'boom' } as never);
+  await f.scheduler.runNow('b', 'r');
+  expect(f.markRun).toHaveBeenLastCalledWith('b', 'r', 'error');
+  f.scheduler.stop();
+});

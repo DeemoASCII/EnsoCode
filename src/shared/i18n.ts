@@ -834,6 +834,28 @@ export const zhTranslations: Record<string, string> = {
   Sat: '周六',
   'By model': '按模型',
   'By project': '按项目',
+  'By member': '按成员',
+  'Last 7 days': '近 7 天',
+  'Last 30 days': '近 30 天',
+  'Daily budget': '每日预算',
+  'Cost (USD), empty = unlimited': '成本（美元），留空不限',
+  'Daily cost limit (USD)': '每日成本上限（美元）',
+  'Tokens, empty = unlimited': 'Token 数，留空不限',
+  'Daily token limit': '每日 Token 上限',
+  'Resets at local midnight. Once reached, new messages to this member are refused and a running reply is stopped.':
+    '按本地时间零点重置。用完后新消息会被拒绝，正在进行的回复会被停止。',
+  "Today's budget is used up": '今日预算已用完',
+  'Budget must be a positive number': '预算必须是正数',
+  "This member's daily budget is used up. Try again tomorrow or raise the budget.":
+    '该成员今日预算已用完，请明天再试或调高预算。',
+  'Over budget': '超出预算',
+  "The member's daily budget is used up.": '成员今日预算已用完。',
+  Budget: '预算',
+  "{{name}}'s budget for today is used up": '{{name}} 今日预算已用完',
+  'Daily cost limit reached. New messages are refused until local midnight.':
+    '已达每日成本上限，本地时间零点前新消息会被拒绝。',
+  'Daily token limit reached. New messages are refused until local midnight.':
+    '已达每日 Token 上限，本地时间零点前新消息会被拒绝。',
   'No usage in this period': '该周期内没有用量',
   'Top {{count}} of {{total}}': '共 {{total}} 项，显示前 {{count}} 项',
   '{{total}} items': '共 {{total}} 项',

@@ -13,6 +13,7 @@ import {
   type BotList,
   type BotRoutingMode,
   isBotId,
+  parseBotBudget,
 } from '@shared/types/bot';
 import type { BotChatUpdateInput, BotChatWorkspaceInput } from '@shared/types/botIpc';
 import type { BotDraft } from '../services/bots/botStore';
@@ -59,6 +60,7 @@ const DRAFT_KEYS = [
   'delegation',
   'memory',
   'persona',
+  'budget',
 ] as const;
 
 export function parseBotDraftInput(value: unknown): BotDraft | null {
@@ -132,6 +134,22 @@ export function parseBotDraftInput(value: unknown): BotDraft | null {
       return null;
     }
     draft.memory = { enabled: memory.enabled };
+  }
+  if (input.budget !== undefined) {
+    if (input.budget === null) draft.budget = undefined;
+    else {
+      const budget = record(input.budget);
+      const cost = budget?.dailyCostUsd;
+      const tokens = budget?.dailyTokens;
+      if (
+        !budget ||
+        !onlyKeys(budget, ['dailyCostUsd', 'dailyTokens']) ||
+        (cost !== undefined && (typeof cost !== 'number' || !Number.isFinite(cost) || cost <= 0)) ||
+        (tokens !== undefined && (!Number.isSafeInteger(tokens) || (tokens as number) <= 0))
+      )
+        return null;
+      draft.budget = parseBotBudget(budget);
+    }
   }
   return draft;
 }

@@ -9,6 +9,7 @@ import type {
 } from '../../../shared/types/agent';
 import type { BotChat, BotProfile } from '../../../shared/types/bot';
 import type { BotEvent, BotQueueItem, BotSessionRecord } from '../../../shared/types/botIpc';
+import { BOT_BUDGET_ERROR, type BotBudgetVerdict } from '../../../shared/usage/botUsage';
 import { buildBotModeInstruction, buildBotSystemPrompt } from './botPrompt';
 import type { BotStore } from './botStore';
 import type { BotChatStore } from './chatStore';
@@ -77,6 +78,8 @@ export interface BotSessionHostDeps {
   maxRunningTurns?: number;
   /** 轮次只收到 idle/failed 状态而迟迟没有 turn-completed/turn-failed 时的兜底结算延迟 */
   settleGraceMs?: number;
+  /** 成员日预算：投递前与每条带用量的 assistant 消息结束后检查，超额拒绝 / 停止当前回合 */
+  budget?: { exceeded(botId: string): Promise<BotBudgetVerdict | null> };
 }
 
 export interface BotDeliverOptions {
@@ -148,6 +151,7 @@ export class BotSessionHost {
   private readonly activeDeliveries = new Map<string, string>();
   private readonly turnKeys = new Map<string, string>();
   private disposed = false;
+  private readonly budgetChecks = new Set<string>();
   private readonly deliveries = new Map<string, Map<string, 'sent' | 'started'>>();
   private readonly startedListeners = new Set<
     (event: { conversationId: string; deliveryId: string }) => void
@@ -313,10 +317,17 @@ export class BotSessionHost {
   async stopTurn(chatId: string, botId: string): Promise<void> {
     const id = this.deps.chats.get(chatId)?.sessions[botId]?.conversationId;
     if (!id) return;
-    this.cancelQueued((item) => item.conversationId === id);
+    await this.stopConversation(id, 'canceled');
+    this.deps.emit({ kind: 'queue', chatId });
+    this.pump();
+  }
+
+  /** 中止会话当前回合并清掉它的排队投递，回合以 reason 结算 */
+  private async stopConversation(id: string, reason: string): Promise<void> {
+    this.cancelQueued((item) => item.conversationId === id, reason);
     await this.withLock(id, async () => {
       this.deps.runtime.abort?.(id);
-      this.cancelActive(id);
+      this.cancelActive(id, reason);
       // 等旧 generation 结束再允许后续发送，避免迟到的完成事件污染新一轮。
       await this.deps.runtime.release(id);
       this.live.delete(id);
@@ -324,8 +335,31 @@ export class BotSessionHost {
       this.slots.delete(id);
       this.lastAssistant.delete(id);
     });
-    this.deps.emit({ kind: 'queue', chatId });
-    this.pump();
+  }
+
+  private async overBudget(botId: string, chatId: string | null): Promise<boolean> {
+    if (!this.deps.budget) return false;
+    const verdict = await this.deps.budget.exceeded(botId).catch((error) => {
+      console.warn('[bots] budget check failed', error);
+      return null;
+    });
+    if (verdict) this.deps.emit({ kind: 'budget', ...(chatId ? { chatId } : {}) });
+    return verdict !== null;
+  }
+
+  /** 一条 assistant 消息结束且带用量：超额则停掉该成员这一回合 */
+  private async enforceBudget(id: string): Promise<void> {
+    const binding = this.binding(id);
+    if (!binding || this.budgetChecks.has(id)) return;
+    this.budgetChecks.add(id);
+    try {
+      if (!(await this.overBudget(binding.botId, binding.chatId)) || !this.turnActive(id)) return;
+      await this.stopConversation(id, BOT_BUDGET_ERROR);
+      if (binding.chatId) this.deps.emit({ kind: 'queue', chatId: binding.chatId });
+      this.pump();
+    } finally {
+      this.budgetChecks.delete(id);
+    }
   }
 
   sessionsOf(chatId: string): BotSessionRecord[] {
@@ -437,6 +471,8 @@ export class BotSessionHost {
         (this.isBusy(conversationId) || this.runningCount() >= this.maxRunning)
       )
         return { ok: false, error: 'session-busy' };
+      if (await this.overBudget(botId, binding.chatId))
+        return { ok: false, error: BOT_BUDGET_ERROR };
       if (this.turnActive(conversationId) && !options.queueIfBusy) return this.steer(delivery);
       if (
         this.turnActive(conversationId) ||
@@ -553,6 +589,13 @@ export class BotSessionHost {
           ...(event.message.stopReason ? { stopReason: event.message.stopReason } : {}),
           ...(event.message.errorMessage ? { errorMessage: event.message.errorMessage } : {}),
         });
+        if (
+          this.deps.budget &&
+          event.message.usage &&
+          event.message.stopReason &&
+          this.turnActive(id)
+        )
+          void this.enforceBudget(id);
         return;
       }
       case 'turn-completed': {
@@ -788,7 +831,9 @@ export class BotSessionHost {
       if (next.deliveryId) this.activeDeliveries.set(next.conversationId, next.deliveryId);
       void this.withLock(next.conversationId, async () => {
         this.slots.delete(next.conversationId);
-        const started = await this.start(next);
+        const started: BotDeliverResult = (await this.overBudget(next.botId, next.chatId || null))
+          ? { ok: false, error: BOT_BUDGET_ERROR }
+          : await this.start(next);
         if (!started.ok) {
           this.finish(
             next.conversationId,
@@ -878,18 +923,18 @@ export class BotSessionHost {
     this.deliveries.clear();
   }
 
-  private cancelQueued(predicate: (item: Delivery) => boolean): void {
+  private cancelQueued(predicate: (item: Delivery) => boolean, reason = 'canceled'): void {
     const canceled = this.queue.filter(predicate);
     this.queue = this.queue.filter((item) => !predicate(item));
     for (const item of canceled) {
-      this.finish(item.conversationId, undefined, false, 'canceled', '', item.deliveryId ?? null);
+      this.finish(item.conversationId, undefined, false, reason, '', item.deliveryId ?? null);
       this.deps.emit({ kind: 'queue', chatId: item.chatId });
     }
   }
 
-  private cancelActive(id: string): void {
+  private cancelActive(id: string, reason = 'canceled'): void {
     this.cancelSettle(id);
-    if (this.turnActive(id)) this.finish(id, undefined, false, 'canceled');
+    if (this.turnActive(id)) this.finish(id, undefined, false, reason);
     this.running.delete(id);
     this.slots.delete(id);
     this.lastAssistant.delete(id);

@@ -403,6 +403,9 @@ export const IPC_CHANNELS = {
   /** 「自动设置能力」：便宜模型按成员描述推荐能力，只返回建议不落盘 */
   BOT_SUGGEST_ABILITIES: 'bots:suggest-abilities',
   BOT_SUGGEST_PERSONA: 'bots:suggest-persona',
+  /** 成员用量：按周期排行 / 今日·7 天·30 天概览与预算状态 */
+  BOT_USAGE_SUMMARY: 'bots:usage-summary',
+  BOT_USAGE: 'bots:usage',
   /** main → renderer：Bot 数据变化提示 */
   BOT_EVENT: 'bots:event',
   /** Bot 聊天全文搜索：群时间线 + 私聊当前 / 历史会话 */

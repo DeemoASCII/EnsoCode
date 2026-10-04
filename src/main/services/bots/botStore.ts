@@ -18,6 +18,7 @@ export type BotDraft = Partial<
     | 'mcpServerIds'
     | 'delegation'
     | 'memory'
+    | 'budget'
   >
 > & { persona?: string };
 

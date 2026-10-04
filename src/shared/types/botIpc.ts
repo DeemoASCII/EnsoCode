@@ -42,7 +42,12 @@ export type BotDraftInput = Partial<
     | 'delegation'
     | 'memory'
   >
-> & { engine?: BotProfile['engine'] | null; persona?: string };
+> & {
+  engine?: BotProfile['engine'] | null;
+  persona?: string;
+  /** null / 缺省 = 不限 */
+  budget?: BotProfile['budget'] | null;
+};
 
 /** renderer 选工作区：chat-home 的项目由 Main 建，不收 projectId */
 export type BotChatWorkspaceInput =
@@ -81,6 +86,8 @@ export type BotEventKind =
   | 'routine'
   /** 群任务看板变化（带 chatId）；手机端协议不转发 */
   | 'tasks'
+  /** 某成员今日预算耗尽（投递被拒或回合被停）；renderer 刷新用量概览与收件箱 */
+  | 'budget'
   /** 点击系统通知：切到 Bot 模式并打开 chatId 或 conversationId 所属聊天；只发给主窗口 */
   | 'open';
 

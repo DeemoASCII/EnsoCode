@@ -10,9 +10,11 @@ import { Textarea } from '@/components/ui/textarea';
 import { addToast } from '@/components/ui/toast';
 import { useI18n } from '@/i18n';
 import { useBotsStore } from '@/stores/bots';
+import { budgetDraft, budgetFormOf } from '@/stores/bots/budget';
 import { type AbilityForm, BotAbilityFields } from './BotAbilities';
 import { BotAvatar } from './BotAvatar';
 import { ColorPicker, EngineField, FieldLabel, nameError } from './BotFields';
+import { BotUsageCard } from './BotUsageCard';
 import { botErrorText, chatTitle } from './botText';
 import { MemorySpaceList } from './MemorySpaceList';
 import { PersonaSuggestButton } from './PersonaSuggest';
@@ -42,10 +44,13 @@ function formOf(bot: BotProfile, persona: string): FormState {
     canDelegateTo: bot.delegation.canDelegateTo,
     acceptFrom: bot.delegation.acceptFrom,
     memoryEnabled: bot.memory.enabled,
+    ...budgetFormOf(bot.budget),
   };
 }
 
-function draftOf(form: FormState): BotDraftInput {
+function draftOf(form: FormState): BotDraftInput | null {
+  const budget = budgetDraft(form);
+  if (!budget.ok) return null;
   return {
     name: form.name.trim(),
     title: form.title.trim(),
@@ -59,6 +64,7 @@ function draftOf(form: FormState): BotDraftInput {
     mcpServerIds: form.mcpServerIds,
     delegation: { canDelegateTo: form.canDelegateTo, acceptFrom: form.acceptFrom },
     memory: { enabled: form.memoryEnabled },
+    budget: budget.budget,
   };
 }
 
@@ -148,12 +154,17 @@ export function BotProfilePanel({ botId, chat, onOpenHistory }: BotProfilePanelP
   const nameIssue = nameError(form.name, bots, t, bot.id);
 
   const save = async () => {
+    const draft = draftOf(form);
+    if (!draft) {
+      addToast({ type: 'error', title: t('Budget must be a positive number') });
+      return;
+    }
     setSaving(true);
     try {
       const result = await window.electronAPI.bots.update({
         botId: bot.id,
         expectedVersion: bot.version,
-        draft: draftOf(form),
+        draft,
       });
       if (result.ok) {
         useBotsStore.getState().upsertBot(result.bot);
@@ -237,6 +248,7 @@ export function BotProfilePanel({ botId, chat, onOpenHistory }: BotProfilePanelP
         </TabsList>
         <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
           <TabsPanel value="profile" className="space-y-3">
+            <BotUsageCard bot={bot} />
             <div>
               <FieldLabel hint={t('Used for @ in groups; must be unique')}>{t('Name')}</FieldLabel>
               <Input value={form.name} onChange={(event) => patch({ name: event.target.value })} />
