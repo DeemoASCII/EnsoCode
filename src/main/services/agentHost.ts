@@ -154,6 +154,16 @@ export function customWorkflowPresetDir(): string {
   return path.join(agentDataDir(), 'workflows');
 }
 
+const spawnListeners = new Set<() => void>();
+
+/** worker 每次真正起来（首次和退出后重启）都通知一次；返回退订函数。 */
+export function onAgentWorkerSpawn(listener: () => void): () => void {
+  spawnListeners.add(listener);
+  return () => {
+    spawnListeners.delete(listener);
+  };
+}
+
 export function startAgentWorker(): void {
   if (worker) return;
   const child = utilityProcess.fork(agentWorkerPath, [], {
@@ -197,6 +207,13 @@ export function startAgentWorker(): void {
     pushApprovalReviewer();
     pushMaxActiveCoworkers();
     pushDisabledWorkflowPresets();
+    for (const listener of [...spawnListeners]) {
+      try {
+        listener();
+      } catch (error) {
+        console.warn('[agentHost] spawn listener failed', error);
+      }
+    }
   });
   child.on('message', (raw) => {
     const event = parseAgentWorkerEvent(raw);

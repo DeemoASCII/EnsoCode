@@ -243,6 +243,40 @@ function isRegisteredSource(id: string, sourcePath: string): boolean { ... }
 - 浏览器工具 `executionMode: 'sequential'`：navigate 会清 ref，并行必假 stale。
 - 回合结束（`turn-completed` / `turn-failed`）关未锁且用户没在看的 tab；`parent-ended` 强关。
 
+## ensobotHost：群聊主持人模式与工作可见
+
+`ensobotHost.ts` 是 EnsoBot 聊天面的权威源；讨论规则的纯函数在 `@shared/ensobot/discussion`，
+工作步骤投影在 `@shared/ensobot/activity`。
+
+- **谁发的就按谁的车道**：人发的群消息/留言走 `human` 车道，不垫“bot 转述”提示；只有 bot 之间的接力才垫。
+- **人说话一定有人接**：点了名只叫被点名的人；没点名交给主持人（群的 `hostId`，缺省第一个协调者，
+  再缺省第一个成员；旧群不迁移，读时推定）。
+- **送给成员的是原话 + 群上下文**：群名、成员职能与主持人、自该会话上次收到以来的群消息（`roomSeen`，
+  换会话即从头补）、回复方式。上下文垫在 `context` 里，插话长度校验只看原话。
+- **一轮最后的文字就是回复**（`turnReply`）：落到这一轮真实投递来源的聊天面；工具步骤里的旁白、
+  中断/出错的半句、已经用 `ensobot_say` 说过的同一句都不再发。群里失败或无回复留一条 `system` 说明。
+- **bot 在群里 @ 别人会叫醒对方**：按引出讨论的那条人话计接力次数（群的 `relayLimit`，缺省
+  `RELAY_LIMIT`，含汇总提醒），到上限只在群里说明一次。主持人分派出去的那一支（含成员再转点的）
+  收口后回报主持人，全员回报后给主持人一条汇总提醒；成员回复本身已点名主持人时不再另发。
+  bot 之间的接力没送到（离线、模型不可用）也在群里说明，并按失败回报，主持人不会一直等。
+- **群设置**：`updateRoom` 改主持人 / 接力上限（`null` 回到默认），校验在 `planRoomUpdate`；
+  本地 IPC 与 pair `ensobot-room-update` 走同一个宿主方法。
+- **讨论链落盘**（`chains.json`）：重启后接力次数不清零。只保留还会有下文的链（有人在等回报，或还有
+  排队/进行中/正在送出的投递属于它）。启动时，等待中但已不在排队里的成员视为被重启打断：群里说明、
+  从等待里拿掉，不自动重做那一轮；worker 退出则整批作废。
+- **排队消息续送**：`resume()` 把 pending 里从未送进会话的消息接着送（不算重放）；宿主建好时 worker
+  已在就立即调用，否则由 `onAgentWorkerSpawn` 在 worker 起来（首次或退出后重启）时调用。
+  成员已删除的排队消息直接丢掉；开会话失败留一条卡片级 notice。
+- **活动投影**：快照的 `activity` 只列排队或有活轮的成员（状态、所在聊天面、当前轮工具步骤）；
+  只有状态或步骤变化才推快照，正文逐字增长不推。回复行带 `work`（本轮步骤）供界面折叠显示。
+- **工作证据不塞快照**：工具参数按同一调用 ID 持续补齐。全文只留 Main 的权威工作记录，快照显式
+  白名单仅发摘要、状态、耗时与 opaque `evidenceId`。展开后通过 `ensobot:work-read` / pair
+  `ensobot-work-read` 按 16,000 字符分块读取；续页检查内容 revision，变化时重读，不能拼接不同版本。
+  pair 的成功和失败回执只回请求连接。不得提高传输 1 MB 上限或通过丢弃输出来避免超限。
+- **所有活轮的中断都有来源说明**：重启加载先保留 active/dispatched 路由并同步落系统中断行，再清
+  运行标志；worker 退出走同一收口。覆盖直接 @、首轮主持人、私聊与留言板，不只是 chain.waiting。
+  按成员与来源去重，never-sent pending 仍可续送，后台任务仍落 failed，不自动重放权限或执行。
+
 ## 用量「按项目」不能用 cwd basename
 
 `parseSessionJsonl` 从 session 头 `cwd` 取叶子目录名当 `project`。Enso 隔离 worktree 的路径是

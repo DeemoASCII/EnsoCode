@@ -6,15 +6,23 @@ import { AskBar } from '@/components/chat/AskBar';
 import { useI18n } from '@/i18n';
 import { runCommand } from './useEnsobot';
 
-export function EnsobotInteractions({ snapshot }: { snapshot: EnsobotSnapshot }) {
-  if (!snapshot.interactions?.length) return null;
+/** 顶部汇总栏：不在当前聊天面干活的成员的审批/提问。就地显示的那些由 exclude 排除。 */
+export function EnsobotInteractions({
+  snapshot,
+  exclude,
+}: {
+  snapshot: EnsobotSnapshot;
+  exclude?: ReadonlySet<string>;
+}) {
+  const items = (snapshot.interactions ?? []).filter((item) => !exclude?.has(item.id));
+  if (!items.length) return null;
   return (
     <section
       aria-label="EnsoBot approvals and questions"
       className="max-h-[40vh] shrink-0 overflow-y-auto border-b bg-background px-4 py-2"
     >
-      {snapshot.interactions.map((item) => (
-        <Interaction
+      {items.map((item) => (
+        <EnsobotInteractionItem
           key={item.id}
           item={item}
           name={snapshot.cards.find((card) => card.id === item.cardId)?.name ?? item.cardId}
@@ -24,7 +32,16 @@ export function EnsobotInteractions({ snapshot }: { snapshot: EnsobotSnapshot })
   );
 }
 
-function Interaction({ item, name }: { item: EnsobotInteraction; name: string }) {
+export function EnsobotInteractionItem({
+  item,
+  name,
+  inline = false,
+}: {
+  item: EnsobotInteraction;
+  name: string;
+  /** 就地显示在成员进度下面：谁、要什么已经写在进度行和审批条里，不再重复标题。 */
+  inline?: boolean;
+}) {
   const { t } = useI18n();
   const [busy, setBusy] = useState(false);
   const [attempt, setAttempt] = useState(0);
@@ -49,9 +66,11 @@ function Interaction({ item, name }: { item: EnsobotInteraction; name: string })
   const base = { id: item.id, cardId: item.cardId };
   return (
     <div data-slot="ensobot-interaction" className="mb-2">
-      <p className="mb-1 text-xs font-medium">
-        {name} · {t(item.kind === 'approval' ? 'Approval required' : 'Waiting for your answer')}
-      </p>
+      {inline ? null : (
+        <p className="mb-1 text-xs font-medium">
+          {name} · {t(item.kind === 'approval' ? 'Approval required' : 'Waiting for your answer')}
+        </p>
+      )}
       {error && (
         <p role="alert" className="mb-1 text-xs text-destructive">
           {error}

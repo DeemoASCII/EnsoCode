@@ -62,3 +62,23 @@ it('等待过程中退出或超时明确失败，移除监听器', async () => {
   expect(await timeout).toBe(false);
   host.stopAgentWorker();
 });
+
+it('每次 worker 真正起来都通知订阅者（首次和退出后重启），退订后不再通知', () => {
+  const seen: number[] = [];
+  const off = host.onAgentWorkerSpawn(() => seen.push(seen.length + 1));
+  host.startAgentWorker();
+  const first = mocks.fork.mock.results[0].value as Worker;
+  expect(seen).toEqual([]);
+  first.emit('spawn');
+  expect(seen).toEqual([1]);
+  first.emit('exit');
+  host.startAgentWorker();
+  (mocks.fork.mock.results[1].value as Worker).emit('spawn');
+  expect(seen).toEqual([1, 2]);
+  off();
+  host.stopAgentWorker();
+  host.startAgentWorker();
+  (mocks.fork.mock.results[2].value as Worker).emit('spawn');
+  expect(seen).toEqual([1, 2]);
+  host.stopAgentWorker();
+});

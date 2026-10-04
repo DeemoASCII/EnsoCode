@@ -1,3 +1,4 @@
+import { isPhoneCommand } from '@enso/pair';
 import { describe, expect, it } from 'vitest';
 import {
   checkSetModel,
@@ -11,6 +12,47 @@ import {
 } from './pairPolicy';
 
 describe('手机命令白名单', () => {
+  it('guest 出站白名单同时放行证据读取和人类审批命令', () => {
+    for (const type of ['ensobot-work-read', 'ensobot-respond']) {
+      expect(isPhoneCommand({ type }), type).toBe(true);
+    }
+  });
+
+  it('工具证据只接受 opaque id 和合法分块请求，不接受路径或其它查询身份', () => {
+    const request = {
+      evidenceId: '11111111-1111-4111-8111-111111111111',
+      field: 'output',
+      offset: 0,
+    };
+    const command = { type: 'ensobot-work-read', requestId: 'read-1', request };
+    expect(parsePhoneCommand(command)).toEqual({ ok: true, command });
+    const continued = {
+      ...command,
+      request: { ...request, offset: 16_000, revision: 'a'.repeat(64) },
+    };
+    expect(parsePhoneCommand(continued)).toEqual({ ok: true, command: continued });
+    for (const bad of [
+      { ...command, requestId: '' },
+      { ...command, requestId: 'x'.repeat(129) },
+      ...[
+        null,
+        [],
+        {},
+        { ...request, evidenceId: '../log.jsonl' },
+        { ...request, field: 'env' },
+        { ...request, offset: -1 },
+        { ...request, offset: 0.1 },
+        { ...request, offset: 1 },
+        { ...request, offset: Number.MAX_SAFE_INTEGER + 1 },
+        { ...request, revision: 1 },
+        { ...request, revision: 'x'.repeat(1024) },
+        { ...request, path: '/private' },
+        { ...request, cardId: 'other' },
+      ].map((request) => ({ ...command, request })),
+    ])
+      expect(parsePhoneCommand(bad).ok, JSON.stringify(bad)).toBe(false);
+  });
+
   it('放行 prompt/steer/abort/审批/ask/snapshot/subscribe', () => {
     const ok = [
       { type: 'prompt', sessionId: 's', text: 'hi' },

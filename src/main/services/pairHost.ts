@@ -811,7 +811,16 @@ async function handleFrame(
   if (!parsed.ok) {
     const type =
       payload && typeof payload === 'object' ? (payload as { type?: unknown }).type : undefined;
-    if (typeof type === 'string' && type.startsWith('ensobot-')) {
+    if (type === 'ensobot-work-read') {
+      const requestId = (payload as { requestId?: unknown }).requestId;
+      if (typeof requestId === 'string' && requestId.length > 0 && requestId.length <= 128) {
+        await send(conn, {
+          type: 'ensobot-work-result',
+          requestId,
+          result: { ok: false, error: 'bad-params' },
+        });
+      }
+    } else if (typeof type === 'string' && type.startsWith('ensobot-')) {
       const deliveryId =
         payload && typeof payload === 'object'
           ? (payload as { deliveryId?: unknown }).deliveryId
@@ -971,10 +980,21 @@ async function handleFrame(
       }
       break;
     }
+    case 'ensobot-work-read': {
+      const { handleEnsobotGuestCommand } = await import('./ensobotRuntime');
+      if (!connectionCurrent(conn, generation, ioEpoch)) return;
+      const result = await handleEnsobotGuestCommand(command);
+      // 证据只发请求连接，绝不通过 publishEnsobotFrame 广播给其它远端。
+      if (connectionCurrent(conn, generation, ioEpoch)) {
+        await send(conn, { type: 'ensobot-work-result', requestId: command.requestId, result });
+      }
+      break;
+    }
     case 'ensobot-send':
     case 'ensobot-respond':
     case 'ensobot-board':
     case 'ensobot-room-create':
+    case 'ensobot-room-update':
     case 'ensobot-room-send':
     case 'ensobot-claim':
     case 'ensobot-enqueue':

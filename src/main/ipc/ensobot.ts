@@ -14,6 +14,9 @@ export function registerEnsobotHandlers(): void {
   };
 
   ipcMain.handle(IPC_CHANNELS.ENSOBOT_STATE_GET, () => getEnsobotHost().snapshot());
+  ipcMain.handle(IPC_CHANNELS.ENSOBOT_WORK_READ, (_event, raw: unknown) =>
+    getEnsobotHost().readWork(raw)
+  );
   ipcMain.handle(IPC_CHANNELS.ENSOBOT_RESPOND, (_event, raw: unknown) =>
     respondEnsobotInteraction(raw)
   );
@@ -106,7 +109,32 @@ export function registerEnsobotHandlers(): void {
     }
     const memberIds = input.memberIds.filter((id): id is string => typeof id === 'string');
     if (memberIds.length !== input.memberIds.length) return { ok: false, error: 'bad-params' };
-    return getEnsobotHost().createRoom({ name: input.name, memberIds });
+    if (input.hostId !== undefined && typeof input.hostId !== 'string') {
+      return { ok: false, error: 'bad-params' };
+    }
+    return getEnsobotHost().createRoom({
+      name: input.name,
+      memberIds,
+      ...(typeof input.hostId === 'string' ? { hostId: input.hostId } : {}),
+    });
+  });
+
+  ipcMain.handle(IPC_CHANNELS.ENSOBOT_ROOM_UPDATE, (_event, raw: unknown) => {
+    const input = record(raw);
+    if (!input || typeof input.roomId !== 'string') return { ok: false, error: 'bad-params' };
+    const { hostId, relayLimit } = input;
+    if (hostId !== undefined && hostId !== null && typeof hostId !== 'string') {
+      return { ok: false, error: 'bad-params' };
+    }
+    if (relayLimit !== undefined && relayLimit !== null && typeof relayLimit !== 'number') {
+      return { ok: false, error: 'bad-params' };
+    }
+    // 范围与主持人是否在群里由宿主按群的权威记录校验。
+    return getEnsobotHost().updateRoom({
+      roomId: input.roomId,
+      ...(hostId !== undefined ? { hostId } : {}),
+      ...(relayLimit !== undefined ? { relayLimit } : {}),
+    });
   });
 
   ipcMain.handle(IPC_CHANNELS.ENSOBOT_ROOM_SEND, (_event, raw: unknown) => {

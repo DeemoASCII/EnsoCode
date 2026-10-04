@@ -4,6 +4,7 @@ import type { PhoneToHost } from '@enso/pair';
 import type { SessionIdentity } from '@shared/builtinAgents';
 import type { EnsobotModelDecision } from '@shared/defaultModel';
 import { resolveEnsobotModel } from '@shared/defaultModel';
+import type { EnsobotWorkReadResult } from '@shared/ensobot/evidence';
 import { parseEnsobotResponse } from '@shared/ensobot/interaction';
 import type { EnsobotActionResult } from '@shared/ensobot/snapshot';
 import { IPC_CHANNELS, type ModelProvider, type Project, type ProjectGroup } from '@shared/types';
@@ -13,6 +14,7 @@ import { sendToAllWindows } from '../windows/createAppWindow';
 import {
   ensureAgentWorkerReady,
   isAgentWorkerReady,
+  onAgentWorkerSpawn,
   promptSession,
   readSettingsState,
   respondApproval,
@@ -110,6 +112,12 @@ export function getEnsobotHost(): EnsobotHost {
       },
       interactions: () => getInteractions().snapshot(),
     });
+    // 重启前排着的消息：worker 已在就接着送，否则等它起来（首次或退出后重启）再送。
+    const created = host;
+    onAgentWorkerSpawn(() => {
+      void created.resume();
+    });
+    if (isAgentWorkerReady()) void created.resume();
   }
   return host;
 }
@@ -184,11 +192,19 @@ export function observeEnsobotWorkerEvent(
   }
 }
 
+export function handleEnsobotGuestCommand(
+  command: Extract<PhoneToHost, { type: 'ensobot-work-read' }>
+): Promise<EnsobotWorkReadResult>;
+export function handleEnsobotGuestCommand(
+  command: Exclude<PhoneToHost, { type: 'ensobot-work-read' }>
+): Promise<EnsobotActionResult>;
 export async function handleEnsobotGuestCommand(
   command: PhoneToHost
-): Promise<EnsobotActionResult> {
+): Promise<EnsobotActionResult | EnsobotWorkReadResult> {
   const bot = getEnsobotHost();
   switch (command.type) {
+    case 'ensobot-work-read':
+      return bot.readWork(command.request);
     case 'ensobot-respond':
       return respondEnsobotInteraction(command.response);
     case 'ensobot-send':
@@ -206,7 +222,17 @@ export async function handleEnsobotGuestCommand(
         deliveryId: command.deliveryId,
       });
     case 'ensobot-room-create':
-      return bot.createRoom({ name: command.name, memberIds: command.memberIds });
+      return bot.createRoom({
+        name: command.name,
+        memberIds: command.memberIds,
+        ...(command.hostId ? { hostId: command.hostId } : {}),
+      });
+    case 'ensobot-room-update':
+      return bot.updateRoom({
+        roomId: command.roomId,
+        ...(command.hostId !== undefined ? { hostId: command.hostId } : {}),
+        ...(command.relayLimit !== undefined ? { relayLimit: command.relayLimit } : {}),
+      });
     case 'ensobot-room-send':
       return bot.postRoom({
         roomId: command.roomId,

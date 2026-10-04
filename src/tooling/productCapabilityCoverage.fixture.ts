@@ -357,6 +357,9 @@ export const IPC_PRODUCT_COVERAGE = {
   WINDOW_OPEN_SETTINGS: surfaces('window.open-settings'),
   WINDOW_OPEN_ENSOBOT: excluded('Opens the EnsoBot window. Not an Enso agent capability.'),
   ENSOBOT_STATE_GET: excluded('EnsoBot window projection. Not an Enso agent capability.'),
+  ENSOBOT_WORK_READ: excluded(
+    'Human-only EnsoBot tool evidence chunks. Not an Enso agent capability.'
+  ),
   ENSOBOT_RESPOND: excluded('Human-only EnsoBot approval/ask response. Never an agent capability.'),
   ENSOBOT_CHANGED: excluded('EnsoBot window projection event.'),
   ENSOBOT_CARDS_LIST: excluded('EnsoBot character card list. Not an Enso agent capability.'),
@@ -367,6 +370,9 @@ export const IPC_PRODUCT_COVERAGE = {
   ENSOBOT_SEND: excluded('EnsoBot private chat send. Not an Enso agent capability.'),
   ENSOBOT_BOARD: excluded('EnsoBot message board post. Not an Enso agent capability.'),
   ENSOBOT_ROOM_CREATE: excluded('EnsoBot group room create. Not an Enso agent capability.'),
+  ENSOBOT_ROOM_UPDATE: excluded(
+    'EnsoBot group host and relay settings. Not an Enso agent capability.'
+  ),
   ENSOBOT_ROOM_SEND: excluded('EnsoBot group room send. Not an Enso agent capability.'),
   ENSOBOT_CLAIM: excluded('EnsoBot task claim. Not an Enso agent capability.'),
   ENSOBOT_ENQUEUE: excluded('EnsoBot task enqueue. Not an Enso agent capability.'),

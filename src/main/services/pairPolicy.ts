@@ -6,7 +6,9 @@ import {
   VOICE_CHUNK_MAX_INDEX,
 } from '@enso/pair';
 import { isCharacterCardId } from '@shared/characterCard';
+import { parseEnsobotWorkRead } from '@shared/ensobot/evidence';
 import { parseEnsobotResponse } from '@shared/ensobot/interaction';
+import { RELAY_LIMIT_MAX } from '@shared/ensobot/rooms';
 import { takeSnapshotTail } from '@shared/snapshotTail';
 import { THINKING_LEVELS } from '@shared/types/agent';
 
@@ -237,6 +239,12 @@ export function parsePhoneCommand(value: unknown): CommandCheck {
         return { ok: false, error: 'invalid requestId' };
       }
       return { ok: true, command: value as PhoneToHost };
+    case 'ensobot-work-read': {
+      const request = parseEnsobotWorkRead(v.request);
+      if (!request || !isStr(v.requestId) || v.requestId.length > 128)
+        return { ok: false, error: 'bad-params' };
+      return { ok: true, command: { type: 'ensobot-work-read', requestId: v.requestId, request } };
+    }
     case 'ensobot-respond': {
       const response = parseEnsobotResponse(v.response);
       if (!response || !isStr(v.deliveryId) || v.deliveryId.length > 128)
@@ -283,6 +291,30 @@ export function parsePhoneCommand(value: unknown): CommandCheck {
         v.memberIds.some((id) => !isCharacterCardId(id))
       ) {
         return { ok: false, error: 'invalid members' };
+      }
+      if (
+        v.hostId !== undefined &&
+        (!isCharacterCardId(v.hostId) || !v.memberIds.includes(v.hostId))
+      ) {
+        return { ok: false, error: 'invalid host' };
+      }
+      return { ok: true, command: value as PhoneToHost };
+    case 'ensobot-room-update':
+      if (!isCharacterCardId(v.roomId)) return { ok: false, error: 'invalid roomId' };
+      if (v.hostId !== undefined && v.hostId !== null && !isCharacterCardId(v.hostId)) {
+        return { ok: false, error: 'invalid host' };
+      }
+      if (
+        v.relayLimit !== undefined &&
+        v.relayLimit !== null &&
+        !(
+          typeof v.relayLimit === 'number' &&
+          Number.isInteger(v.relayLimit) &&
+          v.relayLimit >= 1 &&
+          v.relayLimit <= RELAY_LIMIT_MAX
+        )
+      ) {
+        return { ok: false, error: 'invalid relay limit' };
       }
       return { ok: true, command: value as PhoneToHost };
     case 'ensobot-room-send':

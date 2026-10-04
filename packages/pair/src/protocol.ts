@@ -129,6 +129,12 @@ export type PhoneToHost =
   | { type: 'voice-chunk'; requestId: string; index: number; data: string; last?: true }
   /** 放弃录音：host 丢弃该 requestId 的识别会话，不再回 voice-result */
   | { type: 'voice-cancel'; requestId: string }
+  /** 工具全文按需读取，每块由宿主限制大小，不进入 snapshot。 */
+  | {
+      type: 'ensobot-work-read';
+      requestId: string;
+      request: import('../../../src/shared/ensobot/evidence').EnsobotWorkReadRequest;
+    }
   /** EnsoBot 私聊。只带人物卡 id，不带磁盘路径。 */
   | {
       type: 'ensobot-send';
@@ -143,7 +149,13 @@ export type PhoneToHost =
       response: import('../../../src/shared/ensobot/interaction').EnsobotResponse;
       deliveryId: string;
     }
-  | { type: 'ensobot-room-create'; name: string; memberIds: string[] }
+  | { type: 'ensobot-room-create'; name: string; memberIds: string[]; hostId?: string }
+  | {
+      type: 'ensobot-room-update';
+      roomId: string;
+      hostId?: string | null;
+      relayLimit?: number | null;
+    }
   | { type: 'ensobot-room-send'; roomId: string; text: string; deliveryId: string }
   | { type: 'ensobot-claim'; taskId: string; cardId: string }
   | { type: 'ensobot-enqueue'; cardId: string; title: string; check: string }
@@ -187,8 +199,11 @@ export const PHONE_COMMAND_TYPES = [
   'voice-chunk',
   'voice-cancel',
   'ensobot-send',
+  'ensobot-respond',
+  'ensobot-work-read',
   'ensobot-board',
   'ensobot-room-create',
+  'ensobot-room-update',
   'ensobot-room-send',
   'ensobot-claim',
   'ensobot-enqueue',
@@ -382,4 +397,9 @@ export type HostToPhone =
       disposition?: string;
       roomId?: string;
     }
-  | { type: 'ensobot-snapshot'; snapshot: unknown };
+  | { type: 'ensobot-snapshot'; snapshot: unknown }
+  | {
+      type: 'ensobot-work-result';
+      requestId: string;
+      result: import('../../../src/shared/ensobot/evidence').EnsobotWorkReadResult;
+    };

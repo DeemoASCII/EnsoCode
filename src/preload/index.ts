@@ -18,6 +18,7 @@ import type {
   StartOauthWizardRequest,
 } from '@shared/capabilities/types';
 import type { CharacterCardData } from '@shared/characterCard';
+import type { EnsobotWorkReadRequest, EnsobotWorkReadResult } from '@shared/ensobot/evidence';
 import type { EnsobotActionResult, EnsobotSnapshot } from '@shared/ensobot/snapshot';
 import type {
   ChatModelDto,
@@ -1085,6 +1086,8 @@ const electronAPI = {
   },
 
   ensobot: {
+    workRead: (request: EnsobotWorkReadRequest): Promise<EnsobotWorkReadResult> =>
+      ipcRenderer.invoke(IPC_CHANNELS.ENSOBOT_WORK_READ, request),
     respond: (
       response: import('@shared/ensobot/interaction').EnsobotResponse
     ): Promise<EnsobotActionResult> => ipcRenderer.invoke(IPC_CHANNELS.ENSOBOT_RESPOND, response),
@@ -1127,8 +1130,16 @@ const electronAPI = {
       mentions: string[];
       deliveryId: string;
     }): Promise<EnsobotActionResult> => ipcRenderer.invoke(IPC_CHANNELS.ENSOBOT_BOARD, input),
-    createRoom: (input: { name: string; memberIds: string[] }): Promise<EnsobotActionResult> =>
-      ipcRenderer.invoke(IPC_CHANNELS.ENSOBOT_ROOM_CREATE, input),
+    createRoom: (input: {
+      name: string;
+      memberIds: string[];
+      hostId?: string;
+    }): Promise<EnsobotActionResult> => ipcRenderer.invoke(IPC_CHANNELS.ENSOBOT_ROOM_CREATE, input),
+    updateRoom: (input: {
+      roomId: string;
+      hostId?: string | null;
+      relayLimit?: number | null;
+    }): Promise<EnsobotActionResult> => ipcRenderer.invoke(IPC_CHANNELS.ENSOBOT_ROOM_UPDATE, input),
     sendRoom: (input: {
       roomId: string;
       text: string;

@@ -71,7 +71,8 @@ function remarkGithubAlerts() {
 const FILE_PATH_RE =
   /^(?:[\w.@-]+\/)+[\w.@-]+\.\w{1,8}(?::\d+(?:-\d+)?)?$|^[\w.-]+\.\w{1,8}:\d+(?:-\d+)?$/;
 
-const REMARK_PLUGINS = [remarkGfm, remarkGithubAlerts];
+/** 导出给 EnsoBot 聊天气泡复用（在此基础上追加 @ 点名高亮），聊天渲染路径不变。 */
+export const REMARK_PLUGINS = [remarkGfm, remarkGithubAlerts];
 
 /** 导出给 Files 面板 Markdown 预览复用（`filePreviewMarkdown.tsx`），聊天渲染路径不受影响 */
 export const MarkdownCtx = createContext<{

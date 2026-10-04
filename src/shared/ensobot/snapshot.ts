@@ -1,7 +1,11 @@
 import type { CircleCrop } from '../characterCard';
+import type { EnsobotActivity, EnsobotWorkStep } from './activity';
 import type { EnsobotInteraction } from './interaction';
 import type { EnsobotTask } from './queue';
 import type { EnsobotRoom } from './rooms';
+
+/** system：宿主写的说明（失败、没有回复、接力到上限），不是任何人说的话。 */
+export type EnsobotAuthorKind = 'human' | 'bot' | 'system';
 
 export interface EnsobotBubble {
   seq: number;
@@ -9,15 +13,18 @@ export interface EnsobotBubble {
   cardId: string;
   lane: 'human' | 'bot' | 'background';
   text: string;
-  authorKind: 'human' | 'bot';
+  authorKind: EnsobotAuthorKind;
+  /** 产出这条回复的那一轮做了什么；旧节点没有。 */
+  work?: EnsobotWorkStep[];
 }
 
 export interface EnsobotBoardNote {
   seq: number;
   authorId: string;
-  authorKind: 'human' | 'bot';
+  authorKind: EnsobotAuthorKind;
   text: string;
   mentions: string[];
+  work?: EnsobotWorkStep[];
 }
 
 export interface EnsobotWorkspaceView {
@@ -47,9 +54,10 @@ export interface EnsobotRoomMessage {
   roomId: string;
   deliveryId: string;
   authorId: string;
-  authorKind: 'human' | 'bot';
+  authorKind: EnsobotAuthorKind;
   text: string;
   mentions: string[];
+  work?: EnsobotWorkStep[];
 }
 
 export interface EnsobotSnapshot {
@@ -64,6 +72,8 @@ export interface EnsobotSnapshot {
   notices: EnsobotNotice[];
   /** 可选以兼容旧节点；新宿主始终提供。刷新从 Main 重读，不在 Renderer 存权限状态。 */
   interactions?: EnsobotInteraction[];
+  /** 谁正在做什么（排队、思考、调用工具）。可选以兼容旧节点；新宿主始终提供。 */
+  activity?: EnsobotActivity[];
 }
 
 export interface EnsobotActionResult {

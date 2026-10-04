@@ -26,8 +26,16 @@ import { CharacterCardDialog } from './CharacterCardDialog';
 import { Board, ChatPane, GroupDialog } from './EnsobotChat';
 import { EnsobotInteractions } from './EnsobotInteractions';
 import { CirclePhoto, EmptyState, SurfaceHeader, TaskStatus } from './EnsobotPrimitives';
+import { StatusDot, useStatusLabel } from './EnsobotWork';
 import { EnsobotWorkspace } from './EnsobotWorkspace';
-import { type ChatSelection, lastPreview, reconcileChat } from './ensobotView';
+import {
+  type ChatSelection,
+  inlineInteractionIds,
+  lastPreview,
+  memberStatus,
+  reconcileChat,
+  roomActivityCounts,
+} from './ensobotView';
 import { type CardDetails, useEnsobotSnapshot } from './useEnsobot';
 
 type Page = 'chats' | 'members' | 'board' | 'workspace';
@@ -50,6 +58,7 @@ function Desk({
   local: boolean;
 }) {
   const { t } = useI18n();
+  const label = useStatusLabel();
   const [page, setPage] = useState<Page>('chats');
   const [selection, setSelection] = useState<ChatSelection | null>(null);
   const [query, setQuery] = useState('');
@@ -121,9 +130,15 @@ function Desk({
   const groups = (snapshot?.groups ?? []).filter((room) =>
     room.name.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase())
   );
-  const busyCount =
-    snapshot?.tasks.filter((task) => task.status === 'doing' || task.status === 'claimed').length ??
-    0;
+  const statuses = new Map(
+    cards.map((card) => [card.id, snapshot ? memberStatus(snapshot, card.id) : null])
+  );
+  const workingCount = [...statuses.values()].filter(
+    (status) => status && status.kind !== 'idle'
+  ).length;
+  const waitingCount = [...statuses.values()].filter(
+    (status) => status?.kind === 'approval' || status?.kind === 'ask'
+  ).length;
   const chatKey =
     selection?.kind === 'dm'
       ? `dm:${selection.cardId}`
@@ -231,11 +246,7 @@ function Desk({
             <section className="mb-5">
               <SidebarHeading label={t('Direct messages')} count={visibleCards.length} />
               {visibleCards.map((card) => {
-                const working = snapshot?.tasks.some(
-                  (task) =>
-                    task.cardId === card.id &&
-                    (task.status === 'doing' || task.status === 'claimed')
-                );
+                const status = statuses.get(card.id);
                 return (
                   <ConversationRow
                     key={card.id}
@@ -244,13 +255,16 @@ function Desk({
                       page === 'chats' && selection?.kind === 'dm' && selection.cardId === card.id
                     }
                     preview={
-                      lastPreview(
-                        (snapshot?.bubbles ?? []).filter((bubble) => bubble.cardId === card.id)
-                      ) || t(card.bare ? 'Complete this character card' : 'Start a conversation')
+                      status && status.kind !== 'idle'
+                        ? label(status)
+                        : lastPreview(
+                            (snapshot?.bubbles ?? []).filter((bubble) => bubble.cardId === card.id)
+                          ) ||
+                          t(card.bare ? 'Complete this character card' : 'Start a conversation')
                     }
                     onClick={() => choose({ kind: 'dm', cardId: card.id })}
                   >
-                    <span className="relative">
+                    <span className="relative" data-status={status?.kind ?? 'idle'}>
                       <CirclePhoto
                         src={card.previewUrl}
                         crop={card.crop}
@@ -259,11 +273,8 @@ function Desk({
                         size={37}
                         alt={card.name}
                       />
-                      {working ? (
-                        <span
-                          title={t('Working')}
-                          className="absolute right-0 bottom-0 size-2.5 rounded-full border-2 border-background bg-brand"
-                        />
+                      {status ? (
+                        <StatusDot kind={status.kind} className="absolute right-0 bottom-0" />
                       ) : null}
                     </span>
                   </ConversationRow>
@@ -285,25 +296,52 @@ function Desk({
                   <Plus className="size-3" />
                 </Button>
               </SidebarHeading>
-              {groups.map((room) => (
-                <ConversationRow
-                  key={room.id}
-                  name={room.name}
-                  selected={
-                    page === 'chats' && selection?.kind === 'room' && selection.roomId === room.id
-                  }
-                  preview={
-                    lastPreview(
-                      (snapshot?.roomMessages ?? []).filter((message) => message.roomId === room.id)
-                    ) || t('{{count}} members', { count: room.memberIds.length })
-                  }
-                  onClick={() => choose({ kind: 'room', roomId: room.id })}
-                >
-                  <span className="flex size-[37px] shrink-0 items-center justify-center rounded-xl bg-muted text-muted-foreground">
-                    <Hash className="size-5" />
-                  </span>
-                </ConversationRow>
-              ))}
+              {groups.map((room) => {
+                const active = (snapshot?.activity ?? []).filter(
+                  (item) => item.surface === 'room' && item.roomId === room.id
+                );
+                const counts = roomActivityCounts(snapshot, room.id);
+                const progress = [
+                  counts.waiting
+                    ? t('{{count}} members waiting for you', { count: counts.waiting })
+                    : '',
+                  counts.working ? t('{{count}} members working', { count: counts.working }) : '',
+                  counts.queued ? t('Queued ({{count}})', { count: counts.queued }) : '',
+                ]
+                  .filter(Boolean)
+                  .join(' · ');
+                return (
+                  <ConversationRow
+                    key={room.id}
+                    name={room.name}
+                    selected={
+                      page === 'chats' && selection?.kind === 'room' && selection.roomId === room.id
+                    }
+                    preview={
+                      progress
+                        ? progress
+                        : lastPreview(
+                            (snapshot?.roomMessages ?? []).filter(
+                              (message) => message.roomId === room.id
+                            )
+                          ) || t('{{count}} members', { count: room.memberIds.length })
+                    }
+                    onClick={() => choose({ kind: 'room', roomId: room.id })}
+                  >
+                    <span className="relative flex size-[37px] shrink-0 items-center justify-center rounded-xl bg-muted text-muted-foreground">
+                      <Hash className="size-5" />
+                      {active.length ? (
+                        <StatusDot
+                          kind={
+                            counts.waiting ? 'approval' : counts.working ? 'thinking' : 'queued'
+                          }
+                          className="absolute -right-0.5 -bottom-0.5"
+                        />
+                      ) : null}
+                    </span>
+                  </ConversationRow>
+                );
+              })}
             </section>
           ) : null}
           {!cards.length ? (
@@ -317,19 +355,22 @@ function Desk({
         <div className="space-y-3 border-t p-3">
           <button
             type="button"
+            data-slot="ensobot-team-activity"
             className="flex w-full items-center gap-2 rounded-lg bg-muted/40 px-3 py-2.5 text-left text-xs hover:bg-muted"
-            onClick={() => setPage('workspace')}
+            onClick={() => setPage('members')}
           >
             <span
               className={cn(
                 'size-1.5 rounded-full',
-                busyCount ? 'bg-brand' : 'bg-muted-foreground/50'
+                waitingCount ? 'bg-warning' : workingCount ? 'bg-brand' : 'bg-muted-foreground/50'
               )}
             />
             <span className="flex-1 text-muted-foreground">
-              {busyCount
-                ? t('{{count}} tasks running', { count: busyCount })
-                : t('No background tasks running')}
+              {waitingCount
+                ? t('{{count}} members waiting for you', { count: waitingCount })
+                : workingCount
+                  ? t('{{count}} members working', { count: workingCount })
+                  : t('Everyone is idle')}
             </span>
             <ChevronRight className="size-3" />
           </button>
@@ -337,7 +378,12 @@ function Desk({
         </div>
       </aside>
       <main className="flex min-h-0 min-w-0 flex-1 flex-col">
-        {snapshot && <EnsobotInteractions snapshot={snapshot} />}
+        {snapshot && (
+          <EnsobotInteractions
+            snapshot={snapshot}
+            exclude={page === 'chats' ? inlineInteractionIds(snapshot, selection) : undefined}
+          />
+        )}
         {error || loadError ? (
           <div
             role="alert"
@@ -569,6 +615,7 @@ function Members({
   onChat: (id: string) => void;
 }) {
   const { t } = useI18n();
+  const label = useStatusLabel();
   return (
     <section className="flex min-h-0 flex-1 flex-col">
       <SurfaceHeader
@@ -601,8 +648,29 @@ function Members({
                 (item) =>
                   item.cardId === card.id && (item.status === 'doing' || item.status === 'claimed')
               );
+              const status = memberStatus(snapshot, card.id);
+              const where = status.activity
+                ? status.activity.taskId
+                  ? (snapshot.tasks.find((item) => item.id === status.activity?.taskId)?.title ??
+                    '')
+                  : status.activity.surface === 'room'
+                    ? t('In group {{name}}', {
+                        name:
+                          snapshot.groups.find((room) => room.id === status.activity?.roomId)
+                            ?.name ?? '',
+                      })
+                    : status.activity.surface === 'board'
+                      ? t('On the message board')
+                      : t('In private chat')
+                : '';
               return (
-                <article key={card.id} className="flex min-w-0 flex-col rounded-xl border p-5">
+                <article
+                  key={card.id}
+                  data-slot="ensobot-member-card"
+                  data-card={card.id}
+                  data-status={status.kind}
+                  className="flex min-w-0 flex-col rounded-xl border p-5"
+                >
                   <div className="flex items-start justify-between">
                     <CirclePhoto
                       src={card.previewUrl}
@@ -628,13 +696,26 @@ function Members({
                       t('Give this bot a personality and a responsibility.')}
                   </p>
                   <div className="my-4 border-t pt-3">
-                    {task ? (
-                      <TaskStatus status={task.status} />
-                    ) : (
-                      <span className="text-[11px] text-muted-foreground">
-                        {t('No background tasks running')}
+                    <p className="flex items-center gap-2 text-[11px] text-muted-foreground">
+                      <StatusDot kind={status.kind} className="border-0" />
+                      <span className="truncate">
+                        {label(status)}
+                        {where ? ` · ${where}` : ''}
                       </span>
-                    )}
+                    </p>
+                    {status.activity?.steps.length ? (
+                      <p className="mt-1.5 truncate font-mono text-[10px] text-muted-foreground">
+                        {status.activity.steps
+                          .slice(-3)
+                          .map((step) => step.name)
+                          .join(' → ')}
+                      </p>
+                    ) : null}
+                    {task ? (
+                      <div className="mt-2">
+                        <TaskStatus status={task.status} />
+                      </div>
+                    ) : null}
                   </div>
                   <div className="mt-auto flex gap-2">
                     <Button
