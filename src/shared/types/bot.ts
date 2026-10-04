@@ -96,6 +96,8 @@ export interface Delegation {
   createdAt: number;
   finishedAt?: number;
   effectivePermissions?: BotPermissions;
+  /** 发起时父会话所在轮次的键；同父会话同 batchId 的委派结果合并回传 */
+  batchId?: string;
 }
 
 export function parseDelegation(value: unknown): Delegation | undefined {
@@ -143,6 +145,7 @@ export function parseDelegation(value: unknown): Delegation | undefined {
   if (typeof value.result === 'string') record.result = value.result;
   if (isTime(value.deliveredAt)) record.deliveredAt = value.deliveredAt;
   if (isTime(value.finishedAt)) record.finishedAt = value.finishedAt;
+  if (isText(value.batchId)) record.batchId = value.batchId;
   if (value.effectivePermissions !== undefined) {
     const permissions = value.effectivePermissions;
     if (

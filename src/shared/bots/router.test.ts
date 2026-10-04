@@ -170,6 +170,24 @@ describe('onReply', () => {
     expect([r.next, ...r.state.queue]).toEqual(['fe', 'be']);
   });
 
+  it('本轮已委派的成员被 @ 时不接力、不计跳，其余 @ 照常接力', () => {
+    const r = onReply(begin(), chat(), members, {
+      botId: 'boss',
+      text: '已安排 @前端 处理，@Backend 你也看看',
+      delegated: ['fe'],
+    });
+    expect([r.next, ...r.state.queue]).toEqual(['be']);
+    expect(r.state.hops).toBe(1);
+    expect(r.notices).toEqual([]);
+    const all = onReply(begin(), chat(), members, {
+      botId: 'boss',
+      text: '@前端 @Backend',
+      delegated: ['fe', 'be'],
+    });
+    expect(all.next).toBeNull();
+    expect(all.state.hops).toBe(0);
+  });
+
   it('[skip] 不区分大小写且忽略空白，跳过时不解析 @', () => {
     const r = onReply(begin(), chat(), members, { botId: 'boss', text: '  [SKIP]\n' });
     expect(r.skipped).toBe(true);

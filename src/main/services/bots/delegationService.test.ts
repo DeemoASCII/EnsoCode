@@ -270,6 +270,77 @@ it('uses delegationId and only marks delivered after the parent turn actually st
   expect(f.store.get(sent.delegationId)?.deliveredAt).toBeDefined();
   f.service.dispose();
 });
+const results = (f: ReturnType<typeof fixture>) =>
+  f.prompts.filter((prompt) => prompt.text.includes('<delegation-result'));
+async function sameTurn(f: ReturnType<typeof fixture>, tasks: string[]) {
+  await f.host.deliverConversation(f.parent, 'busy');
+  const records = tasks.map((task) => {
+    const sent = f.service.delegate(f.parent, { to: 'Bob', task });
+    if (!sent.ok) throw new Error(sent.error);
+    return f.store.get(sent.delegationId)!;
+  });
+  await vi.advanceTimersByTimeAsync(0);
+  f.finish(f.parent);
+  await vi.advanceTimersByTimeAsync(0);
+  return records;
+}
+it('merges same-turn delegations into one delivery once all reach a final state', async () => {
+  const f = fixture();
+  const [a, b, c] = await sameTurn(f, ['one', 'two', 'three']);
+  expect(a.batchId).toBeTruthy();
+  expect([b.batchId, c.batchId]).toEqual([a.batchId, a.batchId]);
+  f.finish(a.childConversationId);
+  await vi.advanceTimersByTimeAsync(0);
+  expect(f.store.get(a.id)?.state).toBe('completed');
+  expect(results(f)).toHaveLength(0);
+  f.service.cancel(c.id);
+  await vi.advanceTimersByTimeAsync(0);
+  expect(results(f)).toHaveLength(0);
+  f.finish(b.childConversationId);
+  await vi.advanceTimersByTimeAsync(0);
+  expect(results(f)).toMatchObject([{ id: f.parent, deliveryId: a.batchId }]);
+  const text = results(f)[0].text;
+  expect(text.startsWith(`<delegation-results id="${a.batchId}">`)).toBe(true);
+  for (const record of [a, b, c]) expect(text).toContain(`<delegation-result id="${record.id}"`);
+  expect(text).toContain('status="canceled"');
+  expect([a, b, c].every((record) => f.store.get(record.id)?.deliveredAt !== undefined)).toBe(true);
+  await f.service.deliverPending();
+  expect(results(f)).toHaveLength(1);
+  f.service.dispose();
+});
+it('recovers a batch after restart: finished-but-undelivered batches are delivered once', async () => {
+  const f = fixture();
+  const [a, b] = await sameTurn(f, ['one', 'two']);
+  f.finish(a.childConversationId);
+  await vi.advanceTimersByTimeAsync(0);
+  expect(results(f)).toHaveLength(0);
+  f.service.dispose();
+  const restarted = new DelegationService(f.deps);
+  expect(f.store.get(b.id)).toMatchObject({ state: 'failed', failure: 'interrupted' });
+  await vi.advanceTimersByTimeAsync(0);
+  expect(results(f)).toMatchObject([{ deliveryId: a.batchId }]);
+  expect(f.store.get(a.id)?.deliveredAt).toBeDefined();
+  expect(f.store.get(b.id)?.deliveredAt).toBeDefined();
+  restarted.dispose();
+  const again = new DelegationService(f.deps);
+  await vi.advanceTimersByTimeAsync(0);
+  expect(results(f)).toHaveLength(1);
+  again.dispose();
+});
+it('keeps a retried delegation out of the original batch', async () => {
+  const f = fixture();
+  await f.host.deliverConversation(f.parent, 'busy');
+  const first = f.service.delegate(f.parent, { to: 'Bob', task: 'one' });
+  if (!first.ok) throw new Error(first.error);
+  f.service.cancel(first.delegationId);
+  const retried = f.service.retry(first.delegationId);
+  if (!retried.ok) throw new Error(retried.error);
+  const batchId = f.store.get(first.delegationId)?.batchId;
+  expect(batchId).toBeTruthy();
+  expect(f.store.get(retried.delegationId)?.batchId).not.toBe(batchId);
+  await vi.advanceTimersByTimeAsync(0);
+  f.service.dispose();
+});
 it('publishes only a delegation summary in groups without duplicating a bot message', async () => {
   const f = fixture();
   const members = f.deps.bots.list().map((bot) => bot.id);

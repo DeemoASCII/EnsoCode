@@ -106,30 +106,48 @@ describe('BotSessionHost.ensureSession', () => {
     const file = join(root, 'session.jsonl');
     writeFileSync(
       file,
-      JSON.stringify({
-        type: 'message',
-        message: {
-          role: 'user',
-          content: [
-            {
-              type: 'text',
-              text: '<delegation-result id="persisted" from="Bob">done</delegation-result>',
-            },
-          ],
-        },
-      })
+      [
+        '<delegation-result id="persisted" from="Bob">done</delegation-result>',
+        '<delegation-results id="batch">\n<delegation-result id="x" from="Bob">done</delegation-result>\n</delegation-results>',
+      ]
+        .map((text) =>
+          JSON.stringify({
+            type: 'message',
+            message: { role: 'user', content: [{ type: 'text', text }] },
+          })
+        )
+        .join('\n')
     );
     const conversation = registry.conversation(sent.conversationId)!;
     const original = registry.conversation.bind(registry);
     registry.conversation = (id) =>
       id === sent.conversationId ? { ...conversation, sessionFile: file } : original(id);
     expect(host.hasStartedDelivery(sent.conversationId, 'persisted')).toBe(true);
+    expect(host.hasStartedDelivery(sent.conversationId, 'batch')).toBe(true);
     expect(host.hasStartedDelivery(sent.conversationId, 'absent')).toBe(false);
     await host.deliver(chat.id, alice.id, 'do not replay', { deliveryId: 'persisted' });
     expect(runtime.steers).toHaveLength(0);
     expect(
       await host.deliver(chat.id, alice.id, 'do not replay', { deliveryId: 'persisted' })
     ).toMatchObject({ ok: true, duplicate: true });
+  });
+  it('gives each host-started turn a fresh key reported on its finish event', async () => {
+    const alice = bot('Alice');
+    const chat = direct(alice.id);
+    const finished: Array<string | undefined> = [];
+    host.onTurnFinished((event) => finished.push(event.turnKey));
+    const sent = await host.deliver(chat.id, alice.id, 'first');
+    if (!sent.ok) throw new Error(sent.error);
+    const first = host.turnKey(sent.conversationId);
+    expect(first).toBeTruthy();
+    host.observe(ev({ type: 'status', status: 'running' }, sent.conversationId));
+    host.observe(ev({ type: 'turn-completed', turnId: 't1' }, sent.conversationId));
+    expect(finished).toEqual([first]);
+    expect(host.turnKey(sent.conversationId)).toBeUndefined();
+    await host.deliver(chat.id, alice.id, 'second');
+    const second = host.turnKey(sent.conversationId);
+    expect(second).toBeTruthy();
+    expect(second).not.toBe(first);
   });
   it('settles a turn that ends with only idle/failed status and sends work queued behind it', async () => {
     host = new BotSessionHost({
@@ -486,6 +504,7 @@ describe('BotSessionHost turn results', () => {
         turnId: 't1',
         text: 'Done: shipped.',
         ok: true,
+        turnKey: expect.any(String),
       },
     ]);
 

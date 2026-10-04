@@ -4,6 +4,15 @@ import type { BotEvent, BotSendResult } from '../../../shared/types/botIpc';
 import type { BotAuthorityPort, BotSessionHost } from './botSessionHost';
 import type { BotStore } from './botStore';
 import type { BotChatStore } from './chatStore';
+import {
+  isActiveDelegation as active,
+  batchDeliveryId,
+  batchResultText,
+  batchWaitingNotice,
+  delegationBatches,
+  delegationResultBody,
+  escapeXml,
+} from './delegationBatch';
 import { delegatedBotPermissions, delegationPolicy } from './delegationPolicy';
 import type { DelegationStore } from './delegationStore';
 
@@ -29,13 +38,6 @@ export interface DelegateInput {
 export type DelegateResult =
   | { ok: true; delegationId: string; warning?: string }
   | { ok: false; error: string };
-const active = (record: Delegation) => record.state === 'queued' || record.state === 'running';
-const escapeXml = (text: string) =>
-  text
-    .replaceAll('&', '&amp;')
-    .replaceAll('<', '&lt;')
-    .replaceAll('>', '&gt;')
-    .replaceAll('"', '&quot;');
 
 export class DelegationService {
   private readonly timers = new Map<string, ReturnType<typeof setTimeout>>();
@@ -44,22 +46,30 @@ export class DelegationService {
   private readonly unsubscribeDiscard: () => void;
   private readonly unsubscribeStarted: () => void;
   private disposed = false;
+  private discarding = false;
 
   constructor(private readonly deps: Deps) {
     this.unsubscribeStarted = deps.host.onDeliveryStarted((event) => {
-      const record = deps.store.get(event.deliveryId);
-      if (record && record.parentConversationId === event.conversationId && !active(record))
-        this.delivered(record);
+      const batch = delegationBatches(
+        deps.store.list().filter((record) => record.parentConversationId === event.conversationId)
+      ).find((items) => batchDeliveryId(items) === event.deliveryId);
+      if (batch && !batch.some(active)) this.delivered(batch);
     });
     this.unsubscribeDiscard = deps.host.onDiscard((scope) => {
-      for (const record of deps.store.list()) {
-        if (
-          (scope.chatId && record.chatId === scope.chatId) ||
-          (scope.botId &&
-            (record.parentBotId === scope.botId || record.targetBotId === scope.botId)) ||
-          (scope.conversationId && record.parentConversationId === scope.conversationId)
-        )
-          this.cancel(record.id);
+      // 级联取消不是“批次里有人结束”，不写等待提示
+      this.discarding = true;
+      try {
+        for (const record of deps.store.list()) {
+          if (
+            (scope.chatId && record.chatId === scope.chatId) ||
+            (scope.botId &&
+              (record.parentBotId === scope.botId || record.targetBotId === scope.botId)) ||
+            (scope.conversationId && record.parentConversationId === scope.conversationId)
+          )
+            this.cancel(record.id);
+        }
+      } finally {
+        this.discarding = false;
       }
     });
     for (const record of deps.store.list()) {
@@ -88,7 +98,12 @@ export class DelegationService {
     });
   }
 
-  delegate(parentConversationId: string, input: DelegateInput): DelegateResult {
+  /** 同一轮发起的委派共享 batchId（父会话轮次键），结果齐了合并回传；standalone 自成一批 */
+  delegate(
+    parentConversationId: string,
+    input: DelegateInput,
+    options: { standalone?: boolean } = {}
+  ): DelegateResult {
     if (this.disposed) return { ok: false, error: 'disabled' };
     const conversation = this.deps.authority.conversation(parentConversationId);
     let parent = this.deps.host.effectiveBot(parentConversationId);
@@ -129,6 +144,7 @@ export class DelegationService {
     );
     if (error) return { ok: false, error };
     const id = randomUUID();
+    const batchId = options.standalone ? undefined : this.deps.host.turnKey(parentConversationId);
     const child = this.deps.authority.createBotConversation(conversation.projectId, {
       botId: target.id,
       chatId: null,
@@ -155,6 +171,7 @@ export class DelegationService {
         skillIds: effective.skillIds,
         mcpServerIds: effective.mcpServerIds,
       },
+      ...(batchId ? { batchId } : {}),
     };
     this.save(record);
     const timer = setTimeout(
@@ -224,11 +241,12 @@ export class DelegationService {
     const record = this.deps.store.get(id);
     if (!record || active(record))
       return { ok: false, error: 'Only finished delegations can be retried.' };
-    return this.delegate(record.parentConversationId, {
-      to: record.targetBotId,
-      task: record.task,
-      context: record.context,
-    });
+    // 重试是用户在轮次之外的操作，不并入原批次，也不并入父会话当前轮次
+    return this.delegate(
+      record.parentConversationId,
+      { to: record.targetBotId, task: record.task, context: record.context },
+      { standalone: true }
+    );
   }
 
   observeRunning(conversationId: string): void {
@@ -240,23 +258,25 @@ export class DelegationService {
 
   async deliverPending(parentConversationId?: string): Promise<void> {
     if (this.disposed) return;
-    for (const record of this.list()) {
+    for (const batch of delegationBatches(this.list())) {
+      const head = batch[0];
+      const deliveryId = batchDeliveryId(batch);
       if (
-        active(record) ||
-        record.deliveredAt !== undefined ||
-        this.delivering.has(record.id) ||
-        (parentConversationId && record.parentConversationId !== parentConversationId) ||
-        this.deps.host.isBusy(record.parentConversationId)
+        batch.some(active) ||
+        batch.every((record) => record.deliveredAt !== undefined) ||
+        this.delivering.has(deliveryId) ||
+        (parentConversationId && head.parentConversationId !== parentConversationId) ||
+        this.deps.host.isBusy(head.parentConversationId)
       )
         continue;
-      const parent = this.deps.authority.conversation(record.parentConversationId);
+      const parent = this.deps.authority.conversation(head.parentConversationId);
       if (!parent || parent.lifecycle === 'ended') continue;
-      if (this.deps.host.hasStartedDelivery(record.parentConversationId, record.id)) {
-        this.delivered(record);
+      if (this.deps.host.hasStartedDelivery(head.parentConversationId, deliveryId)) {
+        this.delivered(batch);
         continue;
       }
       if (parent.bot?.delegationId) {
-        const bot = this.deps.bots.get(record.parentBotId);
+        const bot = this.deps.bots.get(head.parentBotId);
         const saved = this.deps.store.get(parent.bot.delegationId)?.effectivePermissions;
         // Interrupted delegation parents must not be restarted with their original task.
         if (
@@ -270,30 +290,24 @@ export class DelegationService {
         )
           continue;
       }
-      this.delivering.add(record.id);
+      this.delivering.add(deliveryId);
       try {
-        const from = this.deps.bots.get(record.targetBotId)?.name ?? record.targetBotId;
-        const body =
-          record.state === 'completed'
-            ? (record.result ?? '')
-            : (record.error ?? record.failure ?? record.state);
-        const text = `<delegation-result id="${record.id}" from="${escapeXml(from)}" status="${record.state}">${escapeXml(body)}</delegation-result>`;
-        const deliveryId = record.id;
+        const text = batchResultText(batch, (id) => this.deps.bots.get(id)?.name ?? id);
         const sent =
           parent.bot?.chatId &&
           this.deps.chats.get(parent.bot.chatId)?.kind === 'group' &&
           this.deps.deliverGroupResult
-            ? await this.deps.deliverGroupResult(record, text, deliveryId)
-            : await this.deps.host.deliverConversation(record.parentConversationId, text, {
+            ? await this.deps.deliverGroupResult(head, text, deliveryId)
+            : await this.deps.host.deliverConversation(head.parentConversationId, text, {
                 onlyIfIdle: true,
                 deliveryId,
               });
-        if (sent.ok && this.deps.host.hasStartedDelivery(record.parentConversationId, record.id))
-          this.delivered(record);
+        if (sent.ok && this.deps.host.hasStartedDelivery(head.parentConversationId, deliveryId))
+          this.delivered(batch);
       } catch (cause) {
         console.warn('[bots] delegation delivery failed', cause);
       } finally {
-        this.delivering.delete(record.id);
+        this.delivering.delete(deliveryId);
       }
     }
   }
@@ -322,45 +336,67 @@ export class DelegationService {
   ): void {
     clearTimeout(this.timers.get(record.id));
     this.timers.delete(record.id);
-    this.save({
+    const finished: Delegation = {
       ...record,
       state,
       finishedAt: Date.now(),
       ...(failure ? { failure } : {}),
       ...(result !== undefined ? { result } : {}),
       ...(error ? { error } : {}),
-    });
+    };
+    this.save(finished);
+    this.noticeWaiting(finished);
     queueMicrotask(() => {
       void this.deliverPending(record.parentConversationId);
     });
   }
 
-  private delivered(record: Delegation): void {
-    const latest = this.deps.store.get(record.id);
-    if (!latest || latest.deliveredAt !== undefined) return;
-    if (record.chatId && this.deps.chats.get(record.chatId)?.kind === 'group') {
-      const body =
-        record.state === 'completed'
-          ? (record.result ?? '')
-          : (record.error ?? record.failure ?? record.state);
-      if (
-        !this.deps.chats
-          .readEntries(record.chatId, { limit: Number.MAX_SAFE_INTEGER })
-          .some((entry) => entry.id === `delegation:${record.id}`)
-      )
-        this.deps.chats.appendEntry(record.chatId, {
-          kind: 'delegation',
-          id: `delegation:${record.id}`,
-          at: Date.now(),
-          delegationId: record.id,
-          from: record.parentBotId,
-          to: record.targetBotId,
-          state: record.state,
-          summary: body.slice(0, 500),
-        });
-      this.deps.emit({ kind: 'timeline', chatId: record.chatId });
+  /** 批次未齐：在群时间线提示谁结束了、还在等谁 */
+  private noticeWaiting(record: Delegation): void {
+    if (this.disposed || this.discarding || !record.batchId || !record.chatId) return;
+    if (this.deps.chats.get(record.chatId)?.kind !== 'group') return;
+    const batch = this.deps.store
+      .list()
+      .filter(
+        (item) =>
+          item.parentConversationId === record.parentConversationId &&
+          item.batchId === record.batchId
+      );
+    const text = batchWaitingNotice(batch, record, (id) => this.deps.bots.get(id)?.name ?? id);
+    if (!text) return;
+    const saved = this.deps.chats.appendEntry(record.chatId, {
+      kind: 'system',
+      id: randomUUID(),
+      at: Date.now(),
+      text,
+    });
+    if (saved) this.deps.emit({ kind: 'timeline', chatId: record.chatId, seq: saved.seq });
+  }
+
+  private delivered(batch: readonly Delegation[]): void {
+    for (const record of batch) {
+      const latest = this.deps.store.get(record.id);
+      if (!latest || latest.deliveredAt !== undefined) continue;
+      if (record.chatId && this.deps.chats.get(record.chatId)?.kind === 'group') {
+        if (
+          !this.deps.chats
+            .readEntries(record.chatId, { limit: Number.MAX_SAFE_INTEGER })
+            .some((entry) => entry.id === `delegation:${record.id}`)
+        )
+          this.deps.chats.appendEntry(record.chatId, {
+            kind: 'delegation',
+            id: `delegation:${record.id}`,
+            at: Date.now(),
+            delegationId: record.id,
+            from: record.parentBotId,
+            to: record.targetBotId,
+            state: record.state,
+            summary: delegationResultBody(record).slice(0, 500),
+          });
+        this.deps.emit({ kind: 'timeline', chatId: record.chatId });
+      }
+      this.save({ ...latest, deliveredAt: Date.now() });
     }
-    this.save({ ...latest, deliveredAt: Date.now() });
   }
 
   private save(record: Delegation): void {

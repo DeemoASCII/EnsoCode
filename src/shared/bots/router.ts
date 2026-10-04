@@ -127,12 +127,15 @@ function nameOf(members: readonly RouterMember[], id: BotId): string {
   return members.find((m) => m?.id === id)?.name ?? id;
 }
 
-/** 当前回复人说完：解析其回复里的 @ 接力，超出上限的拦下并提示 */
+/**
+ * 当前回复人说完：解析其回复里的 @ 接力，超出上限的拦下并提示。
+ * delegated：本轮刚委派出去的成员，结果会经委派回传，正文 @ 他们不再接力。
+ */
 export function onReply(
   state: RouterState,
   chat: RouterChat,
   members: readonly RouterMember[],
-  reply: { botId: BotId; text: string }
+  reply: { botId: BotId; text: string; delegated?: readonly BotId[] }
 ): ReplyResult {
   if (state.current === null || reply.botId !== state.current) {
     return { state, next: state.current, skipped: false, notices: [] };
@@ -148,8 +151,9 @@ export function onReply(
     ? { ...state.turnsByBot, [reply.botId]: Math.max(0, (state.turnsByBot[reply.botId] ?? 0) - 1) }
     : state.turnsByBot;
   const targets = skipped ? [] : parseActive(chat, members, reply.text);
+  const delegated = Array.isArray(reply.delegated) ? reply.delegated : [];
   for (const id of targets) {
-    if (id === reply.botId || queue.includes(id)) continue;
+    if (id === reply.botId || queue.includes(id) || delegated.includes(id)) continue;
     const turns = turnsByBot[id] ?? 0;
     if (turns >= chat.routing.maxTurnsPerBot) {
       if (!noticed.includes(`turns:${id}`)) {

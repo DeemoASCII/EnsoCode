@@ -2255,6 +2255,7 @@ export const zhTranslations: Record<string, string> = {
   'Group messages': '群消息',
   'Task from {{name}}': '来自 {{name}} 的委派任务',
   'Result from {{name}}': '{{name}} 的结果',
+  'Delegation results': '委派结果',
   'Routine did not run': '例行任务未能运行',
   'Routine not deleted': '例行任务未删除',
   'New routine': '新建例行任务',

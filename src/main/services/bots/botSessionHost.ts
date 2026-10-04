@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import type {
   AgentWorkerEvent,
@@ -106,6 +107,8 @@ export interface BotTurnFinished {
   ok: boolean;
   error?: string;
   delegationId?: string;
+  /** 本宿主发起该轮时分配的键；委派记录的 batchId 与之相同 */
+  turnKey?: string;
 }
 
 interface Delivery extends BotDeliverOptions {
@@ -141,6 +144,7 @@ export class BotSessionHost {
   private readonly independentSpecs = new Map<string, BotSpawnSpec>();
   private readonly liveProfiles = new Map<string, BotProfile>();
   private readonly activeDeliveries = new Map<string, string>();
+  private readonly turnKeys = new Map<string, string>();
   private disposed = false;
   private readonly deliveries = new Map<string, Map<string, 'sent' | 'started'>>();
   private readonly startedListeners = new Set<
@@ -173,9 +177,13 @@ export class BotSessionHost {
                   )
                 : [];
           if (
-            texts.some((text: string) =>
-              text.trimStart().startsWith(`<delegation-result id="${deliveryId}"`)
-            )
+            texts.some((text: string) => {
+              const head = text.trimStart();
+              return (
+                head.startsWith(`<delegation-result id="${deliveryId}"`) ||
+                head.startsWith(`<delegation-results id="${deliveryId}"`)
+              );
+            })
           ) {
             this.rememberDelivery(conversationId, deliveryId, 'started');
             return true;
@@ -237,6 +245,11 @@ export class BotSessionHost {
 
   activeDeliveryId(conversationId: string): string | undefined {
     return this.turnActive(conversationId) ? this.activeDeliveries.get(conversationId) : undefined;
+  }
+
+  /** 由本宿主发起、尚未结束的轮次的键 */
+  turnKey(conversationId: string): string | undefined {
+    return this.slots.has(conversationId) ? this.turnKeys.get(conversationId) : undefined;
   }
 
   registerDelegation(conversationId: string, bot: BotProfile): boolean {
@@ -625,6 +638,7 @@ export class BotSessionHost {
     )
       return { ok: false, error: 'session-unavailable' };
     this.slots.set(conversationId, { sawRunning: false });
+    this.turnKeys.set(conversationId, randomUUID());
     this.lastAssistant.delete(conversationId);
     if (delivery.deliveryId) this.activeDeliveries.set(conversationId, delivery.deliveryId);
     else this.activeDeliveries.delete(conversationId);
@@ -715,6 +729,7 @@ export class BotSessionHost {
 
   private release(conversationId: string): void {
     this.cancelSettle(conversationId);
+    this.turnKeys.delete(conversationId);
     if (!this.slots.delete(conversationId)) return;
     this.pump();
   }
@@ -797,6 +812,7 @@ export class BotSessionHost {
   ): void {
     const binding = this.binding(conversationId);
     if (!binding) return;
+    const turnKey = this.turnKeys.get(conversationId);
     const event: BotTurnFinished = {
       ...(deliveryId ? { deliveryId } : {}),
       chatId: binding.chatId,
@@ -807,6 +823,7 @@ export class BotSessionHost {
       ok,
       ...(error ? { error } : {}),
       ...(binding.delegationId ? { delegationId: binding.delegationId } : {}),
+      ...(turnKey ? { turnKey } : {}),
     };
     if (deliveryId === this.activeDeliveries.get(conversationId))
       this.activeDeliveries.delete(conversationId);

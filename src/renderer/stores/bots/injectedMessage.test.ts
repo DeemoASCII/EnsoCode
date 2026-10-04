@@ -67,6 +67,33 @@ describe('parseBotInjectedMessage', () => {
     ).toEqual({ kind: 'delegation-result', from: '侯', status: '', text: '完成' });
   });
 
+  it('解析同轮多个委派合并的批次结果', () => {
+    expect(
+      parseBotInjectedMessage(
+        [
+          '<delegation-results id="k">',
+          '<delegation-result id="a" from="小设" status="completed">设计 &amp; 稿</delegation-result>',
+          '<delegation-result id="b" from="阿全" status="failed">timeout</delegation-result>',
+          '</delegation-results>',
+        ].join('\n')
+      )
+    ).toEqual({
+      kind: 'delegation-results',
+      results: [
+        { from: '小设', status: 'completed', text: '设计 & 稿' },
+        { from: '阿全', status: 'failed', text: 'timeout' },
+      ],
+    });
+    expect(
+      parseBotInjectedMessage('<delegation-results id="k">\n</delegation-results>')
+    ).toBeNull();
+    expect(
+      parseBotInjectedMessage(
+        '<delegation-results id="k">\n<delegation-result id="a" from="小设">x</delegation-result>\n尾巴\n</delegation-results>'
+      )
+    ).toBeNull();
+  });
+
   it.each([
     '普通用户消息',
     '解释 <routine title="x">p</routine>',

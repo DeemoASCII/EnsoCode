@@ -2,7 +2,8 @@ export type BotInjectedMessage =
   | { kind: 'routine'; title: string; prompt: string }
   | { kind: 'group'; messages: { from: string; text: string }[]; instruction: string }
   | { kind: 'delegation-task'; from: string; task: string; context: string }
-  | { kind: 'delegation-result'; from: string; status: string; text: string };
+  | { kind: 'delegation-result'; from: string; status: string; text: string }
+  | { kind: 'delegation-results'; results: { from: string; status: string; text: string }[] };
 
 const entities: Record<string, string> = {
   '&amp;': '&',
@@ -51,6 +52,20 @@ export function parseBotInjectedMessage(text: string): BotInjectedMessage | null
           instruction: decode([omitted, rest.trim()].filter(Boolean).join('\n')),
         }
       : null;
+  }
+  const batch = /^<delegation-results(\s[^>]*)?>([\s\S]*)<\/delegation-results>$/.exec(source);
+  if (batch) {
+    if (!attributes(batch[1] ?? '')) return null;
+    let rest = batch[2].trim();
+    const results: { from: string; status: string; text: string }[] = [];
+    while (rest) {
+      const item = /^<delegation-result([^>]*)>([\s\S]*?)<\/delegation-result>\s*/.exec(rest);
+      const attrs = item && attributes(item[1]);
+      if (!item || !attrs?.from) return null;
+      results.push({ from: attrs.from, status: attrs.status ?? '', text: decode(item[2].trim()) });
+      rest = rest.slice(item[0].length);
+    }
+    return results.length ? { kind: 'delegation-results', results } : null;
   }
   const match = /^<(routine|delegation-task|delegation-result)(\s[^>]*)?>([\s\S]*)<\/\1>$/.exec(
     source

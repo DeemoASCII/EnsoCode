@@ -144,6 +144,7 @@ interface Delegation {
   failure?: 'interrupted' | 'timeout' | 'denied' | 'error';
   result?: string; deliveredAt?: string;    // 只投递一次
   depth: number; createdAt; finishedAt?;
+  batchId?: string;                         // 发起时父会话所在轮次的键（host turnKey），同父会话同 batchId 为一批
 }
 ```
 
@@ -167,7 +168,7 @@ interface Delegation {
 
 1. 消息里有 `@成员` 时，按出现顺序逐个回复，`@所有人` 展开成全体成员，按成员顺序排；
 2. 没有 @ 时按群的 `routing.mode`：`boss` 由群主回复；`smart`（智能选人，见下）由便宜模型或分类器选 1–3 位成员依次回复；
-3. 成员在回复里 @ 了别的成员，就把被 @ 的人追加到队列末尾（去重，跳过自己）。同一条人类消息之后最多 `maxHops` 跳，且每个成员最多回复 `maxTurnsPerBot` 次，超出时写一条 system 提示；
+3. 成员在回复里 @ 了别的成员，就把被 @ 的人追加到队列末尾（去重，跳过自己，也跳过**这一轮刚委派出去的成员**——他的结果会经委派回传，再接力会让他在群里把同一件事重做一遍；正文里其它没被委派的 @ 照常接力，不计跳）。「这一轮」由宿主为每个自己发起的轮次分配的 `turnKey` 判定：委派记录发起时写入 `batchId = turnKey`，轮次结束事件带同一 `turnKey`，群路由用（父会话 id, turnKey）查委派目标；同一条人类消息之后最多 `maxHops` 跳，且每个成员最多回复 `maxTurnsPerBot` 次，超出时写一条 system 提示；
 4. 同一时刻每个群只有一个成员在回复（FIFO），保证时间线顺序就是对话顺序；全局同时最多 4 个 bot 会话在跑（私聊、群聊、委派、例行任务合计，Code 会话不计），其余排队并显示「排队中」；
 5. 系统写入的条目（委派结果、system 提示）不参与路由，其中的 @ 不触发接力。
 
@@ -199,9 +200,9 @@ bot 会话额外挂两个工具：
 
 **完成判定**：子会话 `turn-completed` 且这一轮没有以错误或中断结束，才算完成；result 取最后一条 assistant 文本。
 
-**结果投递**：父会话空闲时注入 `<delegation-result id="delegationId">` 唤醒它；父会话忙时等到本轮终态。稳定 `deliveryId = delegationId`，父会话实际开始处理后才写 `deliveredAt`；重启后未确认结果至少一次重投，父会话依据内存及 jsonl 用户消息中的结果 id 去重。群时间线只保留一条带 `summary` 的 `delegation` 条目，供卡片与增量上下文使用，不再以被委派成员名义重复写 `bot` 消息；该条目不触发路由。
+**结果投递**：父会话空闲时注入 `<delegation-result id="delegationId">` 唤醒它；父会话忙时等到本轮终态。同一父会话同一轮发起的多个委派（同 `batchId`）是一个批次：先到的结果暂存，批次全部到终态（completed / failed（含 timeout、interrupted）/ canceled）后合并为一条 `<delegation-results id="batchId">` 注入，内含各条 `<delegation-result>`；批次未齐时在群时间线写 system 提示（如「小设 已完成，等待 阿全」，私聊无提示，级联取消不提示），齐了不额外提示。单委派批次格式与 deliveryId 不变；不在宿主轮次内发起的委派与 UI 重试产生的委派各自成批（重试不并入原批次）。批次状态完全由持久化记录按（parent, batchId）聚合推导。稳定 `deliveryId`：单条为 `delegationId`，多条为 `batchId`；父会话实际开始处理后才给批次内每条记录写 `deliveredAt`；重启后未确认结果至少一次重投，父会话依据内存及 jsonl 用户消息中的结果 id 去重。群时间线只保留一条带 `summary` 的 `delegation` 条目，供卡片与增量上下文使用，不再以被委派成员名义重复写 `bot` 消息；该条目不触发路由。
 
-**重启**：在 worker 恢复之前，把所有 queued 和 running 的委派标为 `failed/interrupted`，不自动重放（可能已经写盘），并通知父会话。用户可以在 UI 里点「重试」，重试会生成一条新记录。
+**重启**：在 worker 恢复之前，把所有 queued 和 running 的委派标为 `failed/interrupted`，不自动重放（可能已经写盘），并通知父会话（因此重启后不存在部分完成的批次，已全部终态但未投递的批次按原 batchId 补投一次）。用户可以在 UI 里点「重试」，重试会生成一条新记录。
 
 **超时**：默认 4 小时，可以按成员配置。
 

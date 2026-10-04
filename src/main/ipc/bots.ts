@@ -44,6 +44,7 @@ import {
 import { type BotRuntimePort, BotSessionHost } from '../services/bots/botSessionHost';
 import { BotStore } from '../services/bots/botStore';
 import { BotChatStore } from '../services/bots/chatStore';
+import { turnDelegationTargets } from '../services/bots/delegationBatch';
 import { DelegationService } from '../services/bots/delegationService';
 import { DelegationStore } from '../services/bots/delegationStore';
 import { GroupChatService } from '../services/bots/groupChat';
@@ -241,11 +242,16 @@ export function getBotServices(): BotServices | null {
     runtime: createRuntime(botsRoot),
     emit: emitBotEvent,
   });
+  const delegationStore = new DelegationStore(
+    path.join(userData, 'bot-chats', 'delegations.jsonl')
+  );
   const groups = new GroupChatService({
     bots,
     chats,
     host,
     emit: emitBotEvent,
+    delegatedTargets: (conversationId, turnKey) =>
+      turnDelegationTargets(delegationStore.list(), conversationId, turnKey),
     responder: createSmartRouter({
       settings: () => readSettingsState(),
       judge: async ({ preferred, ...request }, signal) => {
@@ -280,7 +286,7 @@ export function getBotServices(): BotServices | null {
     chats,
     host,
     authority,
-    store: new DelegationStore(path.join(userData, 'bot-chats', 'delegations.jsonl')),
+    store: delegationStore,
     emit: emitBotEvent,
     deliverGroupResult: async (record, text, deliveryId) => {
       if (

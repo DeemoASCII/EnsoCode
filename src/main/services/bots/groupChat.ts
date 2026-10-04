@@ -59,6 +59,8 @@ interface GroupChatDeps {
   host: Pick<BotSessionHost, 'deliver' | 'onTurnFinished' | 'stopTurn' | 'onDeliverySent'>;
   emit: (event: BotEvent) => void;
   responder?: GroupResponderSelector;
+  /** 某会话某一轮（BotTurnFinished.turnKey）新建委派的目标成员；正文 @ 他们不再接力 */
+  delegatedTargets?: (conversationId: string, turnKey: string) => readonly string[];
 }
 const SMART_ROUTE_HISTORY_SCAN = 40;
 const empty = (): RouterState => ({
@@ -281,7 +283,11 @@ export class GroupChatService {
       });
     }
     round.smartPicked = round.smartPicked?.filter((botId) => botId !== event.botId);
-    this.advance(chat, event.ok ? event.text : '');
+    this.advance(
+      chat,
+      event.ok ? event.text : '',
+      event.turnKey ? this.deps.delegatedTargets?.(event.conversationId, event.turnKey) : undefined
+    );
     const pending = mergePending(round.pending);
     if (pending) {
       round.pending = [];
@@ -373,11 +379,12 @@ export class GroupChatService {
     delete round.routing;
   }
 
-  private advance(chat: BotChat, text: string): void {
+  private advance(chat: BotChat, text: string, delegated?: readonly string[]): void {
     const round = this.round(chat.id);
     const result = onReply(round.state, chat, this.members(chat), {
       botId: round.state.current!,
       text,
+      ...(delegated?.length ? { delegated } : {}),
     });
     round.state = result.state;
     for (const notice of result.notices) this.system(chat.id, notice);

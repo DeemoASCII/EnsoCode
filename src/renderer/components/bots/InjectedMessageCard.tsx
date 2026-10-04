@@ -26,7 +26,9 @@ export function InjectedMessageCard({ message }: { message: BotInjectedMessage }
         ? t('Group messages')
         : message.kind === 'delegation-task'
           ? t('Task from {{name}}', { name: message.from })
-          : t('Result from {{name}}', { name: message.from });
+          : message.kind === 'delegation-results'
+            ? t('Delegation results')
+            : t('Result from {{name}}', { name: message.from });
   return (
     <div
       data-bot-injection={message.kind}
@@ -46,13 +48,24 @@ export function InjectedMessageCard({ message }: { message: BotInjectedMessage }
             ? message.task
             : message.kind === 'delegation-result'
               ? message.text
-              : message.messages.map((item, index) => (
-                  // biome-ignore lint/suspicious/noArrayIndexKey: 注入批次不可变，同一成员可重复发相同内容。
-                  <p key={`${index}:${item.from}`}>
-                    <span className="font-medium">{item.from}：</span>
-                    {item.text}
-                  </p>
-                ))}
+              : message.kind === 'delegation-results'
+                ? message.results.map((item, index) => (
+                    // biome-ignore lint/suspicious/noArrayIndexKey: 注入批次不可变，同一成员可被委派多次。
+                    <p key={`${index}:${item.from}`}>
+                      <span className="font-medium">
+                        {item.from}
+                        {item.status && ` · ${statuses[item.status] ?? item.status}`}：
+                      </span>
+                      {item.text}
+                    </p>
+                  ))
+                : message.messages.map((item, index) => (
+                    // biome-ignore lint/suspicious/noArrayIndexKey: 注入批次不可变，同一成员可重复发相同内容。
+                    <p key={`${index}:${item.from}`}>
+                      <span className="font-medium">{item.from}：</span>
+                      {item.text}
+                    </p>
+                  ))}
       </div>
       {message.kind === 'delegation-task' && message.context && (
         <details className="mt-1.5 text-xs text-muted-foreground">
