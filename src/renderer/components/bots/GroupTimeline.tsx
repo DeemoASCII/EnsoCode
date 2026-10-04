@@ -24,6 +24,8 @@ interface GroupTimelineProps {
   delegations: Delegation[];
   onLoadOlder: () => void;
   onOpenConversation: (conversationId: string, title: string) => void;
+  /** 实时查看正在回复成员的群会话 */
+  onOpenLive: (conversationId: string, botId: string) => void;
 }
 
 export function GroupTimeline({
@@ -34,6 +36,7 @@ export function GroupTimeline({
   delegations,
   onLoadOlder,
   onOpenConversation,
+  onOpenLive,
 }: GroupTimelineProps) {
   const { t } = useI18n();
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -59,10 +62,8 @@ export function GroupTimeline({
     [delegations]
   );
   const replying = runtime?.current ? bots.get(runtime.current) : undefined;
-  const replyingSession = useBotsStore((s) => {
-    const id = runtime?.current ? chat.sessions[runtime.current]?.conversationId : undefined;
-    return id ? s.sessions[id] : undefined;
-  });
+  const replyingId = runtime?.current ? chat.sessions[runtime.current]?.conversationId : undefined;
+  const replyingSession = useBotsStore((s) => (replyingId ? s.sessions[replyingId] : undefined));
   const activity = currentActivity(replyingSession?.messages);
 
   // 进入聊天先贴底
@@ -155,7 +156,13 @@ export function GroupTimeline({
           </div>
         )}
         {replying && (
-          <div className="flex gap-2.5">
+          <button
+            type="button"
+            disabled={!replyingId}
+            title={t('View live')}
+            onClick={() => replyingId && onOpenLive(replyingId, replying.id)}
+            className="-mx-2 flex gap-2.5 rounded-lg px-2 py-1 text-left hover:bg-muted/60 disabled:pointer-events-none"
+          >
             <BotAvatar bot={replying} size="sm" busy />
             <div className="min-w-0">
               <div className="text-muted-foreground text-xs">
@@ -165,9 +172,14 @@ export function GroupTimeline({
               <div className="flex items-center gap-2 text-muted-foreground text-xs">
                 <TypingDots />
                 {activity && <span className="truncate">{toolLabel(activity, t)}…</span>}
+                {replyingId && (
+                  <span className="shrink-0 underline-offset-2 hover:underline">
+                    {t('View live')}
+                  </span>
+                )}
               </div>
             </div>
-          </div>
+          </button>
         )}
       </div>
     </div>

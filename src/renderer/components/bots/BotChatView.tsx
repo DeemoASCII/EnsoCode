@@ -1,23 +1,16 @@
 import type { BotChat, BotProfile } from '@shared/types/bot';
 import { MessageSquarePlus, PanelRight, Shield, Sparkles } from 'lucide-react';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { ApprovalBar } from '@/components/chat/ApprovalBar';
 import { APPROVAL_MODE_META } from '@/components/chat/ApprovalModePicker';
 import { AskBar } from '@/components/chat/AskBar';
-import { ChatHostContext } from '@/components/chat/chatHost';
-import {
-  CHAT_COL,
-  MessageTimeline,
-  type MessageTimelineHandle,
-} from '@/components/chat/MessageTimeline';
-import { RetryBar } from '@/components/chat/RetryBar';
+import { CHAT_COL } from '@/components/chat/MessageTimeline';
 import { addToast } from '@/components/ui/toast';
 import { useI18n } from '@/i18n';
 import { cn } from '@/lib/utils';
 import { useBotsStore } from '@/stores/bots';
 import { activeDelegations, pendingOwners } from '@/stores/bots/delegations';
 import { chatSummary, type PendingItem, pendingItems } from '@/stores/bots/selectors';
-import { buildTimeline } from '@/stores/sessions/timeline';
 import { useSettingsStore } from '@/stores/settings';
 import { BotAvatar, GroupAvatar } from './BotAvatar';
 import { BotComposer } from './BotComposer';
@@ -26,6 +19,7 @@ import { chatErrorText, chatTitle } from './botText';
 import { DelegationCard } from './DelegationCard';
 import { GroupInfoPanel } from './GroupInfoPanel';
 import { GroupTimeline } from './GroupTimeline';
+import { LiveSessionDialog, LiveSessionTimeline } from './LiveSessionTimeline';
 import { SessionHistoryDialog } from './SessionHistoryDialog';
 import { WorkspaceMenu } from './WorkspaceMenu';
 
@@ -52,6 +46,7 @@ export function BotChatView({ chat }: { chat: BotChat }) {
   const markRead = useBotsStore((s) => s.markRead);
   const [panelOpen, setPanelOpen] = useState(() => localStorage.getItem(PANEL_KEY) !== '0');
   const [history, setHistory] = useState<{ id: string; title: string } | null>(null);
+  const [live, setLive] = useState<{ id: string; botId: string } | null>(null);
 
   const byId = useMemo(() => new Map(bots.map((bot) => [bot.id, bot])), [bots]);
   const names = useMemo(() => Object.fromEntries(bots.map((bot) => [bot.id, bot.name])), [bots]);
@@ -81,6 +76,8 @@ export function BotChatView({ chat }: { chat: BotChat }) {
     );
   };
   const historySpeaker = history ? speakerOf(history.id) : undefined;
+  const liveBot = live ? byId.get(live.botId) : undefined;
+  const livePending = live ? pending.filter((item) => item.conversationId === live.id) : [];
 
   useEffect(() => {
     markRead(summary.key, summary.marker);
@@ -213,6 +210,7 @@ export function BotChatView({ chat }: { chat: BotChat }) {
             delegations={chatDelegations}
             onLoadOlder={() => void useBotsStore.getState().loadOlder(chat.id)}
             onOpenConversation={(id, title) => setHistory({ id, title })}
+            onOpenLive={(id, botId) => setLive({ id, botId })}
           />
         )}
 
@@ -261,6 +259,20 @@ export function BotChatView({ chat }: { chat: BotChat }) {
             : undefined
         }
         onClose={() => setHistory(null)}
+      />
+      <LiveSessionDialog
+        conversationId={live?.id ?? null}
+        title={liveBot?.name ?? t('Deleted member')}
+        speaker={{
+          name: liveBot?.name ?? t('Deleted member'),
+          color: liveBot?.avatar.color ?? '#64748b',
+        }}
+        footer={
+          liveBot && livePending.length > 0 ? (
+            <PendingBars items={livePending} bots={byId} showNames={false} />
+          ) : undefined
+        }
+        onClose={() => setLive(null)}
       />
     </div>
   );
@@ -334,41 +346,7 @@ function DirectChips({ bot }: { bot: BotProfile }) {
 
 function DirectTimeline({ chat, bot }: { chat: BotChat; bot: BotProfile }) {
   const { t } = useI18n();
-  const conversationId = chat.sessions[bot.id]?.conversationId ?? null;
-  const projection = useBotsStore((s) => (conversationId ? s.sessions[conversationId] : undefined));
-  const historyLoading = useBotsStore((s) =>
-    conversationId ? Boolean(s.sessionHistoryLoading[conversationId]) : false
-  );
-  const timelineRef = useRef<MessageTimelineHandle>(null);
-  const running = projection?.status === 'running';
-  const items = useMemo(
-    () =>
-      projection
-        ? buildTimeline(projection.messages, running, projection.customEntries, undefined, {
-            historyBaseIndex: projection.historyBaseIndex,
-            toolOutputs: projection.toolOutputs,
-            pendingApprovals: projection.pendingApprovals,
-            toolStartedAt: projection.toolStartedAt,
-          })
-        : [],
-    [projection, running]
-  );
-  // biome-ignore lint/correctness/useExhaustiveDependencies: items 是触发信号
-  useEffect(() => {
-    if (timelineRef.current?.isAtBottom()) timelineRef.current.pinToBottom();
-  }, [items]);
-
-  const host = useMemo(
-    () => ({
-      sessionId: conversationId,
-      canRewind: false,
-      canRetry: false,
-      speaker: { name: bot.name, color: bot.avatar.color },
-    }),
-    [conversationId, bot.name, bot.avatar.color]
-  );
-  const hasOlder = (projection?.historyBaseIndex ?? 0) > 0;
-
+  const conversationId = chat.sessions[bot.id]?.conversationId;
   if (!conversationId) {
     return (
       <div className="flex flex-1 flex-col items-center justify-center gap-2 px-6 text-center">
@@ -379,35 +357,11 @@ function DirectTimeline({ chat, bot }: { chat: BotChat; bot: BotProfile }) {
     );
   }
   return (
-    <ChatHostContext.Provider value={host}>
-      <div className="@container flex min-h-0 flex-1 flex-col">
-        <MessageTimeline
-          key={conversationId}
-          ref={timelineRef}
-          items={items}
-          busy={running}
-          loading={false}
-          running={running}
-          runStartedAt={projection?.runStartedAt}
-          lastOutputAt={projection?.lastOutputAt}
-          error={projection?.status === 'failed' ? projection.error : undefined}
-          emptyTitle={t('Say hi to {{name}}', { name: bot.name })}
-          historyLoading={historyLoading}
-          hasOlder={hasOlder}
-          olderCursor={projection?.historyBaseIndex}
-          onStartReached={
-            hasOlder
-              ? () => void useBotsStore.getState().loadOlderSession(conversationId)
-              : undefined
-          }
-        />
-        {projection?.retry && (
-          <div className={CHAT_COL}>
-            <RetryBar retry={projection.retry} />
-          </div>
-        )}
-      </div>
-    </ChatHostContext.Provider>
+    <LiveSessionTimeline
+      conversationId={conversationId}
+      speaker={{ name: bot.name, color: bot.avatar.color }}
+      emptyTitle={t('Say hi to {{name}}', { name: bot.name })}
+    />
   );
 }
 

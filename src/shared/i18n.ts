@@ -2161,6 +2161,7 @@ export const zhTranslations: Record<string, string> = {
   'Say something. Mention a member with @, or the group owner replies.':
     '说点什么吧。@ 某个成员，或由群主来回复。',
   Replying: '正在回复',
+  'View live': '实时查看',
   Delegation: '委派',
   'In progress': '进行中',
   Canceled: '已取消',
