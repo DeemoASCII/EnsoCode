@@ -824,6 +824,7 @@ export function spawnSession(
     ...(systemPrompt.content ? { systemPrompt: systemPrompt.content } : {}),
     ...(options?.bot ? { botMode: true } : {}),
     ...(options?.bot?.groupTasks ? { botGroupTasks: true } : {}),
+    ...(options?.bot || state?.protectedActionsInCode === true ? { protectedActions: true } : {}),
   });
   if (sent.ok) {
     rememberParentToolProfile(identity.sessionId, {

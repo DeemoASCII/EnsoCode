@@ -50,6 +50,9 @@ export const SETTINGS_DATA_COVERAGE = {
   memoryDistillEnabled: excluded('Memory auto-distillation preference; not an Enso capability.'),
   memoryKgEnabled: excluded('Memory entity-graph extraction preference; not an Enso capability.'),
   voiceInputEnabled: excluded('Voice input is a device-local composer preference.'),
+  protectedActionsInCode: excluded(
+    'Protected-action confirmation floor for Code sessions; desktop safety preference.'
+  ),
   botModeEnabled: excluded('Experimental Bot mode toggle; device-local, not an Enso capability.'),
   botRouteClassifier: excluded('Bot group smart-routing model preference; not an Enso capability.'),
   botAssistantModel: excluded('Bot helper-task model preference; not an Enso capability.'),
@@ -169,6 +172,9 @@ export const SETTINGS_ACTION_COVERAGE = {
     'Explore-fold is a desktop session preference, not an Enso capability.'
   ),
   setRtkEnabled: excluded('RTK command compression is a desktop session preference.'),
+  setProtectedActionsInCode: excluded(
+    'Protected-action confirmation floor for Code sessions; desktop safety preference.'
+  ),
   setMemoryEmbeddingModel: excluded('Memory embedding model choice is a desktop preference.'),
   setMemoryEmbeddingAutoDownload: excluded('Memory model download policy is a device preference.'),
   setMemoryModelIdleMinutes: excluded('Memory model idle unloading policy is a device preference.'),

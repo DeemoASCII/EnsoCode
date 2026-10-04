@@ -3,6 +3,7 @@ import type { ApprovalDecision, ApprovalKind, ApprovalRequestInfo } from '@share
 import { FileEdit, FilePlus, Plug, ShieldAlert, TerminalSquare } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { useI18n } from '@/i18n';
+import { protectedActionLabel } from '@/lib/protectedAction';
 import { toolLabel } from '@/lib/toolLabels';
 import { codeToHtml } from './snippetHighlighter';
 
@@ -79,6 +80,11 @@ export function ApprovalBar({ approvals, onRespond, allowSession = true }: Appro
               : toolLabel(active.tool, t)}
           </span>
         </span>
+        {active.protected && (
+          <span className="shrink-0 rounded bg-destructive/15 px-1.5 text-[10px] text-destructive">
+            {protectedActionLabel(active.protected, t)}
+          </span>
+        )}
         {approvals.length > 1 && (
           <span className="ml-auto shrink-0 text-[10px] text-muted-foreground tabular-nums">
             1/{approvals.length}
@@ -96,7 +102,7 @@ export function ApprovalBar({ approvals, onRespond, allowSession = true }: Appro
           >
             {t('Deny')}
           </button>
-          {allowSession && (
+          {allowSession && !active.protected && (
             <button
               type="button"
               disabled={disabled}

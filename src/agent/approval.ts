@@ -4,7 +4,9 @@ import type {
   ApprovalKind,
   ApprovalMode,
   ApprovalRequestInfo,
+  ProtectedActionCategory,
 } from '@shared/types/agent';
+import { classifyProtectedTool } from './protectedActions';
 import { extractWriteTargetPaths } from './writeScope';
 
 interface PendingApproval {
@@ -19,6 +21,8 @@ export type ApprovalReviewFn = (
 
 export interface ApprovalGateOptions {
   review?: ApprovalReviewFn;
+  /** 受保护动作底线：开启时对外发送 / 删除 / 付款 / 部署 / 密钥类动作无视档位与会话白名单，强制真人确认 */
+  protectedFloor?: boolean;
 }
 
 /**
@@ -37,6 +41,10 @@ export class ApprovalGate {
     private readonly options?: ApprovalGateOptions
   ) {}
 
+  get protectedFloor(): boolean {
+    return this.options?.protectedFloor === true;
+  }
+
   needsApproval(kind: ApprovalKind, tool: string): boolean {
     if (this.mode === 'full') return false;
     if (this.mode === 'auto-edits' && (kind === 'file-edit' || kind === 'file-write')) return false;
@@ -50,7 +58,8 @@ export class ApprovalGate {
     summary: string,
     signal: AbortSignal | undefined,
     toolCallId?: string,
-    filePaths?: string[]
+    filePaths?: string[],
+    protectedCategory?: ProtectedActionCategory
   ): Promise<'allow' | 'deny' | 'block' | 'cancel'> {
     const requestId = `apr-${++this.counter}-${Date.now()}`;
     const info: ApprovalRequestInfo = {
@@ -60,6 +69,7 @@ export class ApprovalGate {
       summary,
       ...(filePaths?.length ? { filePaths: [...filePaths] } : {}),
       ...(toolCallId ? { toolCallId } : {}),
+      ...(protectedCategory ? { protected: protectedCategory } : {}),
     };
     return new Promise((resolve) => {
       let settled = false;
@@ -78,7 +88,9 @@ export class ApprovalGate {
         settle('cancel');
         return;
       }
-      const review = this.mode === 'assistant' ? this.options?.review : undefined;
+      // 受保护动作不交给代审模型放行，直接等真人
+      const review =
+        this.mode === 'assistant' && !protectedCategory ? this.options?.review : undefined;
       if (!review) {
         this.onRequest(info);
         return;
@@ -109,7 +121,9 @@ export class ApprovalGate {
   respond(requestId: string, decision: ApprovalDecision): void {
     const entry = this.pending.get(requestId);
     if (!entry) return;
-    if (decision === 'allowSession') this.sessionAllowed.add(entry.info.tool);
+    if (decision === 'allowSession' && !entry.info.protected) {
+      this.sessionAllowed.add(entry.info.tool);
+    }
     entry.settle(decision === 'deny' ? 'deny' : 'allow');
   }
 
@@ -138,6 +152,12 @@ export function summarizeApproval(kind: ApprovalKind, params: unknown, toolName 
   }
 }
 
+function throwUnlessAllowed(result: 'allow' | 'deny' | 'block' | 'cancel'): void {
+  if (result === 'block') throw new Error('Assistant approval blocked this operation');
+  if (result === 'deny') throw new Error('User denied this operation');
+  if (result === 'cancel') throw new Error('Approval cancelled');
+}
+
 /** 给工具包一道审批门：deny/cancel 抛错（pi 转 isError 工具结果，轮继续） */
 export function withApproval(
   gate: ApprovalGate,
@@ -147,22 +167,56 @@ export function withApproval(
   return {
     ...definition,
     async execute(toolCallId, params, signal, onUpdate, ctx) {
-      if (gate.needsApproval(kind, definition.name)) {
+      const protectedCategory = gate.protectedFloor
+        ? classifyProtectedTool(definition.name, kind, params)
+        : null;
+      if (protectedCategory || gate.needsApproval(kind, definition.name)) {
         const filePaths =
           kind === 'file-edit' || kind === 'file-write'
             ? extractWriteTargetPaths(definition.name, params)
             : undefined;
-        const result = await gate.ask(
-          definition.name,
-          kind,
-          summarizeApproval(kind, params, definition.name),
-          signal,
-          toolCallId,
-          filePaths
+        throwUnlessAllowed(
+          await gate.ask(
+            definition.name,
+            kind,
+            summarizeApproval(kind, params, definition.name),
+            signal,
+            toolCallId,
+            filePaths,
+            protectedCategory ?? undefined
+          )
         );
-        if (result === 'block') throw new Error('Assistant approval blocked this operation');
-        if (result === 'deny') throw new Error('User denied this operation');
-        if (result === 'cancel') throw new Error('Approval cancelled');
+      }
+      return definition.execute(toolCallId, params, signal, onUpdate, ctx);
+    },
+  };
+}
+
+/** 平时免审的只读工具：只在底线开启且读取密钥文件时要求确认 */
+export function withProtectedFloor(
+  gate: ApprovalGate,
+  kind: 'read',
+  definition: ToolDefinition
+): ToolDefinition {
+  return {
+    ...definition,
+    async execute(toolCallId, params, signal, onUpdate, ctx) {
+      const protectedCategory = gate.protectedFloor
+        ? classifyProtectedTool(definition.name, kind, params)
+        : null;
+      if (protectedCategory) {
+        const record = (params ?? {}) as Record<string, unknown>;
+        throwUnlessAllowed(
+          await gate.ask(
+            definition.name,
+            'command',
+            `${definition.name} ${String(record.path ?? record.file_path ?? '')}`,
+            signal,
+            toolCallId,
+            undefined,
+            protectedCategory
+          )
+        );
       }
       return definition.execute(toolCallId, params, signal, onUpdate, ctx);
     },

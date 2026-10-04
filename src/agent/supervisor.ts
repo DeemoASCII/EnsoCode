@@ -86,7 +86,7 @@ import {
   validateApplyPatchTargets,
 } from './applyPatch';
 import { applyPatchResultExtension } from './applyPatchResultExtension';
-import { ApprovalGate, withApproval } from './approval';
+import { ApprovalGate, withApproval, withProtectedFloor } from './approval';
 import {
   APPROVAL_REVIEW_TIMEOUT_MS,
   buildApprovalReviewSystemPrompt,
@@ -1121,7 +1121,8 @@ export class SessionSupervisor {
           command.pluginCommands,
           command.pluginHooks,
           command.botMode,
-          command.botGroupTasks
+          command.botGroupTasks,
+          command.protectedActions
         );
         return;
       case 'spawn-child':
@@ -1607,7 +1608,8 @@ export class SessionSupervisor {
     pluginCommands: readonly PluginCommandSpawn[] = [],
     pluginHooks: readonly PluginHookSpawn[] = [],
     botMode = false,
-    botGroupTasks = false
+    botGroupTasks = false,
+    protectedActions = false
   ): Promise<void> {
     const sessionId = identity.sessionId;
     const sessionEditMode = resolveEditMode(requestedEditMode, hashlineEditEnabled);
@@ -1737,6 +1739,7 @@ export class SessionSupervisor {
       },
       {
         review: (info, signal) => this.reviewApproval(info, signal),
+        protectedFloor: botMode || protectedActions,
       }
     );
     const checkpoints = new CheckpointManager(
@@ -1774,7 +1777,7 @@ export class SessionSupervisor {
     const structuredById = new Map<string, unknown>();
     const wrapRead = (definition: Def): Def =>
       withReadTruncationMeta(withAgentRead(definition, () => structuredById));
-    const readOnlyTools = (): Def[] => {
+    const readOnlyTools = (toolGate: ApprovalGate): Def[] => {
       const stock =
         remoteOps && sshExecutor
           ? {
@@ -1789,7 +1792,8 @@ export class SessionSupervisor {
               read: wrapRead(createReadToolDefinition(cwd) as unknown as Def),
               grep: createGrepToolDefinition(cwd) as unknown as Def,
             };
-      const { read, grep } = stock;
+      const { grep } = stock;
+      const read = withProtectedFloor(toolGate, 'read', stock.read);
       return remoteOps && sshExecutor
         ? [
             read,
@@ -1872,7 +1876,7 @@ export class SessionSupervisor {
             ]
           : [scoped('file-edit', stockEdit), scoped('file-write', stockWrite)];
       return [
-        ...readOnlyTools(),
+        ...readOnlyTools(toolGate),
         withApproval(
           toolGate,
           'command',
@@ -1917,7 +1921,7 @@ export class SessionSupervisor {
     const buildCoreTools = (): Def[] => [
       ...(toolEnabled(WORKSPACE_WRITE_TOOL_ID)
         ? buildBaseTools(gate, checkpoints)
-        : readOnlyTools()),
+        : readOnlyTools(gate)),
       ...wrapMcpTools(gate),
     ];
     // 会话工厂：一次性 subagent 与持久 coworker 共用。gate 参数化——subagent 复用父门,
@@ -2012,7 +2016,7 @@ export class SessionSupervisor {
               ...(!toolEnabled(WORKSPACE_WRITE_TOOL_ID) ||
               resolved?.tools === 'readonly' ||
               agentType?.tools === 'readonly'
-                ? readOnlyTools()
+                ? readOnlyTools(childGate)
                 : buildBaseTools(childGate, undefined, agentType?.writeScope)),
               ...(typed ? typeMcpTools : wrapMcpTools(childGate)),
               ...(extraTools as Def[]),
@@ -2599,7 +2603,8 @@ export class SessionSupervisor {
           seq: ++managedRef.seq,
           requestId,
         });
-      }
+      },
+      { protectedFloor: parent.gate.protectedFloor }
     );
     const askManager = this.createAskManager(identity);
     const result = await factory.createChildSession({
@@ -2729,7 +2734,8 @@ export class SessionSupervisor {
             requestId,
           });
         }
-      }
+      },
+      { protectedFloor: parent.gate.protectedFloor }
     );
     const askManager = this.createAskManager(identity);
     const { session, modelId, toolIds, runawayGuard } = await factory.createChildSession({

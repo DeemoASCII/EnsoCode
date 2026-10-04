@@ -4,6 +4,7 @@ import { useMemo, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { useI18n } from '@/i18n';
+import { protectedActionLabel } from '@/lib/protectedAction';
 import { toolLabel } from '@/lib/toolLabels';
 import { useBotsStore } from '@/stores/bots';
 import { type BudgetAlert, budgetAlerts } from '@/stores/bots/budget';
@@ -256,6 +257,11 @@ function InboxCard({
         >
           {item.kind === 'approval' ? t('Approval') : t('Question')}
         </span>
+        {item.kind === 'approval' && item.request.protected && (
+          <span className="rounded bg-destructive/15 px-1.5 text-[11px] text-destructive">
+            {protectedActionLabel(item.request.protected, t)}
+          </span>
+        )}
       </div>
       {item.kind === 'approval' ? (
         <div className="mt-2 text-sm">
@@ -283,14 +289,16 @@ function InboxCard({
               <Button size="xs" variant="outline" disabled={busy} onClick={() => approve('deny')}>
                 {t('Deny')}
               </Button>
-              <Button
-                size="xs"
-                variant="outline"
-                disabled={busy}
-                onClick={() => approve('allowSession')}
-              >
-                {t('Always allow in this session')}
-              </Button>
+              {!item.request.protected && (
+                <Button
+                  size="xs"
+                  variant="outline"
+                  disabled={busy}
+                  onClick={() => approve('allowSession')}
+                >
+                  {t('Always allow in this session')}
+                </Button>
+              )}
               <Button size="xs" disabled={busy} onClick={() => approve('allow')}>
                 {t('Allow')}
               </Button>

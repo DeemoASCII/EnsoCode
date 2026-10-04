@@ -1,6 +1,6 @@
 import type { ApprovalRequestInfo } from '@shared/types/agent';
 import { describe, expect, it, vi } from 'vitest';
-import { ApprovalGate, summarizeApproval, withApproval } from './approval';
+import { ApprovalGate, summarizeApproval, withApproval, withProtectedFloor } from './approval';
 
 // 契约（design.md 运行时数据流）：ApprovalGate 构造函数新增可选第 4 参 options，
 // options.review?: (info: ApprovalRequestInfo, signal: AbortSignal | undefined) =>
@@ -244,5 +244,168 @@ describe('ApprovalGate assistant 档代审 (options.review)', () => {
     controller.abort();
     await expect(p).resolves.toBe('cancel');
     rejectReview(new Error('late'));
+  });
+});
+
+describe('受保护动作底线', () => {
+  const tool = (name = 'bash') => {
+    const execute = vi.fn().mockResolvedValue({ content: [], details: {} });
+    return {
+      execute,
+      def: { name, label: name, description: '', parameters: {} as never, execute },
+    };
+  };
+  const collect = (mode: GateMode, protectedFloor: boolean, review?: ReviewFn) => {
+    const infos: ApprovalRequestInfo[] = [];
+    const gate = new ApprovalGate(
+      mode,
+      (info) => infos.push(info),
+      () => undefined,
+      {
+        ...(review ? { review } : {}),
+        protectedFloor,
+      }
+    );
+    return { gate, infos };
+  };
+
+  it('Code 默认（未开底线）full 模式下 rm -rf 直接执行，不弹审批', async () => {
+    const { gate, infos } = collect('full', false);
+    const { def, execute } = tool();
+    await withApproval(gate, 'command', def).execute(
+      'c1',
+      { command: 'rm -rf /tmp/x' },
+      undefined,
+      undefined,
+      undefined as never
+    );
+    expect(infos).toHaveLength(0);
+    expect(execute).toHaveBeenCalledOnce();
+  });
+
+  it('底线开启时 full 模式仍对受保护命令要求确认，并标注类别', async () => {
+    const { gate, infos } = collect('full', true);
+    const { def, execute } = tool();
+    const run = withApproval(gate, 'command', def).execute(
+      'c1',
+      { command: 'git push --force' },
+      undefined,
+      undefined,
+      undefined as never
+    );
+    await vi.waitFor(() => expect(infos).toHaveLength(1));
+    expect(infos[0].protected).toBe('delete');
+    expect(execute).not.toHaveBeenCalled();
+    gate.respond(infos[0].requestId, 'deny');
+    await expect(run).rejects.toThrow(/denied/);
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  it('底线开启时普通命令在 full 模式照常免审', async () => {
+    const { gate, infos } = collect('full', true);
+    const { def, execute } = tool();
+    await withApproval(gate, 'command', def).execute(
+      'c1',
+      { command: 'ls -la' },
+      undefined,
+      undefined,
+      undefined as never
+    );
+    expect(infos).toHaveLength(0);
+    expect(execute).toHaveBeenCalledOnce();
+  });
+
+  it('「本会话总是允许」不覆盖受保护动作，且受保护审批的 allowSession 只放行一次', async () => {
+    const { gate, infos } = collect('supervised', true);
+    const { def, execute } = tool();
+    const wrapped = withApproval(gate, 'command', def);
+    const first = wrapped.execute(
+      'c1',
+      { command: 'ls' },
+      undefined,
+      undefined,
+      undefined as never
+    );
+    await vi.waitFor(() => expect(infos).toHaveLength(1));
+    gate.respond(infos[0].requestId, 'allowSession');
+    await first;
+    const second = wrapped.execute(
+      'c2',
+      { command: 'rm -rf build' },
+      undefined,
+      undefined,
+      undefined as never
+    );
+    await vi.waitFor(() => expect(infos).toHaveLength(2));
+    gate.respond(infos[1].requestId, 'allowSession');
+    await second;
+    const third = wrapped.execute(
+      'c3',
+      { command: 'rm -rf dist' },
+      undefined,
+      undefined,
+      undefined as never
+    );
+    await vi.waitFor(() => expect(infos).toHaveLength(3));
+    gate.respond(infos[2].requestId, 'allow');
+    await third;
+    expect(execute).toHaveBeenCalledTimes(3);
+  });
+
+  it('assistant 模式下受保护动作跳过代审，直接等真人', async () => {
+    const review = vi.fn().mockResolvedValue({ decision: 'auto_allow' });
+    const { gate, infos } = collect('assistant', true, review);
+    const { def } = tool();
+    const run = withApproval(gate, 'command', def).execute(
+      'c1',
+      { command: 'npm publish' },
+      undefined,
+      undefined,
+      undefined as never
+    );
+    await vi.waitFor(() => expect(infos).toHaveLength(1));
+    expect(infos[0].phase).toBeUndefined();
+    expect(review).not.toHaveBeenCalled();
+    gate.respond(infos[0].requestId, 'allow');
+    await run;
+  });
+
+  it('只读工具仅在底线开启且读取密钥文件时要求确认', async () => {
+    const off = collect('full', false);
+    const read = tool('read');
+    await withProtectedFloor(off.gate, 'read', read.def).execute(
+      'r1',
+      { path: '.env' },
+      undefined,
+      undefined,
+      undefined as never
+    );
+    expect(off.infos).toHaveLength(0);
+
+    const on = collect('supervised', true);
+    await withProtectedFloor(on.gate, 'read', read.def).execute(
+      'r2',
+      { path: 'src/a.ts' },
+      undefined,
+      undefined,
+      undefined as never
+    );
+    expect(on.infos).toHaveLength(0);
+    const run = withProtectedFloor(on.gate, 'read', read.def).execute(
+      'r3',
+      { path: '/repo/.env' },
+      undefined,
+      undefined,
+      undefined as never
+    );
+    await vi.waitFor(() => expect(on.infos).toHaveLength(1));
+    expect(on.infos[0]).toMatchObject({
+      tool: 'read',
+      protected: 'secret',
+      summary: 'read /repo/.env',
+    });
+    on.gate.respond(on.infos[0].requestId, 'deny');
+    await expect(run).rejects.toThrow(/denied/);
+    expect(read.execute).toHaveBeenCalledTimes(2);
   });
 });

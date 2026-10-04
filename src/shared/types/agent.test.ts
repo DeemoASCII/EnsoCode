@@ -2247,3 +2247,25 @@ describe('spawn-parent system prompt 协议', () => {
     expect(parseAgentCommand({ ...base, systemPrompt: 1 })).toBeNull();
   });
 });
+
+describe('受保护动作底线协议', () => {
+  it('spawn-parent 携 protectedActions：布尔通过，脏值拒绝', () => {
+    const base = { type: 'spawn-parent', identity: parent, cwd: '/repo', model };
+    expect(parseAgentCommand({ ...base, protectedActions: true })).not.toBeNull();
+    expect(parseAgentCommand({ ...base, protectedActions: 'yes' })).toBeNull();
+  });
+
+  it('approval-request 的 protected 只接受已知类别', () => {
+    const event = {
+      type: 'approval-request',
+      identity: parent,
+      seq: 1,
+      request: { requestId: 'r1', tool: 'bash', kind: 'command', summary: 'rm -rf x' },
+    };
+    const withProtected = { ...event, request: { ...event.request, protected: 'delete' } };
+    expect(parseAgentWorkerEvent(withProtected)).toEqual(withProtected);
+    expect(
+      parseAgentWorkerEvent({ ...event, request: { ...event.request, protected: 'nuke' } })
+    ).toBeNull();
+  });
+});

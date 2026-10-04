@@ -120,6 +120,9 @@ export interface SettingsState {
   /** RTK 命令压缩；缺省开，新建或冷恢复会话生效。 */
   rtkEnabled: boolean;
 
+  /** Code 会话也启用受保护动作底线（Bot 会话恒开）；缺省关，新建或冷恢复会话生效。 */
+  protectedActionsInCode: boolean;
+
   /** 文件编辑工具模式；缺省 apply_patch，新建或冷恢复会话生效。 */
   editMode: EditMode;
 
@@ -324,6 +327,7 @@ export interface SettingsState {
   setWindowsLocalShell: (value: WindowsLocalShell) => void;
   setExploreFoldEnabled: (value: boolean) => void;
   setRtkEnabled: (value: boolean) => void;
+  setProtectedActionsInCode: (value: boolean) => void;
   setMemoryEmbeddingModel: (value: string) => void;
   setMemoryEmbeddingAutoDownload: (value: boolean) => void;
   setMemoryModelIdleMinutes: (value: number) => void;

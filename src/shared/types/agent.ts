@@ -148,6 +148,16 @@ export type ApprovalMode = (typeof APPROVAL_MODES)[number];
 /** 审批请求的操作类别 */
 export type ApprovalKind = 'command' | 'file-edit' | 'file-write' | 'mcp';
 
+/** 受保护动作类别：底线开启时无视审批档位强制真人确认 */
+export const PROTECTED_ACTION_CATEGORIES = [
+  'external-send',
+  'delete',
+  'payment',
+  'deploy',
+  'secret',
+] as const;
+export type ProtectedActionCategory = (typeof PROTECTED_ACTION_CATEGORIES)[number];
+
 /** 内嵌浏览器操作闭集：worker 只能发这些，raw CDP 永不进协议。 */
 export const BROWSER_OPS = [
   'navigate',
@@ -191,6 +201,8 @@ export interface ApprovalRequestInfo {
   toolCallId?: string;
   /** reviewing = 代审模型评审中（不弹真人按钮）；缺省 = 等人决策 */
   phase?: 'reviewing';
+  /** 命中受保护动作底线的类别；此类审批只能单次放行 */
+  protected?: ProtectedActionCategory;
 }
 
 /** agent 向用户的提问（ask_user 工具,阻塞等答复） */
@@ -1025,6 +1037,8 @@ export type AgentCommand =
       botMode?: boolean;
       /** Bot 群聊成员会话：挂 group_tasks / group_history 工具（私聊 / 委派子会话不挂） */
       botGroupTasks?: boolean;
+      /** 受保护动作底线（Bot 会话恒开；Code 会话由设置项决定） */
+      protectedActions?: boolean;
       /** 期望的 Plan 模式；与会话 jsonl 折叠结果不同时由 worker 追加切换条目 */
       planMode?: boolean;
     }
@@ -2780,6 +2794,7 @@ export function parseAgentCommand(value: unknown): AgentCommand | null {
           'systemPrompt',
           'botMode',
           'botGroupTasks',
+          'protectedActions',
           'planMode',
         ]) ||
         !parseSessionIdentity(value.identity) ||
@@ -2826,7 +2841,8 @@ export function parseAgentCommand(value: unknown): AgentCommand | null {
         (value.rolePrompt !== undefined && !isNonEmptyString(value.rolePrompt)) ||
         (value.systemPrompt !== undefined && !isNonEmptyString(value.systemPrompt)) ||
         (value.botMode !== undefined && typeof value.botMode !== 'boolean') ||
-        (value.botGroupTasks !== undefined && typeof value.botGroupTasks !== 'boolean')
+        (value.botGroupTasks !== undefined && typeof value.botGroupTasks !== 'boolean') ||
+        (value.protectedActions !== undefined && typeof value.protectedActions !== 'boolean')
       ) {
         return null;
       }
@@ -3510,7 +3526,9 @@ export function parseAgentWorkerEvent(value: unknown): AgentWorkerEvent | null {
         typeof value.request.summary === 'string' &&
         (value.request.filePaths === undefined ||
           (Array.isArray(value.request.filePaths) &&
-            value.request.filePaths.every(isNonEmptyString)))
+            value.request.filePaths.every(isNonEmptyString))) &&
+        (value.request.protected === undefined ||
+          (PROTECTED_ACTION_CATEGORIES as readonly unknown[]).includes(value.request.protected))
         ? (value as unknown as AgentWorkerEvent)
         : null;
     case 'approval-resolved':
