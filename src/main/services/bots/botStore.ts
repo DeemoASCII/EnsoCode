@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { readdirSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { migrateRecord, withSchemaVersion } from '../../../shared/bots/migrations';
 import { type BotProfile, checkBotName, isBotId, parseBotProfile } from '../../../shared/types/bot';
@@ -62,6 +62,31 @@ export class BotStore {
     return join(this.dir(id), 'workspace');
   }
 
+  /** 只在档案标记有图时返回 avatar.png 路径 */
+  avatarPath(id: string): string | null {
+    if (!this.bots.get(id)?.avatar.image) return null;
+    const file = join(this.dir(id), 'avatar.png');
+    return existsSync(file) ? file : null;
+  }
+
+  /** 写入 / 删除头像图片（字节已由调用方校验） */
+  setAvatar(id: string, image: Uint8Array | null): BotWriteResult {
+    const current = this.bots.get(id);
+    if (!current) return { ok: false, reason: 'not-found' };
+    const file = join(this.dir(id), 'avatar.png');
+    if (image) writeAtomic(file, image);
+    else rmSync(file, { force: true });
+    const version = current.version + 1;
+    const bot: BotProfile = {
+      ...current,
+      avatar: { color: current.avatar.color, ...(image ? { image: version } : {}) },
+      updatedAt: this.now(),
+      version,
+    };
+    this.persist(bot);
+    return { ok: true, bot };
+  }
+
   readPersona(id: string): string {
     if (!isBotId(id)) return '';
     try {
@@ -97,6 +122,8 @@ export class BotStore {
       {
         ...current,
         ...fields,
+        // 草稿只改颜色；图片只经 setAvatar 变更
+        avatar: { ...current.avatar, ...fields.avatar },
         id,
         createdAt: current.createdAt,
         updatedAt: this.now(),

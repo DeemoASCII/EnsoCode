@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseCharacterCard, sanitizeBotName } from './characterCard';
+import { buildCharacterCard, parseCharacterCard, sanitizeBotName } from './characterCard';
 
 describe('sanitizeBotName', () => {
   it('空白转下划线、去掉非法字符并截断到 24 字', () => {
@@ -43,6 +43,71 @@ describe('parseCharacterCard', () => {
     expect(parseCharacterCard(JSON.stringify({ data: { description: 'x' } }))).toEqual({
       ok: false,
       error: 'not-a-card',
+    });
+  });
+});
+
+describe('buildCharacterCard', () => {
+  const bot = {
+    name: 'Aria',
+    title: '测试',
+    scope: 'Reviews PRs. Writes tests.',
+    avatar: { color: '#22c55e', image: 3 },
+    tools: 'readonly' as const,
+    approvalMode: 'supervised' as const,
+    memory: { enabled: false },
+    skillIds: ['skill-1'],
+    mcpServerIds: ['mcp-1'],
+    engine: { providerId: 'p', modelId: 'm' },
+  };
+  const persona = 'You are Aria.\n\nPersonality: strict';
+
+  it('生成 SillyTavern V2 卡，专有字段放 extensions.enso，不含技能 / MCP / 模型', () => {
+    const card = buildCharacterCard(bot, persona);
+    expect(card.spec).toBe('chara_card_v2');
+    expect(card.data).toMatchObject({ name: 'Aria', description: persona, scenario: bot.scope });
+    expect(card.data.extensions.enso).toEqual({
+      title: '测试',
+      scope: bot.scope,
+      color: '#22c55e',
+      tools: 'readonly',
+      approvalMode: 'supervised',
+      memory: false,
+    });
+    const text = JSON.stringify(card);
+    expect(text).not.toContain('skill-1');
+    expect(text).not.toContain('mcp-1');
+    expect(text).not.toContain('"modelId"');
+  });
+
+  it('导入自己导出的卡还原人设与专有字段', () => {
+    const result = parseCharacterCard(JSON.stringify(buildCharacterCard(bot, persona)));
+    expect(result).toEqual({
+      ok: true,
+      draft: {
+        name: 'Aria',
+        title: '测试',
+        scope: bot.scope,
+        persona,
+        color: '#22c55e',
+        tools: 'readonly',
+        approvalMode: 'supervised',
+        memoryEnabled: false,
+      },
+    });
+  });
+
+  it('专有字段非法时逐项忽略', () => {
+    const card = buildCharacterCard(bot, persona) as unknown as {
+      data: { extensions: { enso: Record<string, unknown> } };
+    };
+    card.data.extensions.enso = { title: 7, color: 'red', tools: 'root', approvalMode: 'x' };
+    const result = parseCharacterCard(JSON.stringify(card));
+    expect(result.ok && result.draft).toEqual({
+      name: 'Aria',
+      title: '',
+      scope: 'You are Aria.',
+      persona,
     });
   });
 });

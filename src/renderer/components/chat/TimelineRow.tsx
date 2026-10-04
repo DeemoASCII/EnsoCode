@@ -665,12 +665,22 @@ export function ReplyHeader({ model, at }: { model?: string; at?: number }) {
   return (
     <div className="mb-2 flex h-6 min-w-0 items-center gap-2 text-xs select-none">
       {speaker ? (
-        <span
-          className="flex size-[22px] shrink-0 items-center justify-center rounded-full font-semibold text-[11px] text-white"
-          style={{ backgroundColor: speaker.color }}
-        >
-          {[...speaker.name.trim()][0]?.toUpperCase() ?? '?'}
-        </span>
+        speaker.image ? (
+          <img
+            src={speaker.image}
+            alt=""
+            draggable={false}
+            className="size-[22px] shrink-0 rounded-full object-cover"
+            style={{ backgroundColor: speaker.color }}
+          />
+        ) : (
+          <span
+            className="flex size-[22px] shrink-0 items-center justify-center rounded-full font-semibold text-[11px] text-white"
+            style={{ backgroundColor: speaker.color }}
+          >
+            {[...speaker.name.trim()][0]?.toUpperCase() ?? '?'}
+          </span>
+        )
       ) : (
         <span className="flex size-[22px] shrink-0 items-center justify-center rounded-[7px] border border-brand/20 bg-brand/8 text-brand dark:bg-brand/14">
           <EnsoMark className="size-3.5" />

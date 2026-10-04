@@ -199,6 +199,38 @@ describe('bots IPC', () => {
     });
   });
 
+  it('头像：只收 botId + 2MB 内的 PNG/JPEG/WebP；协议按 botId 寻址；删除成员清理文件', async () => {
+    const alice = await createBot('Alice');
+    const png = Uint8Array.of(137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 0);
+    const file = join(mocks.root, 'bots', alice, 'avatar.png');
+    for (const image of ['x', [1, 2], new TextEncoder().encode('<svg/>'), new Uint8Array()]) {
+      expect(await call(IPC_CHANNELS.BOT_SET_AVATAR, { botId: alice, image })).toEqual({
+        ok: false,
+        error: 'invalid',
+      });
+    }
+    const big = new Uint8Array(2 * 1024 * 1024 + 1);
+    big.set(png);
+    expect(await call(IPC_CHANNELS.BOT_SET_AVATAR, { botId: alice, image: big })).toMatchObject({
+      ok: false,
+    });
+    expect(existsSync(file)).toBe(false);
+
+    const set = await call(IPC_CHANNELS.BOT_SET_AVATAR, { botId: alice, image: png });
+    expect(set).toMatchObject({ ok: true, bot: { avatar: { image: 2 } } });
+    const { botAvatarFile } = await import('../services/localImageProtocol');
+    expect(botAvatarFile(alice)).toBe(file);
+    expect(botAvatarFile('../x')).toBeNull();
+
+    await call(IPC_CHANNELS.BOT_SET_AVATAR, { botId: alice, image: null });
+    expect(existsSync(file)).toBe(false);
+    expect(botAvatarFile(alice)).toBeNull();
+
+    await call(IPC_CHANNELS.BOT_SET_AVATAR, { botId: alice, image: png });
+    expect((await call(IPC_CHANNELS.BOT_DELETE, { botId: alice })).ok).toBe(true);
+    expect(existsSync(file)).toBe(false);
+  });
+
   it('私聊发送：Main 组装人设并在成员 home 里 spawn，之后 prompt', async () => {
     const alice = await createBot('Alice');
     const draft = { kind: 'direct', members: [alice], workspace: { kind: 'member-home' } };

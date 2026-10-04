@@ -376,6 +376,7 @@ export const IPC_CHANNELS = {
   BOT_UPDATE: 'bots:update',
   BOT_ARCHIVE: 'bots:archive',
   BOT_DELETE: 'bots:delete',
+  BOT_SET_AVATAR: 'bots:set-avatar',
   BOT_CHATS_LIST: 'bots:chats-list',
   BOT_CHAT_CREATE: 'bots:chat-create',
   BOT_CHAT_UPDATE: 'bots:chat-update',

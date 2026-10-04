@@ -115,4 +115,29 @@ describe('BotStore', () => {
     writeFileSync(`${other}/bot.json`, readFileSync(join(root, created.bot.id, 'bot.json')));
     expect(new BotStore(root, now).list()).toHaveLength(1);
   });
+
+  it('stores avatar.png, versions it, keeps it across edits / archive and removes it', () => {
+    const created = store.create({ name: 'Alice' }, []);
+    if (!created.ok) throw new Error('create failed');
+    const id = created.bot.id;
+    const file = join(root, id, 'avatar.png');
+    expect(store.avatarPath(id)).toBeNull();
+
+    const set = store.setAvatar(id, Uint8Array.of(1, 2, 3));
+    expect(set.ok && set.bot.avatar).toEqual({ color: created.bot.avatar.color, image: 2 });
+    expect([...readFileSync(file)]).toEqual([1, 2, 3]);
+    expect(store.avatarPath(id)).toBe(file);
+
+    const edited = store.update(id, { avatar: { color: '#112233' } }, []);
+    expect(edited.ok && edited.bot.avatar).toEqual({ color: '#112233', image: 2 });
+    store.setArchived(id, true);
+    expect(new BotStore(root, now).get(id)?.avatar.image).toBe(2);
+    expect(existsSync(file)).toBe(true);
+
+    const cleared = store.setAvatar(id, null);
+    expect(cleared.ok && cleared.bot.avatar).toEqual({ color: '#112233' });
+    expect(existsSync(file)).toBe(false);
+    expect(store.avatarPath(id)).toBeNull();
+    expect(store.setAvatar('missing', null)).toEqual({ ok: false, reason: 'not-found' });
+  });
 });

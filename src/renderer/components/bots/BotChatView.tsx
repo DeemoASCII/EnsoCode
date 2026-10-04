@@ -25,6 +25,7 @@ import {
   SIDE_PANEL_HANDLE_WIDTH,
 } from '@/stores/sidePanel/width';
 import { ArtifactCards } from './ArtifactCards';
+import { botAvatarSrc } from './avatarImage';
 import { BotAvatar, GroupAvatar } from './BotAvatar';
 import {
   BotComposer,
@@ -384,7 +385,11 @@ export function BotChatView({ chat }: { chat: BotChat }) {
         title={history?.title ?? ''}
         speaker={
           historySpeaker
-            ? { name: historySpeaker.name, color: historySpeaker.avatar.color }
+            ? {
+                name: historySpeaker.name,
+                color: historySpeaker.avatar.color,
+                image: botAvatarSrc(historySpeaker),
+              }
             : undefined
         }
         focus={historyFocus}
@@ -400,6 +405,7 @@ export function BotChatView({ chat }: { chat: BotChat }) {
         speaker={{
           name: liveBot?.name ?? t('Deleted member'),
           color: liveBot?.avatar.color ?? '#64748b',
+          image: liveBot ? botAvatarSrc(liveBot) : undefined,
         }}
         footer={
           liveBot && livePending.length > 0 ? (
@@ -533,7 +539,7 @@ function DirectTimeline({
   return (
     <LiveSessionTimeline
       conversationId={conversationId}
-      speaker={{ name: bot.name, color: bot.avatar.color }}
+      speaker={{ name: bot.name, color: bot.avatar.color, image: botAvatarSrc(bot) }}
       emptyTitle={t('Say hi to {{name}}', { name: bot.name })}
       focus={focus}
       onFocusDone={onFocusDone}

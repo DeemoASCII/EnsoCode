@@ -1,5 +1,5 @@
 import { type ReactNode, type RefObject, useEffect, useMemo, useRef, useState } from 'react';
-import { type ChatHost, ChatHostContext } from '@/components/chat/chatHost';
+import { type ChatHost, ChatHostContext, type ChatSpeaker } from '@/components/chat/chatHost';
 import {
   CHAT_COL,
   MessageTimeline,
@@ -80,7 +80,7 @@ export function useMessageFocus({
 
 interface LiveSessionTimelineProps {
   conversationId: string;
-  speaker: { name: string; color: string };
+  speaker: ChatSpeaker;
   emptyTitle: string;
   className?: string;
   focus?: MessageFocus;
@@ -137,18 +137,18 @@ export function LiveSessionTimeline({
     onDone: onFocusDone,
   });
 
-  const { name, color } = speaker;
+  const { name, color, image } = speaker;
   const host = useMemo(
     () => ({
       sessionId: conversationId,
       canRewind: Boolean(controls),
       canRetry: Boolean(controls),
       canFork: false,
-      speaker: { name, color },
+      speaker: { name, color, image },
       turnFooter,
       ...(controls ? { botControls: controls } : {}),
     }),
-    [conversationId, name, color, turnFooter, controls]
+    [conversationId, name, color, image, turnFooter, controls]
   );
   const hasOlder = (projection?.historyBaseIndex ?? 0) > 0;
 
@@ -191,7 +191,7 @@ interface LiveSessionDialogProps {
   /** null = 关闭 */
   conversationId: string | null;
   title: string;
-  speaker: { name: string; color: string };
+  speaker: ChatSpeaker;
   /** 弹窗底部（该会话的审批 / 提问） */
   footer?: React.ReactNode;
   onClose: () => void;

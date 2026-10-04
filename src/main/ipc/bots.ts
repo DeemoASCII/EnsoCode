@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { mkdirSync, rmSync } from 'node:fs';
 import path from 'node:path';
+import { checkAvatarImage } from '@shared/bots/cardPng';
 import { applyChatFlags, wakeOnActivity } from '@shared/bots/chatFlags';
 import { BOT_NOTES_MAX_CHARS } from '@shared/bots/notes';
 import { isSkipReply } from '@shared/bots/router';
@@ -107,6 +108,7 @@ import { createSmartRouter } from '../services/bots/smartRouter';
 import { createTeam } from '../services/bots/teamCreate';
 import { searchFiles } from '../services/fileSearch';
 import { resolveGlobalInstruction } from '../services/instructionStore';
+import { setBotAvatarResolver } from '../services/localImageProtocol';
 import { listMemories } from '../services/memory/store';
 import { notifyBotChat } from '../services/notifications';
 import { readStoredOauthCredentialKeys } from '../services/oauthProviders';
@@ -953,6 +955,9 @@ export function routineProposeTool(
 
 export function registerBotHandlers(): void {
   syncBotModeServices();
+  setBotAvatarResolver((botId) =>
+    botModeEnabled() ? (getBotServices()?.bots.avatarPath(botId) ?? null) : null
+  );
   handle(
     IPC_CHANNELS.BOT_DELEGATIONS_LIST,
     'read',
@@ -1287,6 +1292,17 @@ export function registerBotHandlers(): void {
     const archived = (request as { archived?: unknown } | null)?.archived;
     if (!botId || typeof archived !== 'boolean') return INVALID;
     const result = bots.setArchived(botId, archived);
+    if (!result.ok) return { ok: false, error: result.reason };
+    emitBotEvent({ kind: 'catalog' });
+    return result;
+  });
+
+  handle(IPC_CHANNELS.BOT_SET_AVATAR, 'write', (_sender, request, { bots }): BotWriteIpcResult => {
+    const botId = botIdOf(request);
+    const image = (request as { image?: unknown } | null)?.image;
+    if (!botId || !(image === null || (image instanceof Uint8Array && checkAvatarImage(image))))
+      return INVALID;
+    const result = bots.setAvatar(botId, image);
     if (!result.ok) return { ok: false, error: result.reason };
     emitBotEvent({ kind: 'catalog' });
     return result;

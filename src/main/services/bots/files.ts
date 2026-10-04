@@ -9,7 +9,7 @@ export function readJson(path: string): unknown {
   }
 }
 
-export function writeAtomic(path: string, content: string): void {
+export function writeAtomic(path: string, content: string | Uint8Array): void {
   mkdirSync(dirname(path), { recursive: true });
   const tmp = `${path}.${process.pid}.tmp`;
   writeFileSync(tmp, content, { encoding: 'utf8', mode: 0o600 });

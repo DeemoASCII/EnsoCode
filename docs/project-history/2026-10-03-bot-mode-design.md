@@ -63,7 +63,7 @@ interface BotProfile {
   name: string;              // 群内 @ 用，唯一（大小写不敏感）
   title: string;             // 头衔，如「后端」
   scope: string;             // 一句话职责，用于路由提示和委派目录
-  avatar: { color: string };            // 头像原图另存 avatar.png
+  avatar: { color: string; image?: number };  // image = avatar.png 写入时的 version
   engine?: { providerId: string; modelId: string; thinkingLevel?: ThinkingLevel };  // 缺省跟随全局默认模型
   approvalMode: ApprovalMode;            // 复用现有档位，新建默认完全放行（full）
   tools: 'all' | 'readonly';            // 与自定义 agent 类型一致
@@ -664,3 +664,17 @@ Main 在 `spawnSession` 里根据 `ConversationAuthority.bot` 组装提示词，
 **测试**：`botSessionHost.lock.test`（工作目录原因带持锁成员、同会话为 turn、并发满为 capacity、原因变化补发事件），`liveActivity.test`（空闲 / 排队、本轮最近 3 步与 +N、出错 / 拒绝 / 耗时 / 截断、思考 / 输出 / 重试）。
 
 **真机**（隔离 userData，Max claude-sonnet-4-6 + hei qwen3.8-max-0902，同一项目工作区）：群里 @阿克 分 5 次跑 bash，行内依次出现「思考中 → 调用工具 · sleep 3 运行中 2.3s → 完成 3.2s」，第 4 步起显示「+1」「+2」，计时逐秒递增；@阿Q 分 4 次跑 bash，最后 `cat no_such_file.txt` 显示「出错」。阿克私聊跑 `sleep 30` 时群里 @阿Q，行内显示「排队中 · 等待 阿克 释放工作目录」，阿克结束后阿Q 开跑；私聊同样场景状态条显示同一原因，开跑后切为思考中 / 调用工具与步骤。
+
+## 图片头像与 PNG 人物卡（2026-10 补充）
+
+**头像**：`BotProfile.avatar.image` 为 `userData/bots/<botId>/avatar.png` 写入时的成员 version（有图标记兼缓存版本），`color` 恒保留作底色与兜底。新增 `BOT_SET_AVATAR {botId, image: Uint8Array | null}`：Main 校验 PNG / JPEG / WebP 魔数且 ≤ 2MB（`shared/bots/cardPng.ts` 的 `checkAvatarImage`），`BotStore.setAvatar` 原字节写入或删除文件并 bump version；草稿更新只合并颜色，图片只经此通道变更。Renderer 侧裁切统一输出 512×512 PNG，所以文件名固定 `.png`；Main 不转码（无需 nativeImage / WebP 解码），读取时按魔数给 Content-Type。归档不动文件，彻底删除随成员目录一起删。
+
+**显示**：复用 `local-image://` 特权协议的保留 host `bot-avatar`：`local-image://bot-avatar/<botId>?v=<image>`，Main 经 bots 注册的解析器按 botId 推导路径（`isBotId` 校验、档案无图返回 404），Renderer 不接触磁盘路径；URL 带版本号，换图即换 URL，可长缓存。`BotAvatar` 有图时叠 `<img>`（加载失败回落首字），所有调用处自动生效；私聊 / 历史 / 实时会话的回复头经 `ChatSpeaker.image` 显示。手机协议不变（仍只发颜色）。
+
+**上传与裁切**：`AvatarCropDialog`（拖动平移、滚轮 / 滑块缩放，圆形取景，canvas 输出 512 PNG data URL）。新建成员时先暂存预览，创建成功后再写入；资料面板「上传头像 / 移除头像」即时生效。
+
+**PNG 人物卡**：导出改为 SillyTavern V2 PNG：图用头像（无图画颜色圆 + 首字），`tEXt chara` = base64(UTF-8 V2 JSON)，`description` = 人设，`scenario` = 职责，`creator_notes` = 头衔；`extensions.enso` 放 `title / scope / color / tools / approvalMode / memory`，不含技能 / MCP id、模型、委派名单。写入时替换已有 `chara` 并删除 `ccv3`，CRC 正确。导入支持 PNG（优先 `chara`，其次 `ccv3`）与 JSON；带 `extensions.enso` 时人设取 `description` 原文并还原专有字段，否则沿用 description + Personality + Scenario 拼接；卡图居中裁成方形作头像。
+
+**测试**：`cardPng.test`（CRC 标准值、tEXt 写在 IEND 前且 CRC 正确、替换不重复并删除 ccv3、坏输入、base64 UTF-8 往返、魔数与大小上限），`characterCard.test`（导出字段映射与排除、自导出卡还原、非法专有字段逐项忽略），`botStore.test`（写入 / 版本 / 编辑与归档保留 / 移除），`bots.test`（入参收窄、协议按 botId 寻址、删除成员清理文件）。
+
+**真机**（隔离 userData，fake provider）：上传 800×600 图拖动 + 缩放裁切后创建成员，侧栏、私聊头部与空态、资料面板、私聊回复头、群头像、群时间线、群信息均显示图片，`avatar.png` 为 512×512；导出 PNG 的各 chunk CRC 正确，再导入得到相同的头衔 / 职责 / 人设 / 颜色 / 工具 / 审批 / 记忆与头像；300×450 SillyTavern 卡导入后人设按拼接规则生成、头像为居中 512 方图；移除头像后文件删除、回落颜色；SVG 与超 2MB 被拒；归档成员头像仍可加载，彻底删除后 404，`..%2F` 路径 404。

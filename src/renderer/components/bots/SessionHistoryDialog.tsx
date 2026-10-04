@@ -1,6 +1,6 @@
 import type { ProjectedMessage } from '@shared/types/agent';
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ChatHostContext } from '@/components/chat/chatHost';
+import { ChatHostContext, type ChatSpeaker } from '@/components/chat/chatHost';
 import { MessageTimeline, type MessageTimelineHandle } from '@/components/chat/MessageTimeline';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { useI18n } from '@/i18n';
@@ -12,7 +12,7 @@ interface SessionHistoryDialogProps {
   conversationId: string | null;
   title: string;
   /** 回复头显示的成员 */
-  speaker?: { name: string; color: string };
+  speaker?: ChatSpeaker;
   /** 搜索跳转到该会话的某条消息 */
   focus?: MessageFocus;
   /** 一轮最终回复下方的附加内容（私聊产物卡片） */
@@ -93,16 +93,20 @@ export function SessionHistoryDialog({
   });
   const speakerName = speaker?.name;
   const speakerColor = speaker?.color;
+  const speakerImage = speaker?.image;
   const host = useMemo(
     () => ({
       sessionId: conversationId,
       canRewind: false,
       canRetry: false,
       botSession: true,
-      speaker: speakerName && speakerColor ? { name: speakerName, color: speakerColor } : undefined,
+      speaker:
+        speakerName && speakerColor
+          ? { name: speakerName, color: speakerColor, image: speakerImage }
+          : undefined,
       turnFooter,
     }),
-    [conversationId, speakerName, speakerColor, turnFooter]
+    [conversationId, speakerName, speakerColor, speakerImage, turnFooter]
   );
 
   return (

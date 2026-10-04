@@ -1,3 +1,4 @@
+import { utf8ToBase64, writePngText } from '@shared/bots/cardPng';
 import type { BotChat, BotEngine, BotProfile } from '@shared/types/bot';
 import type { BotDraftInput, BotSessionRecord } from '@shared/types/botIpc';
 import { Archive, Download, Loader2, Trash2 } from 'lucide-react';
@@ -11,6 +12,16 @@ import { addToast } from '@/components/ui/toast';
 import { useI18n } from '@/i18n';
 import { useBotsStore } from '@/stores/bots';
 import { budgetDraft, budgetFormOf, limitsDraft, limitsFormOf } from '@/stores/bots/budget';
+import { buildCharacterCard } from '@/stores/bots/characterCard';
+import { AvatarButtons } from './AvatarCropDialog';
+import {
+  botAvatarSrc,
+  colorAvatar,
+  coverSquare,
+  dataUrlBytes,
+  downloadBlob,
+  saveBotAvatar,
+} from './avatarImage';
 import { type AbilityForm, BotAbilityFields } from './BotAbilities';
 import { BotAvatar } from './BotAvatar';
 import { ColorPicker, EngineField, FieldLabel, nameError } from './BotFields';
@@ -73,31 +84,23 @@ function draftOf(form: FormState): BotDraftInput | null {
   };
 }
 
-/** SillyTavern V2 人物卡导出（renderer 内生成并下载，不经 Main） */
-function exportCard(bot: BotProfile, persona: string) {
-  const card = {
-    spec: 'chara_card_v2',
-    spec_version: '2.0',
-    data: {
-      name: bot.name,
-      description: persona,
-      personality: '',
-      scenario: bot.scope,
-      first_mes: '',
-      mes_example: '',
-      creator_notes: bot.title,
-      tags: [],
-      extensions: { enso: { title: bot.title, color: bot.avatar.color } },
-    },
-  };
-  const url = URL.createObjectURL(
-    new Blob([JSON.stringify(card, null, 2)], { type: 'application/json' })
+/** SillyTavern V2 PNG 人物卡（chara tEXt）：图用头像，无图用颜色圆；renderer 内生成并下载 */
+async function exportCard(bot: BotProfile, persona: string) {
+  const src = botAvatarSrc(bot);
+  const image = src
+    ? await fetch(src)
+        .then((response) => response.blob())
+        .then(coverSquare)
+        .catch(() => null)
+    : null;
+  const png = writePngText(
+    dataUrlBytes(image ?? colorAvatar(bot.name, bot.avatar.color)),
+    'chara',
+    utf8ToBase64(JSON.stringify(buildCharacterCard(bot, persona))),
+    ['ccv3']
   );
-  const link = document.createElement('a');
-  link.href = url;
-  link.download = `${bot.name}.json`;
-  link.click();
-  URL.revokeObjectURL(url);
+  if (!png) throw new Error('png');
+  downloadBlob(new Blob([new Uint8Array(png)], { type: 'image/png' }), `${bot.name}.png`);
 }
 
 interface BotProfilePanelProps {
@@ -114,6 +117,7 @@ export function BotProfilePanel({ botId, chat, onOpenHistory }: BotProfilePanelP
   const [form, setForm] = useState<FormState | null>(null);
   const [edited, setEdited] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [avatarBusy, setAvatarBusy] = useState(false);
   const [confirm, setConfirm] = useState<'archive' | 'delete' | null>(null);
 
   const reload = useCallback(async () => {
@@ -157,6 +161,16 @@ export function BotProfilePanel({ botId, chat, onOpenHistory }: BotProfilePanelP
     setEdited(true);
   };
   const nameIssue = nameError(form.name, bots, t, bot.id);
+
+  const changeAvatar = async (dataUrl: string | null) => {
+    setAvatarBusy(true);
+    try {
+      if (!(await saveBotAvatar(bot.id, dataUrl)))
+        addToast({ type: 'error', title: t('Avatar update failed') });
+    } finally {
+      setAvatarBusy(false);
+    }
+  };
 
   const save = async () => {
     const draft = draftOf(form);
@@ -232,19 +246,37 @@ export function BotProfilePanel({ botId, chat, onOpenHistory }: BotProfilePanelP
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="flex items-center gap-3 px-4 pt-4">
-        <BotAvatar bot={{ name: form.name || bot.name, avatar: { color: form.color } }} size="lg" />
+        <BotAvatar
+          bot={{
+            id: bot.id,
+            name: form.name || bot.name,
+            avatar: { ...bot.avatar, color: form.color },
+          }}
+          size="lg"
+        />
         <div className="min-w-0">
           <div className="truncate font-semibold text-base">{bot.name}</div>
           <div className="truncate text-muted-foreground text-sm">{bot.title}</div>
-          <Button
-            size="xs"
-            variant="outline"
-            className="mt-1"
-            onClick={() => exportCard(bot, persona ?? '')}
-          >
-            <Download />
-            {t('Export character card')}
-          </Button>
+          <div className="mt-1 flex flex-wrap gap-1.5">
+            <Button
+              size="xs"
+              variant="outline"
+              onClick={() =>
+                exportCard(bot, persona ?? '').catch(() =>
+                  addToast({ type: 'error', title: t('Export failed') })
+                )
+              }
+            >
+              <Download />
+              {t('Export character card')}
+            </Button>
+            <AvatarButtons
+              hasImage={Boolean(bot.avatar.image)}
+              disabled={avatarBusy}
+              onPick={(dataUrl) => void changeAvatar(dataUrl)}
+              onRemove={() => void changeAvatar(null)}
+            />
+          </div>
         </div>
       </div>
 

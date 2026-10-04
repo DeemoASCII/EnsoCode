@@ -1,5 +1,6 @@
-import type { BotProfile } from '@shared/types/bot';
+import { useState } from 'react';
 import { cn } from '@/lib/utils';
+import { type AvatarBot, botAvatarSrc, initialOf } from './avatarImage';
 
 const SIZES = {
   xs: 'h-5 w-5 text-[9px]',
@@ -8,22 +9,23 @@ const SIZES = {
   lg: 'h-16 w-16 text-2xl',
 } as const;
 
-export function initialOf(name: string): string {
-  return [...name.trim()][0]?.toUpperCase() ?? '?';
-}
-
-/** 成员头像：avatar.color 底色 + 名字首字；busy 时右下角呼吸点 */
+/** 成员头像：有图显示图片（加载失败回落），否则 avatar.color 底色 + 名字首字；busy 时右下角呼吸点 */
 export function BotAvatar({
   bot,
+  src: override,
   size = 'md',
   busy = false,
   className,
 }: {
-  bot: Pick<BotProfile, 'name' | 'avatar'> | undefined;
+  bot: AvatarBot | undefined;
+  /** 未保存的预览图（data URL），优先于档案图片 */
+  src?: string;
   size?: keyof typeof SIZES;
   busy?: boolean;
   className?: string;
 }) {
+  const src = override ?? (bot ? botAvatarSrc(bot) : undefined);
+  const [failed, setFailed] = useState<string | null>(null);
   return (
     <span
       className={cn(
@@ -34,7 +36,17 @@ export function BotAvatar({
       )}
       style={bot ? { backgroundColor: bot.avatar.color } : undefined}
     >
-      {initialOf(bot?.name ?? '?')}
+      {src && failed !== src ? (
+        <img
+          src={src}
+          alt=""
+          draggable={false}
+          onError={() => setFailed(src)}
+          className="absolute inset-0 h-full w-full rounded-full object-cover"
+        />
+      ) : (
+        initialOf(bot?.name ?? '?')
+      )}
       {busy && (
         <span className="-right-px -bottom-px absolute h-2.5 w-2.5 animate-pulse rounded-full border-2 border-background bg-success" />
       )}
@@ -47,7 +59,7 @@ export function GroupAvatar({
   bots,
   busy = false,
 }: {
-  bots: (Pick<BotProfile, 'name' | 'avatar'> | undefined)[];
+  bots: (AvatarBot | undefined)[];
   busy?: boolean;
 }) {
   const shown = bots.slice(0, 3);

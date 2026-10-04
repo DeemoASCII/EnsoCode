@@ -1244,6 +1244,9 @@ const electronAPI = {
       ipcRenderer.invoke(IPC_CHANNELS.BOT_ARCHIVE, { botId, archived }),
     remove: (botId: string): Promise<BotActionResult> =>
       ipcRenderer.invoke(IPC_CHANNELS.BOT_DELETE, { botId }),
+    /** image=null 移除图片头像，恢复颜色头像 */
+    setAvatar: (botId: string, image: Uint8Array | null): Promise<BotWriteIpcResult> =>
+      ipcRenderer.invoke(IPC_CHANNELS.BOT_SET_AVATAR, { botId, image }),
     chats: (): Promise<BotChatsListResult> => ipcRenderer.invoke(IPC_CHANNELS.BOT_CHATS_LIST),
     createChat: (request: BotChatCreateInput): Promise<BotChatWriteResult> =>
       ipcRenderer.invoke(IPC_CHANNELS.BOT_CHAT_CREATE, request),

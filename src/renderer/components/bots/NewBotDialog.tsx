@@ -1,3 +1,4 @@
+import { base64ToUtf8, readPngText, sniffImage } from '@shared/bots/cardPng';
 import {
   type MemberTemplateData,
   memberDraftOfTemplate,
@@ -18,6 +19,7 @@ import {
 } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
+import { addToast } from '@/components/ui/toast';
 import { useI18n } from '@/i18n';
 import { cn } from '@/lib/utils';
 import { Z_INDEX } from '@/lib/z-index';
@@ -25,6 +27,8 @@ import { useBotsStore } from '@/stores/bots';
 import { budgetDraft, limitsDraft } from '@/stores/bots/budget';
 import { parseCharacterCard } from '@/stores/bots/characterCard';
 import { useMemberTemplates } from '@/stores/bots/templateLibrary';
+import { AvatarButtons } from './AvatarCropDialog';
+import { coverSquare, saveBotAvatar } from './avatarImage';
 import { type AbilityForm, BotAbilityFields, DEFAULT_ABILITIES } from './BotAbilities';
 import { BotAvatar } from './BotAvatar';
 import { AVATAR_PALETTE, ColorPicker, EngineField, FieldLabel, nameError } from './BotFields';
@@ -71,6 +75,8 @@ export function NewBotDialog({
   const fileRef = useRef<HTMLInputElement>(null);
   const [source, setSource] = useState<Source>({ kind: 'template', id: 'pm' });
   const [draft, setDraft] = useState<Draft>(() => blankDraft(AVATAR_PALETTE[0]));
+  /** 待上传的头像（512 PNG data URL），创建成功后经 Main 写入 */
+  const [avatar, setAvatar] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [touched, setTouched] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -79,6 +85,7 @@ export function NewBotDialog({
   const applyBlank = () => {
     setSource({ kind: 'blank' });
     setDraft(blankDraft(AVATAR_PALETTE[bots.length % AVATAR_PALETTE.length]));
+    setAvatar(null);
     setError(null);
   };
 
@@ -97,6 +104,7 @@ export function NewBotDialog({
       approvalMode: input.approvalMode ?? 'auto-edits',
       tools: input.tools ?? 'all',
     });
+    setAvatar(null);
     setError(null);
   };
 
@@ -106,6 +114,7 @@ export function NewBotDialog({
     if (seed) {
       setSource({ kind: 'blank' });
       setDraft({ ...blankDraft(AVATAR_PALETTE[bots.length % AVATAR_PALETTE.length]), ...seed });
+      setAvatar(null);
       setError(null);
     } else applyTemplate(templates[0]);
     setTouched(false);
@@ -119,17 +128,28 @@ export function NewBotDialog({
   };
 
   const importCard = async (file: File) => {
-    const result = parseCharacterCard(await file.text());
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    const isPng = sniffImage(bytes) === 'png';
+    const text = isPng
+      ? base64ToUtf8(readPngText(bytes, 'chara') ?? readPngText(bytes, 'ccv3') ?? '')
+      : new TextDecoder().decode(bytes);
+    const result = text ? parseCharacterCard(text) : ({ ok: false, error: 'not-a-card' } as const);
     if (!result.ok) {
       setError(
-        result.error === 'invalid-json'
+        result.error === 'invalid-json' && !isPng
           ? t('This file is not valid JSON.')
           : t('This file is not a SillyTavern character card.')
       );
       return;
     }
+    const { color, memoryEnabled, ...fields } = result.draft;
     setSource({ kind: 'import' });
-    setDraft({ ...blankDraft(draft.color), ...result.draft });
+    setDraft({
+      ...blankDraft(color ?? draft.color),
+      ...fields,
+      ...(memoryEnabled !== undefined ? { memoryEnabled } : {}),
+    });
+    setAvatar(isPng ? await coverSquare(file).catch(() => null) : null);
     setTouched(true);
     setError(null);
   };
@@ -175,6 +195,9 @@ export function NewBotDialog({
         return;
       }
       useBotsStore.getState().upsertBot(result.bot);
+      if (avatar && !(await saveBotAvatar(result.bot.id, avatar))) {
+        addToast({ type: 'error', title: t('Avatar update failed') });
+      }
       onOpenChange(false);
       const chatId = await useBotsStore.getState().openDirect(result.bot.id);
       if (chatId) onCreated?.(chatId);
@@ -217,12 +240,12 @@ export function NewBotDialog({
               onClick={() => fileRef.current?.click()}
             >
               <FileJson />
-              {t('Import character card (JSON)')}
+              {t('Import character card')}
             </Button>
             <input
               ref={fileRef}
               type="file"
-              accept=".json,application/json"
+              accept=".json,.png,application/json,image/png"
               hidden
               onChange={(event) => {
                 const file = event.target.files?.[0];
@@ -289,7 +312,22 @@ export function NewBotDialog({
             </div>
             <div>
               <FieldLabel>{t('Avatar color')}</FieldLabel>
-              <ColorPicker value={draft.color} onChange={(color) => patch({ color })} />
+              <div className="flex items-start gap-2.5">
+                <BotAvatar
+                  bot={{ name: draft.name || '?', avatar: { color: draft.color } }}
+                  src={avatar ?? undefined}
+                  size="md"
+                />
+                <div className="min-w-0 space-y-1.5">
+                  <ColorPicker value={draft.color} onChange={(color) => patch({ color })} />
+                  <AvatarButtons
+                    nested
+                    hasImage={Boolean(avatar)}
+                    onPick={setAvatar}
+                    onRemove={() => setAvatar(null)}
+                  />
+                </div>
+              </div>
             </div>
             <div className="col-span-2">
               <FieldLabel hint={t('Used for routing and the delegation directory')}>

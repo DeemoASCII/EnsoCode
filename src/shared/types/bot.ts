@@ -24,7 +24,8 @@ export interface BotProfile {
   title: string;
   /** 一句话职责：路由提示与委派目录 */
   scope: string;
-  avatar: { color: string };
+  /** image：avatar.png 写入时的 version（有图标记 + 缓存版本）；color 恒为兜底 */
+  avatar: { color: string; image?: number };
   /** 缺省跟随全局默认模型 */
   engine?: BotEngine;
   approvalMode: ApprovalMode;
@@ -385,6 +386,9 @@ export function parseBotProfile(value: unknown): BotProfile | undefined {
         typeof avatar.color === 'string' && COLOR_RE.test(avatar.color)
           ? avatar.color
           : defaultColor(value.id),
+      ...(Number.isSafeInteger(avatar.image) && (avatar.image as number) > 0
+        ? { image: avatar.image as number }
+        : {}),
     },
     approvalMode: APPROVAL_MODES.includes(value.approvalMode as ApprovalMode)
       ? (value.approvalMode as ApprovalMode)
