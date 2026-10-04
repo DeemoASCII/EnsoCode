@@ -23,6 +23,7 @@ import { draftFromSentText, seedBotDraft } from '@/components/bots/botDraft';
 import { usePendingMemoryWrites } from '@/stores/memoryReview';
 import { applyHistoryPage, emptyProjection } from '@/stores/sessions/reducer';
 import { resizeSidePanelWidth, SIDE_PANEL_DEFAULT_WIDTH } from '@/stores/sidePanel/width';
+import { type ChatBrowserTabs, closeChatTab, parseChatTabs, revealChatTab } from './browserTabs';
 import type { BotUsageSnapshot } from './budget';
 import { createCoalescer } from './coalesce';
 import { isActiveDelegation } from './delegations';
@@ -102,23 +103,13 @@ function loadView(): BotView {
 
 export type BotPanelTab = 'info' | 'browser';
 
-function loadBrowserTabs(): Record<string, string> {
+function loadBrowserTabs(): Record<string, ChatBrowserTabs> {
   try {
-    const parsed: unknown = JSON.parse(localStorage.getItem(BROWSER_TABS_KEY) ?? '{}');
-    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
-    return Object.fromEntries(
-      Object.entries(parsed).filter(
-        (entry): entry is [string, string] => typeof entry[1] === 'string'
-      )
-    );
+    return parseChatTabs(JSON.parse(localStorage.getItem(BROWSER_TABS_KEY) ?? '{}'));
   } catch {
     return {};
   }
 }
-
-/** 聊天共享浏览器当前 tab；没有记录时用按聊天固定的 id，首次打开即创建 */
-export const botBrowserTabId = (tabs: Record<string, string>, chatId: string): string =>
-  tabs[chatId] ?? `browser:bot-${chatId}`;
 
 function loadDismissed(key: string): string[] {
   try {
@@ -156,7 +147,9 @@ interface BotsState {
   panelOpen: boolean;
   panelWidth: number;
   panelTab: BotPanelTab;
-  browserTabs: Record<string, string>;
+  browserTabs: Record<string, ChatBrowserTabs>;
+  /** 聊天浏览器当前页标题（面板页签显示，不持久化） */
+  browserTitles: Record<string, string>;
   searchOpen: boolean;
   focus: BotFocus | null;
 
@@ -186,6 +179,13 @@ interface BotsState {
   setView: (view: BotView) => void;
   togglePanel: () => void;
   setPanelTab: (tab: BotPanelTab) => void;
+  /** 标题按 tabId 记 */
+  setBrowserTitle: (tabId: string, title: string) => void;
+  /** 用户新开一个标签并切到浏览器面板 */
+  openBrowserTab: (chatId: string) => void;
+  selectBrowserTab: (chatId: string, tabId: string) => void;
+  /** 用户手动关标签；关完最后一个回到信息页 */
+  closeBrowserTab: (chatId: string, tabId: string) => Promise<void>;
   nudgePanelWidth: (delta: number, workspaceWidth: number) => void;
   markRead: (key: string, marker: number) => void;
   /** 手动标为未读：已读记号退回一格 */
@@ -347,20 +347,31 @@ export const useBotsStore = create<BotsState>()((set, get) => {
     localStorage.removeItem(LEGACY_DISMISSED_BUDGETS_KEY);
   };
 
+  const putChatTabs = (chatId: string, next: ChatBrowserTabs | undefined) => {
+    const { [chatId]: _old, ...rest } = get().browserTabs;
+    const browserTabs = next ? { ...rest, [chatId]: next } : rest;
+    localStorage.setItem(BROWSER_TABS_KEY, JSON.stringify(browserTabs));
+    set({ browserTabs });
+  };
+  const dropChatTab = (chatId: string, current: ChatBrowserTabs, tabId: string) => {
+    const next = closeChatTab(current, tabId);
+    if (next === current) return;
+    const { [tabId]: _title, ...browserTitles } = get().browserTitles;
+    set({ browserTitles });
+    putChatTabs(chatId, next);
+    const { view, panelTab } = get();
+    if (!next && panelTab === 'browser' && view?.kind === 'chat' && view.chatId === chatId)
+      get().setPanelTab('info');
+  };
+
   const subscribe = () => {
     let active = true;
     const offBot = window.electronAPI.bots.onEvent(onBotEvent);
-    const setBrowserTab = (chatId: string, tabId: string | null) => {
-      const { [chatId]: _old, ...rest } = get().browserTabs;
-      const browserTabs = tabId ? { ...rest, [chatId]: tabId } : rest;
-      localStorage.setItem(BROWSER_TABS_KEY, JSON.stringify(browserTabs));
-      set({ browserTabs });
-    };
-    // 成员用浏览器工具时：记下共享 tab，正看着这个聊天就把右侧面板切到浏览器
+    // 成员用浏览器工具开/切标签时：记下并激活，正看着这个聊天就把右侧面板切到浏览器
     const offReveal = window.electronAPI.browser.onReveal((event) => {
       const chatId = botBrowserChatId(event.conversationId);
       if (!chatId || !event.tabId) return;
-      setBrowserTab(chatId, event.tabId);
+      putChatTabs(chatId, revealChatTab(get().browserTabs[chatId], event.tabId));
       const { view } = get();
       if (view?.kind !== 'chat' || view.chatId !== chatId) return;
       if (!get().panelOpen) get().togglePanel();
@@ -368,7 +379,8 @@ export const useBotsStore = create<BotsState>()((set, get) => {
     });
     const offClosed = window.electronAPI.browser.onTabClosed((event) => {
       const chatId = botBrowserChatId(event.conversationId);
-      if (chatId && get().browserTabs[chatId] === event.tabId) setBrowserTab(chatId, null);
+      const current = chatId ? get().browserTabs[chatId] : undefined;
+      if (chatId && current) dropChatTab(chatId, current, event.tabId);
     });
     const offAgent = window.electronAPI.agent.onEvent((event) => {
       const { sessions } = get();
@@ -444,6 +456,7 @@ export const useBotsStore = create<BotsState>()((set, get) => {
     panelWidth: Number(localStorage.getItem(PANEL_WIDTH_KEY)) || SIDE_PANEL_DEFAULT_WIDTH,
     panelTab: localStorage.getItem(PANEL_TAB_KEY) === 'browser' ? 'browser' : 'info',
     browserTabs: loadBrowserTabs(),
+    browserTitles: {},
     searchOpen: false,
     focus: null,
 
@@ -768,6 +781,32 @@ export const useBotsStore = create<BotsState>()((set, get) => {
     setPanelTab: (panelTab) => {
       localStorage.setItem(PANEL_TAB_KEY, panelTab);
       set({ panelTab });
+    },
+
+    setBrowserTitle: (tabId, title) => {
+      if (get().browserTitles[tabId] === title) return;
+      set({ browserTitles: { ...get().browserTitles, [tabId]: title } });
+    },
+
+    openBrowserTab: (chatId) => {
+      putChatTabs(
+        chatId,
+        revealChatTab(get().browserTabs[chatId], `browser:${crypto.randomUUID()}`)
+      );
+      get().setPanelTab('browser');
+    },
+
+    selectBrowserTab: (chatId, tabId) => {
+      const current = get().browserTabs[chatId];
+      if (current?.tabs.includes(tabId)) putChatTabs(chatId, { ...current, active: tabId });
+      get().setPanelTab('browser');
+    },
+
+    closeBrowserTab: async (chatId, tabId) => {
+      const current = get().browserTabs[chatId];
+      // 先卸掉视图再关，避免关闭途中视图按 tabId 又把页面建回来
+      if (current) dropChatTab(chatId, current, tabId);
+      await window.electronAPI.browser.closeTab(tabId);
     },
 
     nudgePanelWidth: (delta, workspaceWidth) => {

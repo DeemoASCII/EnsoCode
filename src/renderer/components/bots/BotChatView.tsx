@@ -69,6 +69,7 @@ export function BotChatView({ chat }: { chat: BotChat }) {
   const markRead = useBotsStore((s) => s.markRead);
   const panelOpen = useBotsStore((s) => s.panelOpen);
   const panelTab = useBotsStore((s) => s.panelTab);
+  const browserTabCount = useBotsStore((s) => s.browserTabs[chat.id]?.tabs.length ?? 0);
   const panelWidth = useBotsStore((s) => s.panelWidth);
   const skillCatalog = useSettingsStore((s) => s.skills);
   const voiceInputEnabled = useSettingsStore((s) => s.voiceInputEnabled);
@@ -381,6 +382,9 @@ export function BotChatView({ chat }: { chat: BotChat }) {
                   <Globe className="h-3.5 w-3.5" />
                 )}
                 {tab === 'info' ? t(direct ? 'Member' : 'Group info') : t('Browser')}
+                {tab === 'browser' && browserTabCount > 0 && (
+                  <span className="text-muted-foreground tabular-nums">{browserTabCount}</span>
+                )}
               </button>
             ))}
           </div>

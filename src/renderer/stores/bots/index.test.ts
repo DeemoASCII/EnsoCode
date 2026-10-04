@@ -45,6 +45,7 @@ async function fixture() {
       lastSeq: 0,
     })
   );
+  const closeTab = vi.fn(async (_id: string) => {});
   const browserListeners = {
     reveal: new Set<(event: { conversationId: string; tabId: string }) => void>(),
     closed: new Set<(event: { conversationId: string; tabId: string }) => void>(),
@@ -70,6 +71,7 @@ async function fixture() {
         requestSnapshot,
       },
       browser: {
+        closeTab,
         onReveal: (listener: (event: { conversationId: string; tabId: string }) => void) => {
           browserListeners.reveal.add(listener);
           return () => browserListeners.reveal.delete(listener);
@@ -95,6 +97,7 @@ async function fixture() {
     listeners,
     botListeners,
     browserListeners,
+    closeTab,
     bot: (event: BotEvent) => {
       for (const listener of botListeners) (listener as (event: BotEvent) => void)(event);
     },
@@ -117,12 +120,24 @@ describe('Bot mode subscription lifecycle', () => {
     expect(f.store.getState().browserTabs).toEqual({});
     for (const listener of f.browserListeners.reveal)
       listener({ conversationId: 'bot-chat:c', tabId: 'browser:7' });
-    expect(f.store.getState().browserTabs).toEqual({ c: 'browser:7' });
+    expect(f.store.getState().browserTabs).toEqual({
+      c: { tabs: ['browser:7'], active: 'browser:7' },
+    });
     expect(f.store.getState().panelOpen).toBe(true);
     expect(f.store.getState().panelTab).toBe('browser');
+    for (const listener of f.browserListeners.reveal)
+      listener({ conversationId: 'bot-chat:c', tabId: 'browser:8' });
+    expect(f.store.getState().browserTabs.c).toEqual({
+      tabs: ['browser:7', 'browser:8'],
+      active: 'browser:8',
+    });
+    for (const listener of f.browserListeners.closed)
+      listener({ conversationId: 'bot-chat:c', tabId: 'browser:8' });
+    expect(f.store.getState().browserTabs.c).toEqual({ tabs: ['browser:7'], active: 'browser:7' });
     for (const listener of f.browserListeners.closed)
       listener({ conversationId: 'bot-chat:c', tabId: 'browser:7' });
     expect(f.store.getState().browserTabs).toEqual({});
+    expect(f.store.getState().panelTab).toBe('info');
   });
 
   it('别的聊天的浏览器不抢当前面板', async () => {
@@ -130,7 +145,30 @@ describe('Bot mode subscription lifecycle', () => {
     f.store.setState({ view: { kind: 'chat', chatId: 'c' }, panelTab: 'info' });
     for (const listener of f.browserListeners.reveal)
       listener({ conversationId: 'bot-chat:other', tabId: 'browser:9' });
-    expect(f.store.getState().browserTabs).toEqual({ other: 'browser:9' });
+    expect(f.store.getState().browserTabs).toEqual({
+      other: { tabs: ['browser:9'], active: 'browser:9' },
+    });
+    expect(f.store.getState().panelTab).toBe('info');
+  });
+
+  it('用户新开、切换、关闭标签；关完最后一个回到信息页', async () => {
+    const f = await fixture();
+    f.store.setState({ view: { kind: 'chat', chatId: 'c' }, panelTab: 'info' });
+    f.store.getState().openBrowserTab('c');
+    f.store.getState().openBrowserTab('c');
+    const [first, second] = f.store.getState().browserTabs.c.tabs;
+    expect(f.store.getState().browserTabs.c.active).toBe(second);
+    expect(f.store.getState().panelTab).toBe('browser');
+    f.store.getState().selectBrowserTab('c', first);
+    expect(f.store.getState().browserTabs.c.active).toBe(first);
+    f.store.getState().setBrowserTitle(first, 'Example Domain');
+    await f.store.getState().closeBrowserTab('c', first);
+    expect(f.closeTab).toHaveBeenCalledWith(first);
+    expect(f.store.getState().browserTabs.c).toEqual({ tabs: [second], active: second });
+    expect(f.store.getState().browserTitles).toEqual({});
+    expect(f.store.getState().panelTab).toBe('browser');
+    await f.store.getState().closeBrowserTab('c', second);
+    expect(f.store.getState().browserTabs).toEqual({});
     expect(f.store.getState().panelTab).toBe('info');
   });
 
