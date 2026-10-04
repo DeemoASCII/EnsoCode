@@ -591,3 +591,22 @@ Main 在 `spawnSession` 里根据 `ConversationAuthority.bot` 组装提示词，
 - 离线发送：代理断开 → 手机「重连中」，群聊里发送显示「待发送」；断网时刷新页面（模拟杀进程），IndexedDB 中仍是 pending；恢复网络后自动重连冲刷，群时间线出现唯一一条 `human:<deliveryId>`，群主回复 OK。把同一 deliveryId 以 `sending` 写回队列再刷新，重发后队列清空、时间线仍只有一条人类消息。
 - 只读：桌面切为只读后手机群聊底部只剩只读提示、输入框隐藏；强行把一条待发项塞进队列，host 日志 `bot-send needs operate scope`，手机项转为「发送失败：read-only」，时间线不变；切回可操作后点重试，以原 id `human:ro-test-1` 落入时间线。设置页徽标点击在「可操作 / 只读」间切换。
 - 引导：Max claude-sonnet-4-6 对「每周整理 AI 编程工具竞品简报」推荐单个成员「Vega · 竞品情报分析师」，确认后成员对话框预填，创建后私聊输入框里是起草的第一条消息、未发送；hei glm-5.3 对「记账小程序从需求到测试上线」推荐软件开发小队，确认后进入模板预览，创建团队后群聊输入框预填第一条消息。未覆盖：两家模型各只跑了一条路径（Claude 成员、GLM 团队）。
+
+## 日常体验补齐（2026-10 补充）
+
+**静默看门狗**：`BotSessionHost` 按会话记最后输出时间（任何 worker 事件都算，含工具进度与子代理事件；子会话按 `parent` / `::` 归到根会话），宿主发起的轮次运行中超过 `BOT_SILENCE_MS = 90s` 没有输出即判静默，推 `BotEvent{kind:'silence', chatId?, conversationId}`；恢复输出或轮次结束（完成 / 失败 / 停止 / worker 退出）撤销并再推一次。等待审批 / 提问期间不算静默（答复后重新计时）。巡检是单个 5s 定时器，没有运行中轮次时停掉。`BOT_CHATS_LIST` 附 `silences`，renderer 在私聊头部与群「正在回复」行显示「已安静 X 秒」（每秒刷新），收件箱出现一条，只提示不中断；手机不转发 `silence` 事件（收件箱帧里有）。
+
+**Bot 通知**：`agent.ts` 对绑定 bot 的会话不再走通用 `maybeNotify`（审批 / 提问仍是 `maybeNotifyBot`）。私聊由 `host.onTurnFinished` 发「成员名 · 回复完成 / 回复失败」，正文是回复摘要或错误；用户停止（`canceled`）和委派子会话不报。群聊在 `GroupChatService` 里按批次收集：一条人类消息（或例行任务）引发的整串接力，在没有人回复、没有排队、没有待路由的人类消息、没有排队的例行任务时结束，合并为一条「群名 · A、B 已回复」，正文为最后一条发言摘要与失败成员；`[skip]` 不算参与，用户停止的批次不报。都由 `notifyBotChat` 发出：主窗口聚焦时不弹，点击发 `BOT_EVENT{kind:'open', chatId}`（自动切到 Bot 模式打开聊天）。文案在 `services/bots/botTurnNotice.ts`（Main 不走共享 i18n）。
+
+**渲染层合并刷新**：`stores/bots/coalesce.ts` 按 key 合并约 50ms 内的重复请求（执行中再被请求则结束后补跑一次，失败吞掉）；`refreshChats / refreshDelegations / refreshUsage / refreshRoutines / refreshInbox` 全局合并，`loadLatest / refreshRuntime` 按聊天合并。时间线推送带的 `seq` 不大于已有 `lastSeq` 时不再请求；已有时间线时 `BOT_CHAT_TIMELINE` 带 `afterSeq` 只拉增量（与 `beforeSeq` 互斥），Main 用 `chatStore.readSince`：缺口超过 limit 退回最新一页，renderer 照旧按空洞替换。
+
+**聊天管理**：`BotChat` 增加 `settledAt`（搁置 / 结案）、`snoozedUntil`（稍后提醒）、`pinOrder`（置顶内顺序，只在置顶时保留），复用 `BOT_CHAT_UPDATE`（`settled / snoozedUntil(null 取消) / pinOrder(null 清除)`，按 `unknown` 收窄）。规则在 `shared/bots/chatFlags.ts`：搁置会取消置顶并清顺序；提醒隐含搁置；置顶或回到进行中会取消搁置与提醒。成员有正文回复（非 `[skip]`）或人类在聊天里发言时自动回到进行中。`ChatSnoozeTimer` 用单个定时器指向最早的提醒（远期分段等待，启动时已过期的立即触发），到点取消搁置、推 `reminder`（renderer 标为未读，手机不转发）与 `chat` 事件，并发「稍后提醒 · 聊天名」通知。侧栏新增「已搁置 · N」分组（可折叠，显示「X 后提醒」），右键菜单：搁置 / 回到进行中、稍后提醒（1 小时后 / 3 小时后 / 明天 9:00）、标为未读（已读记号退回一格，只对无未读、非当前聊天显示）、置顶内上移 / 下移；置顶行可 HTML5 拖拽排序，置顶时排到置顶末尾。
+
+**收件箱放到 Main**：`userData/bot-chats/inbox.jsonl`（`BotInboxStore`，append-only 整条快照、按 key 后写覆盖、坏行跳过、冗余达 `max(200, 条目数)` 原子重写，已结束超过 7 天加载时丢弃）。`BotInboxService` 汇总：审批 / 提问（worker 事件，委派会话归到发起委派的聊天并记委托方；解决、回合结束、会话结束、worker 退出时结束）、重启中断且未被重试的委派、今日预算耗尽（按成员 + 自然日，跨日重新判断）、例程待批准（按 `procedureVersion` 建键，改动后重新出现）与被阻塞、静默；后几类各自由权威数据全量 `sync`（`delegation / routine / budget / catalog / silence` 事件触发），新进程启动时上一进程的审批、提问、静默一律结束。同 key 已结束后再出现会重新打开并清掉忽略；未结束的条目忽略状态持久。只有中断委派、预算、静默可忽略（Main 拒绝其它类型 `not-dismissible`）。变化推 `BotEvent{kind:'inbox'}`。
+
+- IPC：`BOT_INBOX_LIST`（read，未结束条目含已忽略）、`BOT_INBOX_UPDATE {key, action:'dismiss'|'reopen'}`（write）。renderer 订阅 `inbox` 事件重拉，`inboxSections` 把条目还原成原有卡片（审批 / 提问卡片用条目里的请求体答复，例程与中断委派卡片取本地权威记录，找不到不渲染）；待处理数 = 未忽略条目 + 待批准记忆写入，为空时入口照旧隐藏。旧版 localStorage 忽略记录首次连上时迁移给 Main 后删除。renderer 里原 `interruptedDelegations / budgetAlerts / routineAlerts / botPendingCount` 等推导移到 `shared/bots/inbox.ts`。
+- 手机：上行 `bot-inbox-request`（只读设备可用）、`bot-inbox-dismiss {key}`（需可操作），下行 `bot-inbox {items}`（未结束且未忽略，带 `dismissible`）；目录请求 / 重连时随目录一起下发，变化时整表重推。抽屉 Bot 分段顶部显示「收件箱 · N」，点条目打开聊天，提示类可「忽略」。旧手机忽略新帧。
+
+**测试**：宿主静默（阈值、子代理输出撤销、审批期间不算、停止清理）、群批次合并（[skip]、失败、停止不报）、通知文案与前后台、合并器（合并、执行中补跑、失败不影响后续）、store 合并刷新与 afterSeq / 过期 seq、`readSince` 与入参收窄、聊天标志规则与解析、提醒定时器（过期立即触发、分段、dispose）、IPC 搁置 / 提醒 / 发言唤醒、置顶排序与未读回退、收件箱来源推导、存储（去重、忽略持久、重开、坏行、压缩、过期丢弃）、服务（审批与委派归属、全量同步、忽略校验、重启后结束）、收件箱 IPC、pair 解析与只读作用域、手机帧分发与标签。
+
+**真机**（隔离 userData，Max claude-sonnet-4-6 + hei qwen3.8-max）：两位成员在私聊里各跑 `sleep 100`，约 90s 时头部出现「已安静 9x 秒」、收件箱徽标 1 与静默卡片，命令结束后卡片与提示自动消失（jsonl 中两条静默均有 resolvedAt）。窗口在后台时私聊各弹一条「阿克 / 阿Q · 回复完成」，群里 @ 两人与 qwen→claude 接力各只弹一条「体验群 · 阿克、阿Q 已回复」；在 Code 模式调用通知点击路径切回 Bot 并打开群。接力期间 8 个 Bot 事件只引起 3 次时间线更新，seq 连续。右键上移与真实拖拽（CDP 拦截拖拽）都能调整置顶顺序；搁置后进入「已搁置」并取消置顶，向该私聊发消息即回到进行中；群设 1 分钟后提醒，到点弹「稍后提醒 · 体验群」、回到群聊分组并标为未读；标为未读后侧栏出现未读点。收件箱：Claude 成员改为全程审批后执行 `touch` 出现审批卡片并从收件箱放行（文件写入），qwen 预算 1 token 被拒后出现预算卡片，忽略后重启应用仍为已忽略、`reopen` 后重新出现，去掉预算后自动结束；qwen 用 `routine_propose` 提议的「早报」以待批准卡片出现，忽略被 Main 拒绝，拒绝后消失。未在真机验证：手机端收件箱（协议、解析与客户端有单测）、打包版原生通知的点击跳转（dev 版 macOS 走 osascript 无点击，点击路径直接调用验证）。
