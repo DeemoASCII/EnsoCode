@@ -24,7 +24,6 @@ import {
 } from 'lucide-react';
 import { type ReactNode, useMemo, useState } from 'react';
 import { ConfirmDialog } from '@/components/chat/ConfirmDialog';
-import { NodeSwitcher } from '@/components/nodes/NodeSwitcher';
 import {
   ContextMenu,
   ContextMenuItem,
@@ -242,11 +241,7 @@ export function BotSidebar({
       className="flex shrink-0 flex-col overflow-hidden border-r bg-background"
       style={{ width }}
     >
-      <div className="flex h-12 shrink-0 items-center gap-1 pr-2 pl-1.5">
-        <NodeSwitcher className="max-w-32" />
-      </div>
-
-      <div className="min-h-0 flex-1 overflow-y-auto pb-2">
+      <div className="min-h-0 flex-1 overflow-y-auto pt-2 pb-2">
         <SectionHeader title={t('Group chats')} onAdd={onNewGroup} addLabel={t('New group chat')} />
         {groups.length === 0 && (
           <p className="px-4 py-1 text-muted-foreground text-xs">{t('No group chats yet')}</p>
