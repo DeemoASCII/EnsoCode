@@ -111,6 +111,26 @@ afterEach(() => { fs.rmSync(tmp, { recursive: true, force: true }); });
 - 归一产物必须能通过工具自己的 schema：不得追加未声明的键（见 [big-question/tool-prepare-arguments-schema-drift.md](big-question/tool-prepare-arguments-schema-drift.md)）
 - 面向模型的 list 类能力开出什么标识，写入类能力就要能收什么标识
 
+## EnsoBot 前端自动化测试（模拟真人操作）
+
+单测验证宿主逻辑，但“打字回车后界面有没有反应、群里谁先说、点审批能不能继续”只能在真实窗口里看。
+`pnpm test:e2e:ensobot` 会先 `build:ensobot`，再跑 `e2e/**/*.e2e.ts`（不进 `pnpm test`）：
+
+- 每次在系统临时目录新建隔离 userData，只配一个指向本地假模型（`e2e/ensobot/fakeModel.ts`）的供应商，
+  人物卡用卡片存储直接写入；结束后删除，`ENSOBOT_E2E_KEEP=1` 可保留现场。
+- 用构建产物启动真实 Electron（EnsoBot 身份），`e2e/ensobot/cdp.ts` 只连 EnsoBot 页面，用 `Input.*`
+  发受信任的点击和逐字输入，再用 `Runtime.evaluate` 读界面、用 `readHostLog` 对照宿主落盘。
+- 点击前等元素停稳并确认那个点上确实是它（`elementFromPoint`）：下拉弹层有入场动画和异步定位，
+  立刻点会落到遮罩上把弹窗关掉，看起来像产品 bug。
+- 假模型按宿主写进 prompt 的上下文决定行为（主持人分工、成员调只读工具、汇总、需要审批的命令），
+  故意延迟输出，让“正在思考/调用工具”的进度真的出现。改了宿主给模型的上下文措辞，要同步它。
+- 截图和 Electron 日志写到 `temp/e2e/ensobot/`（每轮开始清空），失败用例会留下 `*-failed.png`。
+- 定位元素优先用 `data-slot` / `data-status` / `aria-label`，不要依赖样式类名或纯文案位置。
+
+不要改用 Playwright 的整浏览器连接，原因见
+[big-question/electron-e2e-pinned-workbench-hang.md](big-question/electron-e2e-pinned-workbench-hang.md)。
+假模型只证明“界面和宿主按约定工作”；参与模型的行为仍按上一节跨两个厂商真机验证。
+
 ## 修 bug 时
 
 先写一个能复现的失败用例，再改代码。

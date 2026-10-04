@@ -29,6 +29,7 @@
     "lint:fix": "biome check --write .",
     "test": "node --test scripts/rtk.test.mjs && vitest run",
     "test:watch": "vitest",
+    "test:e2e:ensobot": "node scripts/build-ensobot.mjs && vitest run -c vitest.e2e.config.ts",
     "format": "biome format --write .",
     "postinstall": "node node_modules/electron/install.js && node scripts/fix-node-pty-helper.mjs"
   },

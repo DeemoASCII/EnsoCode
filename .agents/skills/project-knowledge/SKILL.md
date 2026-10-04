@@ -41,6 +41,7 @@ description: >
 | 多轮后历史消息消失 | `big-question/agent-end-run-scoped-messages.md` |
 | worktree 切换后文件写错位置 | `big-question/worktree-move-races.md` |
 | CDP 点击、拖拽或输入时好时坏 | `big-question/cdp-hidden-window-input.md` |
+| 前端自动化测试连不上 / 重启即退出 | `big-question/electron-e2e-pinned-workbench-hang.md`、`testing.md` |
 | retry、回退、恢复行为异常 | `big-question/pi-auto-retry-willretry.md`、`checkpoint-cross-session-wipe.md` |
 | 弹窗或下拉无响应 | `big-question/dialog-layering.md`、`ui-component-classname.md` |
 
