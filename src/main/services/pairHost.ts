@@ -89,7 +89,7 @@ import {
 import { seedRelayHostCache } from './pairRelayLookup';
 import { openPairRelayWebSocket } from './pairRelayOpen';
 import { PairReplayLog } from './pairReplay';
-import { commandAllowedForScope, deviceScope, setScopeInList } from './pairScope';
+import { commandAllowedForScope, deviceScope, scopeRejection, setScopeInList } from './pairScope';
 import {
   isSecureStorageAvailable,
   loadDevices,
@@ -902,15 +902,7 @@ async function handleFrame(
   const command = parsed.command;
   if (!commandAllowedForScope(deviceScope(conn.device), command.type)) {
     console.warn(`[pair] command rejected: ${command.type} needs operate scope`);
-    // bot-send 需要回执：否则手机离线队列一直停在「发送中」
-    if (command.type === 'bot-send')
-      void send(conn, {
-        type: 'bot-send-result',
-        chatId: command.chatId,
-        deliveryId: command.deliveryId,
-        ok: false,
-        error: 'read-only',
-      });
+    void send(conn, scopeRejection(command));
     return;
   }
   if ('sessionId' in command && command.sessionId) {

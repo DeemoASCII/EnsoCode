@@ -479,5 +479,7 @@ export type HostToPhone =
   | ({ type: 'bot-chat-state'; chatId: string } & PairBotChatState)
   /** bot-send 的应答：失败时手机提示并恢复输入 */
   | { type: 'bot-send-result'; chatId: string; deliveryId: string; ok: boolean; error?: string }
+  /** 只读设备的写命令被 host 拦截（bot-send 走 bot-send-result）；旧手机忽略 */
+  | { type: 'command-rejected'; command: string; error: 'read-only' }
   /** Bot 收件箱：未结束且未忽略的条目（新的在前），变化时整表重推 */
   | { type: 'bot-inbox'; items: PairBotInboxItem[] };

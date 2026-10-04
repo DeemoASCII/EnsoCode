@@ -1,9 +1,12 @@
 import { RotateCw, X } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import type { OutboxItem } from './botOutbox';
+import { rejectionText } from './readOnly';
 
 interface Props {
   items: readonly OutboxItem[];
+  /** 只读设备：重发也会被拦截，不给重试 */
+  readOnly?: boolean;
   onRetry(deliveryId: string): void;
   onDiscard(deliveryId: string): void;
 }
@@ -11,7 +14,7 @@ interface Props {
 const STATUS_TEXT = { pending: '待发送', sending: '发送中…', failed: '发送失败' } as const;
 
 /** Bot 聊天的离线待发队列：连上后按原 deliveryId 自动重发，失败的需手动重试 */
-export function OutboxBar({ items, onRetry, onDiscard }: Props) {
+export function OutboxBar({ items, readOnly, onRetry, onDiscard }: Props) {
   if (items.length === 0) return null;
   return (
     <div className="mb-1 space-y-1">
@@ -33,9 +36,9 @@ export function OutboxBar({ items, onRetry, onDiscard }: Props) {
             )}
           >
             {STATUS_TEXT[item.status]}
-            {item.status === 'failed' && item.error ? `：${item.error}` : ''}
+            {item.status === 'failed' && item.error ? `：${rejectionText(item.error)}` : ''}
           </span>
-          {item.status === 'failed' && (
+          {item.status === 'failed' && !readOnly && (
             <button
               type="button"
               aria-label="重试"

@@ -1,6 +1,6 @@
 import { PHONE_COMMAND_TYPES } from '@enso/pair';
 import { describe, expect, it } from 'vitest';
-import { commandAllowedForScope, deviceScope, setScopeInList } from './pairScope';
+import { commandAllowedForScope, deviceScope, scopeRejection, setScopeInList } from './pairScope';
 
 const device = (pairId: string, scope?: 'read' | 'operate') => ({
   pairId,
@@ -66,6 +66,21 @@ describe('配对作用域', () => {
 
   it('未来新增的未知命令在只读下默认拦截', () => {
     expect(commandAllowedForScope('read', 'bot-delegation-cancel')).toBe(false);
+  });
+
+  it('拦截后回执：bot-send 走 bot-send-result，其余写命令回 command-rejected', () => {
+    expect(scopeRejection({ type: 'bot-send', chatId: 'c', deliveryId: 'd', text: 'hi' })).toEqual({
+      type: 'bot-send-result',
+      chatId: 'c',
+      deliveryId: 'd',
+      ok: false,
+      error: 'read-only',
+    });
+    expect(scopeRejection({ type: 'task-stop', sessionId: 's', taskId: 't' })).toEqual({
+      type: 'command-rejected',
+      command: 'task-stop',
+      error: 'read-only',
+    });
   });
 
   it('setScopeInList 只改目标设备，未知设备原样返回', () => {

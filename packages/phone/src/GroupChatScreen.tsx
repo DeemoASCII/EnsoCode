@@ -20,6 +20,7 @@ import {
   mentionOptions,
 } from './botState';
 import type { ConnState, SessionView } from './client';
+import { readOnlyBanner } from './readOnly';
 
 export interface MemberPending {
   sessionId: string;
@@ -40,6 +41,8 @@ interface Props {
   outbox?: ReactNode;
   /** 桌面把本设备设为只读：只能看时间线 */
   deviceReadOnly?: boolean;
+  /** 有写操作刚被桌面以只读拦下 */
+  readOnlyRejected?: boolean;
   onOpenDrawer(): void;
   onLoadOlder(): void;
   onSend(text: string): void;
@@ -284,7 +287,7 @@ export function GroupChatScreen(props: Props) {
         )}
         {props.deviceReadOnly && (
           <p className="rounded-md bg-muted px-2 py-1 text-center text-muted-foreground text-xs">
-            此设备为只读，只能查看；可在桌面「设置 → 设备」切换为可操作
+            {readOnlyBanner(props.readOnlyRejected)}
           </p>
         )}
         {!props.deviceReadOnly &&

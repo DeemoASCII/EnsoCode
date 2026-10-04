@@ -32,6 +32,7 @@ import { buildTimeline } from '@/stores/sessions/timeline';
 import type { ConnState, SessionView } from './client';
 import { compressImage } from './image';
 import { appendEchoMessages, type QueueSendEcho } from './queueSendEcho';
+import { readOnlyBanner } from './readOnly';
 import { SessionStatsLine } from './SessionStatsLine';
 import { setDisplayedConversation } from './stubs/sessions-store';
 
@@ -80,6 +81,8 @@ interface Props {
   bot?: { readOnly?: boolean; onBack?(): void; notice?: string | null; outbox?: ReactNode };
   /** 桌面把本设备设为只读：只能查看，隐藏输入/审批/回答等写操作 */
   deviceReadOnly?: boolean;
+  /** 有写操作刚被桌面以只读拦下 */
+  readOnlyRejected?: boolean;
 }
 
 /** 会话页：复用桌面的时间线 / 审批条 / 输入框，保持与桌面一致的渲染 */
@@ -392,6 +395,7 @@ export function ChatScreen(props: Props) {
                 sessionId={sessionId}
                 tasks={view?.tasks ?? []}
                 subagents={view?.subagents ?? []}
+                readOnly={props.deviceReadOnly}
               />
               {bot?.outbox}
               {bot?.notice && (
@@ -401,7 +405,7 @@ export function ChatScreen(props: Props) {
               )}
               {props.deviceReadOnly ? (
                 <p className="mb-1 rounded-md bg-muted px-2 py-1 text-center text-muted-foreground text-xs">
-                  此设备为只读，只能查看；可在桌面「设置 → 设备」切换为可操作
+                  {readOnlyBanner(props.readOnlyRejected)}
                 </p>
               ) : (
                 <>

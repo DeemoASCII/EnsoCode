@@ -112,6 +112,8 @@ export interface ClientEvents {
   onVoiceInput?(available: boolean): void;
   /** 桌面把本设备设为只读（host-info.readOnly）；host 侧另有强制拦截 */
   onReadOnly?(readOnly: boolean): void;
+  /** 写命令被 host 拦截（如作用域刚被改成只读） */
+  onCommandRejected?(command: string, error: string): void;
   /** Bot 模式（桌面开启时才下发；enabled=false = 已关闭） */
   onBotCatalog?(enabled: boolean, bots: PairBotMember[]): void;
   onBotChats?(chats: PairBotChatSummary[]): void;
@@ -568,6 +570,10 @@ export class PairClient {
         break;
       case 'bot-inbox':
         if (Array.isArray(payload.items)) this.events.onBotInbox?.(payload.items);
+        break;
+      case 'command-rejected':
+        if (typeof payload.command === 'string')
+          this.events.onCommandRejected?.(payload.command, payload.error);
         break;
       default:
         // 新桌面新增的帧：旧逻辑不认识就忽略，不能影响后续帧

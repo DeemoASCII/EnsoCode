@@ -692,6 +692,15 @@ describe('PairClient 缓存与续传', () => {
     expect(onReadOnly).toHaveBeenLastCalledWith(false);
   });
 
+  it('写命令被 host 以只读拒绝时回报给上层', async () => {
+    const onCommandRejected = vi.fn();
+    events.onCommandRejected = onCommandRejected;
+    const socket = await start();
+    socket.receive({ type: 'command-rejected', command: 'task-stop', error: 'read-only' });
+    await settle();
+    expect(onCommandRejected).toHaveBeenCalledWith('task-stop', 'read-only');
+  });
+
   function voiceChunks(socket: Socket) {
     return socket.sent.flatMap((item) => (item.type === 'voice-chunk' ? [item] : []));
   }

@@ -44,6 +44,7 @@ import {
   userTextsOf,
   withoutQueuedIds,
 } from './queueSendEcho';
+import { READ_ONLY_ERROR } from './readOnly';
 import { SessionConfigSheet } from './SessionConfigSheet';
 import { SessionDrawer } from './SessionDrawer';
 import {
@@ -145,6 +146,8 @@ export function App() {
   const [voiceInput, setVoiceInput] = useState(false);
   /** 桌面把本设备设为只读（host-info.readOnly） */
   const [deviceReadOnly, setDeviceReadOnly] = useState(false);
+  /** 有写操作被桌面以只读拦下：横幅改为明确提示 */
+  const [readOnlyRejected, setReadOnlyRejected] = useState(false);
   /** 订阅进行中：开关乐观显示已开但禁用，避免数秒无反馈 */
   const [pushBusy, setPushBusy] = useState(false);
   const [pushError, setPushError] = useState<PushFailureReason | null>(null);
@@ -272,6 +275,11 @@ export function App() {
     setTransport('relay');
     setVoiceInput(false);
     setDeviceReadOnly(false);
+    setReadOnlyRejected(false);
+    const rejectedReadOnly = () => {
+      setDeviceReadOnly(true);
+      setReadOnlyRejected(true);
+    };
     const client = new PairClient(device, {
       onState: (next) => {
         if (next !== 'online') outboxRef.current?.interrupted();
@@ -283,7 +291,13 @@ export function App() {
       },
       onRtt: setRttMs,
       onVoiceInput: setVoiceInput,
-      onReadOnly: setDeviceReadOnly,
+      onReadOnly: (readOnly) => {
+        setDeviceReadOnly(readOnly);
+        if (!readOnly) setReadOnlyRejected(false);
+      },
+      onCommandRejected: (_command, error) => {
+        if (error === READ_ONLY_ERROR) rejectedReadOnly();
+      },
       onCatalog: (entries, order) => {
         setCatalog(entries);
         setPinnedOrder(order ?? []);
@@ -330,6 +344,7 @@ export function App() {
       },
       onBotSendResult: (result) => {
         outboxRef.current?.settle(result.deliveryId, result.ok, result.error);
+        if (result.error === READ_ONLY_ERROR) rejectedReadOnly();
       },
       onSync: (state) => setSyncing(state === 'syncing'),
       onGhostSession: (id) => {
@@ -684,6 +699,7 @@ export function App() {
   const outboxBar = (chatId: string) => (
     <OutboxBar
       items={outbox.filter((item) => item.chatId === chatId)}
+      readOnly={deviceReadOnly}
       onRetry={(id) => outboxRef.current?.retry(id)}
       onDiscard={(id) => outboxRef.current?.discard(id)}
     />
@@ -711,6 +727,7 @@ export function App() {
           notice={botNotice}
           outbox={outboxBar(chat.id)}
           deviceReadOnly={deviceReadOnly}
+          readOnlyRejected={readOnlyRejected}
           onOpenDrawer={openDrawer}
           onLoadOlder={() => {
             const beforeSeq = timelines[chat.id]?.entries[0]?.seq;
@@ -763,6 +780,7 @@ export function App() {
             : { notice: botNotice, outbox: outboxBar(chat.id) }
         }
         deviceReadOnly={deviceReadOnly}
+        readOnlyRejected={readOnlyRejected}
         onSend={(text, images) => sendBot(chat.id, text, images)}
         onAbort={() => subscribedId && send({ type: 'abort', sessionId: subscribedId })}
         onApproval={(requestId, decision) =>
@@ -847,6 +865,7 @@ export function App() {
           usageTotals={entry?.usageTotals}
           slashCommands={entry?.slashCommands}
           deviceReadOnly={deviceReadOnly}
+          readOnlyRejected={readOnlyRejected}
           onSend={(text, images) => {
             if (!activeId) return;
             const compact = parseCompactCommand(text);
@@ -937,7 +956,9 @@ export function App() {
                     chats={botChats}
                     activeChatId={botChatId}
                     inbox={botInbox}
-                    onDismiss={(key) => send({ type: 'bot-inbox-dismiss', key })}
+                    onDismiss={
+                      deviceReadOnly ? undefined : (key) => send({ type: 'bot-inbox-dismiss', key })
+                    }
                     onSelect={(chatId) => {
                       setBotChatId(chatId);
                       setProcessId(null);
@@ -952,7 +973,7 @@ export function App() {
       />
 
       <NewSessionSheet
-        open={composing}
+        open={composing && !deviceReadOnly}
         projects={projects}
         providers={providers}
         preferredProjectId={composeProjectId}
@@ -972,7 +993,7 @@ export function App() {
         }}
       />
 
-      {configurable && activeId && (
+      {configurable && activeId && !deviceReadOnly && (
         <SessionConfigSheet
           open={configOpen}
           providers={providers}

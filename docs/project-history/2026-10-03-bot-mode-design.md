@@ -576,7 +576,8 @@ Main 在 `spawnSession` 里根据 `ConversationAuthority.bot` 组装提示词，
 - 拦截点在 `pairHost.handleFrame`：`parsePhoneCommand` 通过后、任何分发之前。只读白名单：snapshot / subscribe / history / push-(un)subscribe / presence / direct-* / probe / bot-catalog-request / bot-chat-open / bot-timeline；其余（发送、排队、审批、提问回答、停止、任务/子代理停止、改模型、目标、语音、spawn……以及以后新增的命令）一律拒绝。`bot-send` 被拒时回 `bot-send-result{ok:false,error:'read-only'}`，让手机队列转为失败而不是一直发送中。
 - 下发：`host-info` 新增可选 `readOnly: true`（指纹随之变化，切换作用域后 `requestMeta` 即重发）；旧手机忽略该字段，仍会被 host 拦截。新手机收到后隐藏输入框、排队区、目标条、审批/提问条，禁用新建会话，并显示「此设备为只读」。
 - 桌面：「设置 → 设备」每台已配对设备显示「可操作 / 只读」徽标，点击切换；新增 IPC `PAIR_SET_SCOPE`（pairId + scope 按 unknown 收窄）。
-- 未做：手机 TaskBar 的停止按钮在只读下仍显示（点击被 host 拦截、无提示）；作用域只按设备粒度，不细分到会话或 Bot / Code。
+- 补齐：只读下 TaskBar 仍显示任务 / 子代理但不给停止按钮（`TaskBar.readOnly`），收件箱不给「忽略」、离线队列不给重试，新建会话 / 会话配置面板不打开；其余写命令被拒时 host 回 `command-rejected{command,error:'read-only'}`（`scopeRejection`，旧手机忽略），手机收到它或 `bot-send-result` 的 `read-only` 即置为只读，横幅改为「此设备为只读，刚才的操作未执行」，队列项显示「发送失败：此设备为只读」。真机（headless Chrome 跑手机 PWA dev 连隔离桌面）：后台 `sleep 900` 任务在可操作下有停止按钮、切只读后只剩任务行与横幅，强行发 `task-stop` / `bot-send` 均得到上述提示，切回可操作恢复。
+- 未做：作用域只按设备粒度，不细分到会话或 Bot / Code。
 
 **目标式新手引导**（`src/shared/bots/goalSuggest.ts`、`GoalOnboarding.tsx`）
 
