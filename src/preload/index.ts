@@ -147,6 +147,8 @@ import type {
   BotFileSearchRequest,
   BotFileSearchResult,
   BotGetResult,
+  BotGoalSuggestRequest,
+  BotGoalSuggestResult,
   BotNewSessionResult,
   BotNotesResult,
   BotPersonaSuggestRequest,
@@ -1223,6 +1225,8 @@ const electronAPI = {
       ipcRenderer.invoke(IPC_CHANNELS.BOT_SUGGEST_ABILITIES, request),
     suggestPersona: (request: BotPersonaSuggestRequest): Promise<BotPersonaSuggestResult> =>
       ipcRenderer.invoke(IPC_CHANNELS.BOT_SUGGEST_PERSONA, request),
+    suggestGoal: (request: BotGoalSuggestRequest): Promise<BotGoalSuggestResult> =>
+      ipcRenderer.invoke(IPC_CHANNELS.BOT_SUGGEST_GOAL, request),
     previewTeam: (request: BotTeamPreviewRequest): Promise<BotTeamPreviewResult> =>
       ipcRenderer.invoke(IPC_CHANNELS.BOT_TEAM_PREVIEW, request),
     createTeam: (request: BotTeamCreateRequest): Promise<BotTeamCreateResult> =>

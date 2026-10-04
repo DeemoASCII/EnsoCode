@@ -2307,6 +2307,17 @@ export const zhTranslations: Record<string, string> = {
   'No model is available. Set a default model or a Bot assistant model first.':
     '没有可用的模型，请先设置默认模型或 Bot 助理模型。',
   'Generate with AI': 'AI 生成',
+  'Start from a goal': '从目标开始',
+  'Tell us in one sentence what you want done; we will recommend a member or a team and draft your first message.':
+    '用一句话说说你想做什么，我们推荐一位成员或一个团队，并帮你起草第一条消息。',
+  'e.g. Track competitor news every week and send me a summary':
+    '例如：每周跟踪竞品动态，给我发一份摘要',
+  Recommend: '推荐',
+  'Recommended: one member': '推荐：单个成员',
+  'Recommended: a team': '推荐：一个团队',
+  'First message (put into the input box, not sent)': '第一条消息（放进输入框，不会自动发送）',
+  'Create this member': '创建这位成员',
+  'Create this team': '创建这个团队',
   'Fill in a name and title first.': '请先填写名称和头衔。',
   'Persona generated': '人设已生成',
   'Persona and responsibilities generated': '人设和职责已生成',

@@ -1,4 +1,5 @@
 import type { AbilitySuggestion } from '../bots/abilitySuggest';
+import type { GoalSuggestion, GoalSuggestTemplate } from '../bots/goalSuggest';
 import type { PersonaSuggestion } from '../bots/personaSuggest';
 import type { TeamFileError, TeamRename, TeamSpec } from '../bots/team';
 import type { AttachedImage, ConversationAuthority } from './agent';
@@ -172,6 +173,16 @@ export interface BotPersonaSuggestRequest {
 /** 职责为空时顺带给出 scope；error 同 BotAbilitySuggestResult */
 export type BotPersonaSuggestResult =
   | { ok: true; suggestion: PersonaSuggestion }
+  | (BotIpcError & { detail?: string });
+
+/** 目标式引导：templates 只传 id/标题/简介；error 同 BotAbilitySuggestResult */
+export interface BotGoalSuggestRequest {
+  goal: string;
+  language?: 'zh' | 'en';
+  templates?: GoalSuggestTemplate[];
+}
+export type BotGoalSuggestResult =
+  | { ok: true; suggestion: GoalSuggestion }
   | (BotIpcError & { detail?: string });
 
 /** 成员 / 群核心笔记；version 用于保存时防覆盖 */

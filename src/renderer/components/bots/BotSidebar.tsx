@@ -16,6 +16,7 @@ import {
   Plus,
   RotateCcw,
   Settings,
+  Target,
   Trash2,
   UserPlus,
   Users,
@@ -61,6 +62,7 @@ interface BotSidebarProps {
   onNewMember: () => void;
   onNewGroup: () => void;
   onNewTeam: () => void;
+  onStartFromGoal: () => void;
 }
 
 export function BotSidebar({
@@ -69,6 +71,7 @@ export function BotSidebar({
   onNewMember,
   onNewGroup,
   onNewTeam,
+  onStartFromGoal,
 }: BotSidebarProps) {
   const { t, locale } = useI18n();
   const bots = useBotsStore((s) => s.bots);
@@ -398,6 +401,14 @@ export function BotSidebar({
         </button>
         <div className="flex items-center">
           <BotSearchButton className={ICON_BUTTON_CLASS} />
+          <button
+            type="button"
+            className={ICON_BUTTON_CLASS}
+            onClick={onStartFromGoal}
+            title={t('Start from a goal')}
+          >
+            <Target className="h-4 w-4" />
+          </button>
           <button
             type="button"
             className={ICON_BUTTON_CLASS}

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { AbilitySuggestInput } from '../../../shared/bots/abilitySuggest';
-import { suggestAbilities, suggestPersona } from './abilitySuggester';
+import { suggestAbilities, suggestGoal, suggestPersona } from './abilitySuggester';
 
 const input: AbilitySuggestInput = {
   profile: { name: 'Rex', title: 'Reviewer', scope: 'Reviews PRs', persona: '' },
@@ -90,5 +90,31 @@ describe('suggestPersona', () => {
         signal.addEventListener('abort', () => reject(new Error('x')))
       );
     expect(await suggestPersona(persona, hang, 5)).toEqual({ ok: false, error: 'timeout' });
+  });
+});
+
+describe('suggestGoal', () => {
+  const goal = {
+    goal: '做个小程序',
+    language: 'zh' as const,
+    templates: [{ id: 'software', title: '软件开发小队', summary: '前后端测试' }],
+  };
+  it('returns the recommended team with the drafted first message', async () => {
+    const complete = vi.fn(
+      async (_request: { userText: string }, _signal: AbortSignal) =>
+        '{"kind":"team","templateId":"software","firstMessage":"开工"}'
+    );
+    expect(await suggestGoal(goal, complete)).toEqual({
+      ok: true,
+      suggestion: { kind: 'team', templateId: 'software', reason: '', firstMessage: '开工' },
+    });
+    expect(complete.mock.calls[0][0]).toMatchObject({
+      userText: expect.stringContaining('software'),
+    });
+  });
+  it('rejects a template the user does not have', async () => {
+    expect(
+      await suggestGoal(goal, async () => '{"kind":"team","templateId":"legal","firstMessage":"x"}')
+    ).toEqual({ ok: false, error: 'invalid-reply' });
   });
 });

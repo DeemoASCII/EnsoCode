@@ -4,17 +4,24 @@ import {
   parseAbilitySuggestion,
 } from '../../../shared/bots/abilitySuggest';
 import {
+  type GoalSuggestInput,
+  goalSuggestPrompt,
+  parseGoalSuggestion,
+} from '../../../shared/bots/goalSuggest';
+import {
   type PersonaSuggestInput,
   parsePersonaSuggestion,
   personaSuggestPrompt,
 } from '../../../shared/bots/personaSuggest';
 import type {
   BotAbilitySuggestResult,
+  BotGoalSuggestResult,
   BotPersonaSuggestResult,
 } from '../../../shared/types/botIpc';
 
 export const ABILITY_SUGGEST_TIMEOUT_MS = 20_000;
 export const PERSONA_SUGGEST_TIMEOUT_MS = 30_000;
+export const GOAL_SUGGEST_TIMEOUT_MS = 45_000;
 
 /** 便宜模型一次性补全；没有可用模型返回 null */
 export type AbilityCompleter = (
@@ -88,4 +95,17 @@ export function suggestPersona(
     complete,
     timeoutMs
   ) as Promise<BotPersonaSuggestResult>;
+}
+
+export function suggestGoal(
+  input: GoalSuggestInput,
+  complete: AbilityCompleter,
+  timeoutMs = GOAL_SUGGEST_TIMEOUT_MS
+): Promise<BotGoalSuggestResult> {
+  return runSuggest(
+    goalSuggestPrompt(input),
+    (text) => parseGoalSuggestion(text, input),
+    complete,
+    timeoutMs
+  ) as Promise<BotGoalSuggestResult>;
 }

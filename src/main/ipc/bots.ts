@@ -26,6 +26,7 @@ import type {
   BotEvent,
   BotFileSearchResult,
   BotGetResult,
+  BotGoalSuggestResult,
   BotNewSessionResult,
   BotNotesResult,
   BotPersonaSuggestResult,
@@ -59,6 +60,7 @@ import {
 import {
   type AbilityCompleter,
   suggestAbilities,
+  suggestGoal,
   suggestPersona,
 } from '../services/bots/abilitySuggester';
 import { BotMemoryService } from '../services/bots/botMemory';
@@ -123,6 +125,7 @@ import {
   parseBotUpdateInput,
   parseChatCreateInput,
   parseChatUpdateInput,
+  parseGoalSuggestRequest,
   parseNotesSaveInput,
   parseNotesTargetInput,
   parseOpenWorkspaceInput,
@@ -1161,6 +1164,16 @@ export function registerBotHandlers(): void {
       const parsed = parsePersonaSuggestRequest(request);
       if (!parsed) return INVALID;
       return suggestPersona(parsed, assistantCompleter(4096));
+    }
+  );
+
+  handle(
+    IPC_CHANNELS.BOT_SUGGEST_GOAL,
+    'write',
+    (_sender, request): Promise<BotGoalSuggestResult> | BotGoalSuggestResult => {
+      const parsed = parseGoalSuggestRequest(request);
+      if (!parsed) return INVALID;
+      return suggestGoal(parsed, assistantCompleter(4096));
     }
   );
 

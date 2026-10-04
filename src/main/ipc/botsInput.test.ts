@@ -5,6 +5,7 @@ import {
   parseBotUpdateInput,
   parseChatCreateInput,
   parseChatUpdateInput,
+  parseGoalSuggestRequest,
   parseNotesSaveInput,
   parseNotesTargetInput,
   parseOpenWorkspaceInput,
@@ -292,6 +293,42 @@ describe('parseAbilitySuggestRequest', () => {
     expect(parseAbilitySuggestRequest({ name: 'x'.repeat(201) })).toBeNull();
     expect(parseAbilitySuggestRequest({ name: ' ', scope: '' })).toBeNull();
     expect(parseAbilitySuggestRequest(null)).toBeNull();
+  });
+});
+
+describe('parseGoalSuggestRequest', () => {
+  const template = { id: 'software', title: '软件开发小队', summary: '前后端测试' };
+  it('目标必填，模板清单缺省为空，语言缺省 en', () => {
+    expect(parseGoalSuggestRequest({ goal: '写周报' })).toEqual({
+      goal: '写周报',
+      language: 'en',
+      templates: [],
+    });
+    expect(parseGoalSuggestRequest({ goal: 'x', language: 'zh', templates: [template] })).toEqual({
+      goal: 'x',
+      language: 'zh',
+      templates: [template],
+    });
+  });
+
+  it('拒绝空目标、超长、多余字段、坏模板与非法语言', () => {
+    for (const bad of [
+      null,
+      'goal',
+      { goal: '  ' },
+      { goal: 'x'.repeat(2_001) },
+      { goal: 'x', extra: 1 },
+      { goal: 'x', language: 'fr' },
+      { goal: 'x', templates: 'software' },
+      { goal: 'x', templates: [{ ...template, id: '../etc' }] },
+      { goal: 'x', templates: [{ ...template, extra: 1 }] },
+      { goal: 'x', templates: [{ id: 'a', title: 'b' }] },
+      {
+        goal: 'x',
+        templates: Array.from({ length: 11 }, (_, i) => ({ ...template, id: `t${i}` })),
+      },
+    ])
+      expect(parseGoalSuggestRequest(bad), JSON.stringify(bad)).toBeNull();
   });
 });
 

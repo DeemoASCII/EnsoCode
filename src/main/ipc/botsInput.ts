@@ -1,4 +1,5 @@
 import { CHAT_REF_MAX_PER_MESSAGE } from '@shared/bots/composerRefs';
+import type { GoalSuggestInput, GoalSuggestTemplate } from '@shared/bots/goalSuggest';
 import type { PersonaSuggestInput } from '@shared/bots/personaSuggest';
 import {
   APPROVAL_MODES,
@@ -505,6 +506,38 @@ export function parsePersonaSuggestRequest(value: unknown): PersonaSuggestInput 
   const language = input.language ?? 'en';
   if (language !== 'zh' && language !== 'en') return null;
   return { name, title, scope, persona, language };
+}
+
+const TEMPLATE_ID_RE = /^[a-z0-9-]{1,40}$/;
+
+function parseGoalTemplate(value: unknown): GoalSuggestTemplate | null {
+  const input = record(value);
+  if (!input || !onlyKeys(input, ['id', 'title', 'summary'])) return null;
+  const { id, title, summary } = input;
+  return typeof id === 'string' &&
+    TEMPLATE_ID_RE.test(id) &&
+    text(title, MAX.short) &&
+    text(summary, 500)
+    ? { id, title, summary }
+    : null;
+}
+
+/** 目标式引导：模板只带 id/标题/简介供模型挑选，模型回的 templateId 再按此清单校验 */
+export function parseGoalSuggestRequest(value: unknown): GoalSuggestInput | null {
+  const input = record(value);
+  if (!input || !onlyKeys(input, ['goal', 'language', 'templates'])) return null;
+  if (!text(input.goal, 2_000) || !input.goal.trim()) return null;
+  const language = input.language ?? 'en';
+  if (language !== 'zh' && language !== 'en') return null;
+  const rawTemplates = input.templates ?? [];
+  if (!Array.isArray(rawTemplates) || rawTemplates.length > 10) return null;
+  const templates: GoalSuggestTemplate[] = [];
+  for (const raw of rawTemplates) {
+    const template = parseGoalTemplate(raw);
+    if (!template) return null;
+    templates.push(template);
+  }
+  return { goal: input.goal, language, templates };
 }
 
 export function parseAbilitySuggestRequest(value: unknown): AbilitySuggestRequest | null {

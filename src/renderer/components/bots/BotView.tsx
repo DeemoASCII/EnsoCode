@@ -1,14 +1,33 @@
-import { Bot, Inbox, LayoutTemplate, PanelLeft, Settings, UserPlus, Users } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import {
+  Bot,
+  Inbox,
+  LayoutTemplate,
+  PanelLeft,
+  Settings,
+  Target,
+  UserPlus,
+  Users,
+} from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
 import { ResizeHandle } from '@/components/chat/ResizeHandle';
 import { Button } from '@/components/ui/button';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogPanel,
+  DialogTitle,
+} from '@/components/ui/dialog';
 import { useI18n } from '@/i18n';
 import { cn } from '@/lib/utils';
 import { useBotPendingCount, useBotsStore } from '@/stores/bots';
 import { BotChatView } from './BotChatView';
+import { seedBotDraft } from './BotComposer';
 import { BotInbox } from './BotInbox';
 import { BotSearchButton, BotSearchDialog } from './BotSearchDialog';
 import { BotSidebar, CountBadge } from './BotSidebar';
+import { GoalOnboarding, type GoalPick } from './GoalOnboarding';
 import { NewBotDialog } from './NewBotDialog';
 import { NewGroupDialog } from './NewGroupDialog';
 import { NewTeamDialog } from './NewTeamDialog';
@@ -34,6 +53,11 @@ export function BotView({ sidebarWidth, collapsed, onToggleCollapse, onResize }:
   const [newMember, setNewMember] = useState(false);
   const [newGroup, setNewGroup] = useState(false);
   const [newTeam, setNewTeam] = useState(false);
+  const [goalOpen, setGoalOpen] = useState(false);
+  /** 引导选定的推荐：交给成员 / 团队创建对话框，创建后把第一条消息填进输入框 */
+  const [pick, setPick] = useState<GoalPick | null>(null);
+  /** 创建对话框先关闭再回调 onCreated，第一条消息不能跟随 pick 一起被清掉 */
+  const firstMessageRef = useRef('');
   const inboxCount = useBotPendingCount();
 
   const chat = view?.kind === 'chat' ? chats.find((item) => item.id === view.chatId) : undefined;
@@ -43,6 +67,29 @@ export function BotView({ sidebarWidth, collapsed, onToggleCollapse, onResize }:
     if (loaded && view?.kind === 'chat' && !chat) setView(null);
   }, [loaded, view, chat, setView]);
 
+  const startPick = (next: GoalPick) => {
+    setGoalOpen(false);
+    setPick(next);
+    firstMessageRef.current = next.firstMessage.trim();
+    if (next.member) setNewMember(true);
+    else setNewTeam(true);
+  };
+  const seedFirstMessage = (chatId: string) => {
+    if (firstMessageRef.current) seedBotDraft(chatId, firstMessageRef.current);
+    firstMessageRef.current = '';
+  };
+  /** 普通入口打开创建对话框：不带引导推荐 */
+  const openMember = () => {
+    setPick(null);
+    firstMessageRef.current = '';
+    setNewMember(true);
+  };
+  const openTeam = () => {
+    setPick(null);
+    firstMessageRef.current = '';
+    setNewTeam(true);
+  };
+
   return (
     <>
       {collapsed ? (
@@ -51,7 +98,15 @@ export function BotView({ sidebarWidth, collapsed, onToggleCollapse, onResize }:
           <button
             type="button"
             className={RAIL_BUTTON}
-            onClick={() => setNewMember(true)}
+            onClick={() => setGoalOpen(true)}
+            title={t('Start from a goal')}
+          >
+            <Target className="h-4 w-4" />
+          </button>
+          <button
+            type="button"
+            className={RAIL_BUTTON}
+            onClick={openMember}
             title={t('New member')}
           >
             <UserPlus className="h-4 w-4" />
@@ -67,7 +122,7 @@ export function BotView({ sidebarWidth, collapsed, onToggleCollapse, onResize }:
           <button
             type="button"
             className={RAIL_BUTTON}
-            onClick={() => setNewTeam(true)}
+            onClick={openTeam}
             title={t('Create team from template')}
           >
             <LayoutTemplate className="h-4 w-4" />
@@ -108,9 +163,10 @@ export function BotView({ sidebarWidth, collapsed, onToggleCollapse, onResize }:
           <BotSidebar
             width={sidebarWidth}
             onCollapse={onToggleCollapse}
-            onNewMember={() => setNewMember(true)}
+            onNewMember={openMember}
             onNewGroup={() => setNewGroup(true)}
-            onNewTeam={() => setNewTeam(true)}
+            onNewTeam={openTeam}
+            onStartFromGoal={() => setGoalOpen(true)}
           />
           <ResizeHandle onResize={onResize} />
         </>
@@ -127,12 +183,17 @@ export function BotView({ sidebarWidth, collapsed, onToggleCollapse, onResize }:
           <p className="max-w-md text-muted-foreground text-sm">
             {bots.length === 0
               ? t(
-                  'Create members with their own persona, model and tools, then chat with them alone or in groups.'
+                  'Tell us in one sentence what you want done; we will recommend a member or a team and draft your first message.'
                 )
               : t('Pick a member or a group chat on the left.')}
           </p>
+          {bots.length === 0 && loaded && <GoalOnboarding onPick={startPick} />}
           <div className="flex gap-2">
-            <Button size="sm" onClick={() => setNewMember(true)}>
+            <Button
+              size="sm"
+              variant={bots.length === 0 ? 'outline' : 'default'}
+              onClick={openMember}
+            >
               <UserPlus />
               {t('New member')}
             </Button>
@@ -142,7 +203,7 @@ export function BotView({ sidebarWidth, collapsed, onToggleCollapse, onResize }:
                 {t('New group chat')}
               </Button>
             )}
-            <Button size="sm" variant="outline" onClick={() => setNewTeam(true)}>
+            <Button size="sm" variant="outline" onClick={openTeam}>
               <LayoutTemplate />
               {t('Create team from template')}
             </Button>
@@ -150,10 +211,35 @@ export function BotView({ sidebarWidth, collapsed, onToggleCollapse, onResize }:
         </div>
       )}
 
-      <NewBotDialog open={newMember} onOpenChange={setNewMember} />
+      <NewBotDialog
+        open={newMember}
+        onOpenChange={setNewMember}
+        seed={pick?.member}
+        onCreated={seedFirstMessage}
+      />
       <NewGroupDialog open={newGroup} onOpenChange={setNewGroup} />
       <BotSearchDialog />
-      <NewTeamDialog open={newTeam} onOpenChange={setNewTeam} />
+      <NewTeamDialog
+        open={newTeam}
+        onOpenChange={setNewTeam}
+        seedTemplateId={pick?.templateId}
+        onCreated={seedFirstMessage}
+      />
+      <Dialog open={goalOpen} onOpenChange={setGoalOpen}>
+        <DialogContent className="max-w-xl">
+          <DialogHeader>
+            <DialogTitle>{t('Start from a goal')}</DialogTitle>
+            <DialogDescription>
+              {t(
+                'Tell us in one sentence what you want done; we will recommend a member or a team and draft your first message.'
+              )}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogPanel className="flex justify-center pb-4">
+            {goalOpen && <GoalOnboarding onPick={startPick} />}
+          </DialogPanel>
+        </DialogContent>
+      </Dialog>
     </>
   );
 }

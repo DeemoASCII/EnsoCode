@@ -61,9 +61,15 @@ function teamFileErrorText(error: TeamFileError | string, t: TFunction): string 
 export function NewTeamDialog({
   open,
   onOpenChange,
+  seedTemplateId,
+  onCreated,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  /** 目标式引导推荐的模板：打开即进入该模板的预览 */
+  seedTemplateId?: string;
+  /** 创建并打开群聊后回调（引导据此预填第一条消息） */
+  onCreated?: (chatId: string) => void;
 }) {
   const { t, locale } = useI18n();
   const bots = useBotsStore((s) => s.bots);
@@ -82,6 +88,8 @@ export function NewTeamDialog({
     setProjectId(projects[0]?.id ?? '');
     setBusy(false);
     setError(null);
+    const template = TEAM_TEMPLATES.find((item) => item.id === seedTemplateId);
+    if (template) void load({ team: teamTemplateSpec(template, locale === 'zh' ? 'zh' : 'en') });
   }, [open]);
 
   const load = async (request: { team: TeamSpec } | { text: string }) => {
@@ -152,6 +160,7 @@ export function NewTeamDialog({
       store.setView({ kind: 'chat', chatId: result.chat.id });
       void store.loadLatest(result.chat.id);
       onOpenChange(false);
+      onCreated?.(result.chat.id);
     } finally {
       setBusy(false);
     }

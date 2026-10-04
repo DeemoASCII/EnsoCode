@@ -550,3 +550,34 @@ Main 在 `spawnSession` 里根据 `ConversationAuthority.bot` 组装提示词，
 **测试**：5 万条尾读正确性与相对耗时上界、跨块多字节 + 半截行、深翻页检查点与无检查点结果一致、id 索引重启后去重、异步扫描；会话 jsonl 增量扫描（追加、半截行、文件替换、原地改写已扫区域不再读到、崩溃重启后宿主拒绝重放）；压缩阈值、加载时压缩与归档、原子重写失败保留原文件、墓碑保 seq；迁移管线、旧数据读取、新版本记录拒绝与压缩保留。
 
 **真机**（隔离 userData，Max claude-sonnet-4-6 + hei qwen3.8-max，群时间线 2 万条 / 9.8MB）：打开 1.8ms；逐页翻到底 199 页共 427ms，单页最大 16ms，期间 Main 探针最大 10ms；学到检查点后深页 2ms。⌘K 搜索 98ms（命中 seq 19990 与 123），宽泛搜索 140ms，期间 Main 探针最大 12ms。两位成员 @ 回复正常；重启后 lastSeq 不回退，增量只投递 cursor 之后的两条。已知未解决：搜索结果跳到很早的条目时，renderer 按页累计渲染数千条时间线条目明显卡顿（renderer 未虚拟化，非 Main 读取问题）。
+
+## 手机离线发送、配对作用域与目标式引导（2026-10 补充）
+
+**手机离线发送队列**（`packages/phone/src/botOutbox.ts`、`OutboxBar.tsx`）
+
+- Bot 发送（私聊与群聊）一律先进队列：IndexedDB 独立库 `enso-phone-outbox`（不和会话缓存同库，免得被其容量淘汰），按 pairId 一条记录存整个队列；deliveryId 在入队时生成，之后重发永远沿用。状态 `pending → sending → 移除/failed`；连接离开 online 时在途项退回 pending，读盘时 `sending` 也按 pending 处理（结果未知，交给 Main 去重）；`failed` 不自动重试，由用户点重试（同一 id）或删除。连上（state=online）即冲刷，不必打开对应聊天。解绑设备时一并删除该配对的队列。
+- Main 去重：私聊沿用 `BotSessionHost.deliverConversation` 的 deliveryId 去重（已开始 → duplicate，排队中 → queued）；群聊原先没有去重，现在人类条目 id 取 `human:<deliveryId>`，`GroupChatService.send` 进锁后先 `chats.hasEntry` 判重，重复返回 `{ ok: true, duplicate: true }`，不再落时间线也不再触发路由。
+- 断线时群聊发送按钮不再禁用（有队列兜底）；Code 会话发送没有 deliveryId，本次不做离线队列。
+- 已知限制：在线状态下若帧被 `PairClient.send` 静默丢弃（极短的 socket 半开窗口），该项停在「发送中」直到下次重连。
+
+**配对作用域**（`packages/pair/src/relay.ts` `PairedDevice.scope`、`src/main/services/pairScope.ts`）
+
+- `scope: 'read' | 'operate'`，缺省（旧记录）与脏值都按 operate；重配对（同 pairId upsert）保留已设的作用域。
+- 拦截点在 `pairHost.handleFrame`：`parsePhoneCommand` 通过后、任何分发之前。只读白名单：snapshot / subscribe / history / push-(un)subscribe / presence / direct-* / probe / bot-catalog-request / bot-chat-open / bot-timeline；其余（发送、排队、审批、提问回答、停止、任务/子代理停止、改模型、目标、语音、spawn……以及以后新增的命令）一律拒绝。`bot-send` 被拒时回 `bot-send-result{ok:false,error:'read-only'}`，让手机队列转为失败而不是一直发送中。
+- 下发：`host-info` 新增可选 `readOnly: true`（指纹随之变化，切换作用域后 `requestMeta` 即重发）；旧手机忽略该字段，仍会被 host 拦截。新手机收到后隐藏输入框、排队区、目标条、审批/提问条，禁用新建会话，并显示「此设备为只读」。
+- 桌面：「设置 → 设备」每台已配对设备显示「可操作 / 只读」徽标，点击切换；新增 IPC `PAIR_SET_SCOPE`（pairId + scope 按 unknown 收窄）。
+- 未做：手机 TaskBar 的停止按钮在只读下仍显示（点击被 host 拦截、无提示）；作用域只按设备粒度，不细分到会话或 Bot / Code。
+
+**目标式新手引导**（`src/shared/bots/goalSuggest.ts`、`GoalOnboarding.tsx`）
+
+- 入口：Bot 模式没有任何成员时空态直接是目标输入框；侧栏底部与折叠栏新增「从目标开始」按钮，打开同一面板的对话框。
+- 推荐：IPC `BOT_SUGGEST_GOAL` 复用 `assistantCompleter`（Bot 助理模型 → 默认模型）与 `runSuggest`（45s 超时、no-model / timeout / invalid-reply）。Renderer 只传目标与内置团队模板的 id/标题/简介；模型回 `{kind:'member', member{name,title,scope,persona}}` 或 `{kind:'team', templateId}`，外加 reason 与 firstMessage。解析容忍外层废话与代码围栏；templateId 必须在传入清单内；成员名剥掉空格与非法字符并截到 24 字符，清理后为空即无效；缺 firstMessage 时回落为目标原文。
+- 确认后复用现有创建对话框：成员走 `NewBotDialog`（`seed` 预填为空白来源，可改名、补能力），团队走 `NewTeamDialog`（`seedTemplateId` 直接进入该模板的预览，仍可取舍成员、选工作区）。创建完成回调 `onCreated(chatId)`，`seedBotDraft` 把第一条消息写进该聊天输入框草稿（已挂载的输入框即时更新），不自动发送。
+
+**测试**（27 条）：队列入队/冲刷/在途回退/失败手动重试同 id/重启恢复/恢复与新入队合并/脏数据收窄；群聊同 deliveryId 重放只落一条且只投递一次；作用域缺省值、operate 全放行、read 白名单全矩阵、未知命令默认拒绝、重配对保留作用域；host-info readOnly 下发；推荐提示词、成员 / 团队解析、非法模板、名字清理、坏输入；IPC 入参收窄；suggestGoal 端到端与非法模板。
+
+**真机**（隔离 userData，桌面 dev + 手机 PWA dev 跑在 headless Chrome，经可开关的本地 CONNECT 代理走真实中继，屏蔽 WebRTC 以强制中继）：
+
+- 离线发送：代理断开 → 手机「重连中」，群聊里发送显示「待发送」；断网时刷新页面（模拟杀进程），IndexedDB 中仍是 pending；恢复网络后自动重连冲刷，群时间线出现唯一一条 `human:<deliveryId>`，群主回复 OK。把同一 deliveryId 以 `sending` 写回队列再刷新，重发后队列清空、时间线仍只有一条人类消息。
+- 只读：桌面切为只读后手机群聊底部只剩只读提示、输入框隐藏；强行把一条待发项塞进队列，host 日志 `bot-send needs operate scope`，手机项转为「发送失败：read-only」，时间线不变；切回可操作后点重试，以原 id `human:ro-test-1` 落入时间线。设置页徽标点击在「可操作 / 只读」间切换。
+- 引导：Max claude-sonnet-4-6 对「每周整理 AI 编程工具竞品简报」推荐单个成员「Vega · 竞品情报分析师」，确认后成员对话框预填，创建后私聊输入框里是起草的第一条消息、未发送；hei glm-5.3 对「记账小程序从需求到测试上线」推荐软件开发小队，确认后进入模板预览，创建团队后群聊输入框预填第一条消息。未覆盖：两家模型各只跑了一条路径（Claude 成员、GLM 团队）。

@@ -413,6 +413,7 @@ export const IPC_CHANNELS = {
   /** 「自动设置能力」：便宜模型按成员描述推荐能力，只返回建议不落盘 */
   BOT_SUGGEST_ABILITIES: 'bots:suggest-abilities',
   BOT_SUGGEST_PERSONA: 'bots:suggest-persona',
+  BOT_SUGGEST_GOAL: 'bots:suggest-goal',
   /** 团队模板 / 导入：校验并预览改名 */
   BOT_TEAM_PREVIEW: 'bots:team-preview',
   /** 原子创建团队（成员 + 群） */

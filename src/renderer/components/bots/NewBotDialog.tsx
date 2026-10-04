@@ -50,9 +50,15 @@ const blankDraft = (color: string): Draft => ({
 export function NewBotDialog({
   open,
   onOpenChange,
+  seed,
+  onCreated,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  /** 目标式引导推荐的成员：打开时直接填入（来源视为空白，可再改） */
+  seed?: { name: string; title: string; scope: string; persona: string };
+  /** 创建并打开私聊后回调（引导据此预填第一条消息） */
+  onCreated?: (chatId: string) => void;
 }) {
   const { t, locale } = useI18n();
   const bots = useBotsStore((s) => s.bots);
@@ -84,7 +90,11 @@ export function NewBotDialog({
   // biome-ignore lint/correctness/useExhaustiveDependencies: 每次打开重置
   useEffect(() => {
     if (!open) return;
-    applyTemplate(BOT_TEMPLATES[0]);
+    if (seed) {
+      setSource({ kind: 'blank' });
+      setDraft({ ...blankDraft(AVATAR_PALETTE[bots.length % AVATAR_PALETTE.length]), ...seed });
+      setError(null);
+    } else applyTemplate(BOT_TEMPLATES[0]);
     setTouched(false);
     setBusy(false);
     setAbilitiesOpen(false);
@@ -153,7 +163,8 @@ export function NewBotDialog({
       }
       useBotsStore.getState().upsertBot(result.bot);
       onOpenChange(false);
-      await useBotsStore.getState().openDirect(result.bot.id);
+      const chatId = await useBotsStore.getState().openDirect(result.bot.id);
+      if (chatId) onCreated?.(chatId);
     } finally {
       setBusy(false);
     }
