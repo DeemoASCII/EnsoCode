@@ -3,6 +3,13 @@
 `src/main/services/` 放不依赖 `ipcMain` 的业务逻辑。三类典型：**扫描外部应用配置**、
 **对外发起网络请求**、**agent worker 的生命周期托管**（`agentHost.ts`）。
 
+## Bot 宿主的投递边界
+
+- `status: idle` 不是回合终态：worker 还会发送 session-meta、turn-completed。Bot 槽位、结果归属与队列只在终态结算。
+- 委派结果使用稳定 delegationId，worker 开始处理后确认；重启通过 jsonl 用户消息去重，不以“已入队”当作已投递。
+- 委派的工具、审批、MCP、skill 生效权限须持久化，嵌套/恢复只收紧；子代理也继承父 workspace_write 禁用。
+- Bot 停用先冻结投递，再取消委派和排队项、清路由、退订并停止调度；排队取消按 deliveryId 结算，不能清掉同会话另一项的审批计时器。
+
 ## agentHost：worker 生命周期与命令下发
 
 `agentHost.ts` 托管唯一的 agent worker（`utilityProcess.fork(out/main/agent.js)`，

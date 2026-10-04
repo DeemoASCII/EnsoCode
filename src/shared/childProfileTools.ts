@@ -13,6 +13,7 @@ export interface ChildProfileToolOptions {
   exploreFold?: boolean;
   /** 缺省开启，与「disabledBuiltinTools 不含 isolated_sandbox」一致 */
   isolatedSandbox?: boolean;
+  workspaceWrite?: boolean;
 }
 
 /**
@@ -26,7 +27,7 @@ export function childProfileToolIds(
   const editMode = options.editMode ?? 'apply_patch';
   const shell = options.shell ?? 'bash';
   const ids = ['read', 'grep', 'find', 'ls'];
-  if (tools === 'all') {
+  if (tools === 'all' && options.workspaceWrite !== false) {
     ids.push(shell);
     if (editMode === 'apply_patch') ids.push('apply_patch');
     else ids.push('edit', 'write');

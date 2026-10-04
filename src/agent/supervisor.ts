@@ -1987,7 +1987,9 @@ export class SessionSupervisor {
         const childTools = isLockedEnso
           ? [createEnsoCapabilitiesTool(), createEnsoAppTool(ensoApp!), createAskTool(askManager!)]
           : [
-              ...(resolved?.tools === 'readonly' || agentType?.tools === 'readonly'
+              ...(!toolEnabled(WORKSPACE_WRITE_TOOL_ID) ||
+              resolved?.tools === 'readonly' ||
+              agentType?.tools === 'readonly'
                 ? readOnlyTools()
                 : buildBaseTools(childGate, undefined, agentType?.writeScope)),
               ...(typed ? typeMcpTools : wrapMcpTools(childGate)),

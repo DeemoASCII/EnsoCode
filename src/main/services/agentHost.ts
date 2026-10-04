@@ -17,6 +17,7 @@ import {
   type ChildProfileToolOptions,
   childProfileShell,
   childProfileToolIds,
+  WORKSPACE_WRITE_TOOL_ID,
 } from '@shared/childProfileTools';
 import { resolveCompactStrategy } from '@shared/compactStrategy';
 import {
@@ -637,6 +638,7 @@ export function resolveAgentTypeSpawnConfig(
     }),
     exploreFold: state?.exploreFoldEnabled === true,
     isolatedSandbox: !disabledTools.includes('isolated_sandbox'),
+    workspaceWrite: !disabledTools.includes(WORKSPACE_WRITE_TOOL_ID),
   };
   const expectedToolIds = expectedAgentTypeToolIds(definition.tools, {
     ...liveProfile,
@@ -825,6 +827,7 @@ export function spawnSession(
       }),
       exploreFold: exploreFoldEnabled,
       isolatedSandbox: !disabledTools.includes('isolated_sandbox'),
+      workspaceWrite: !disabledTools.includes(WORKSPACE_WRITE_TOOL_ID),
     });
   }
   return sent;

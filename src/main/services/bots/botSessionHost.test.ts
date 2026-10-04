@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -95,6 +95,101 @@ function ev(event: Record<string, unknown>, sessionId: string): AgentWorkerEvent
 }
 
 describe('BotSessionHost.ensureSession', () => {
+  it('deduplicates queued delivery IDs and recognizes delegation results persisted in user messages', async () => {
+    const alice = bot('Alice');
+    const chat = direct(alice.id);
+    const sent = await host.deliver(chat.id, alice.id, 'first', { deliveryId: 'first' });
+    if (!sent.ok) throw new Error(sent.error);
+    await host.deliver(chat.id, alice.id, 'later', { deliveryId: 'later', queueIfBusy: true });
+    await host.deliver(chat.id, alice.id, 'later', { deliveryId: 'later', queueIfBusy: true });
+    expect(host.queueState()).toHaveLength(1);
+    const file = join(root, 'session.jsonl');
+    writeFileSync(
+      file,
+      JSON.stringify({
+        type: 'message',
+        message: {
+          role: 'user',
+          content: [
+            {
+              type: 'text',
+              text: '<delegation-result id="persisted" from="Bob">done</delegation-result>',
+            },
+          ],
+        },
+      })
+    );
+    const conversation = registry.conversation(sent.conversationId)!;
+    const original = registry.conversation.bind(registry);
+    registry.conversation = (id) =>
+      id === sent.conversationId ? { ...conversation, sessionFile: file } : original(id);
+    expect(host.hasStartedDelivery(sent.conversationId, 'persisted')).toBe(true);
+    expect(host.hasStartedDelivery(sent.conversationId, 'absent')).toBe(false);
+    await host.deliver(chat.id, alice.id, 'do not replay', { deliveryId: 'persisted' });
+    expect(runtime.steers).toHaveLength(0);
+  });
+  it('idle does not start queued routines or misattribute the completed result', async () => {
+    const alice = bot('Alice');
+    const chat = direct(alice.id);
+    const results: BotTurnFinished[] = [];
+    host.onTurnFinished((event) => results.push(event));
+    const first = await host.deliver(chat.id, alice.id, 'first', { deliveryId: 'first' });
+    if (!first.ok) throw new Error(first.error);
+    await host.deliver(chat.id, alice.id, 'routine', { queueIfBusy: true, deliveryId: 'routine' });
+    host.observe(ev({ type: 'status', status: 'running' }, first.conversationId));
+    host.observe(
+      ev(
+        {
+          type: 'message-upsert',
+          index: 1,
+          message: { role: 'assistant', content: [{ type: 'text', text: 'first answer' }] },
+        },
+        first.conversationId
+      )
+    );
+    host.observe(ev({ type: 'status', status: 'idle' }, first.conversationId));
+    await flush();
+    expect(runtime.prompts).toHaveLength(1);
+    expect(host.runningCount()).toBe(1);
+    host.observe(ev({ type: 'turn-completed', turnId: 'first-turn' }, first.conversationId));
+    await flush();
+    expect(results).toMatchObject([{ deliveryId: 'first', text: 'first answer' }]);
+    expect(runtime.prompts).toHaveLength(2);
+  });
+
+  it('retiring a session settles queued deliveries exactly once as canceled', async () => {
+    const alice = bot('Alice');
+    const chat = direct(alice.id);
+    const results: BotTurnFinished[] = [];
+    host.onTurnFinished((event) => results.push(event));
+    const first = await host.deliver(chat.id, alice.id, 'first');
+    if (!first.ok) throw new Error(first.error);
+    await host.deliver(chat.id, alice.id, 'routine', { queueIfBusy: true, deliveryId: 'routine' });
+    host.retireSession(first.conversationId);
+    host.retireSession(first.conversationId);
+    expect(results.filter((event) => event.deliveryId === 'routine')).toMatchObject([
+      { ok: false, error: 'canceled' },
+    ]);
+    expect(host.runningCount()).toBe(0);
+  });
+
+  it('disabling the host rejects new delivery and cancels queued work', async () => {
+    const alice = bot('Alice');
+    const chat = direct(alice.id);
+    const results: BotTurnFinished[] = [];
+    host.onTurnFinished((event) => results.push(event));
+    await host.deliver(chat.id, alice.id, 'first');
+    await host.deliver(chat.id, alice.id, 'routine', { queueIfBusy: true, deliveryId: 'routine' });
+    host.dispose();
+    expect(await host.deliver(chat.id, alice.id, 'later')).toEqual({
+      ok: false,
+      error: 'disabled',
+    });
+    expect(results.filter((event) => event.deliveryId === 'routine')).toMatchObject([
+      { ok: false, error: 'canceled' },
+    ]);
+    expect(host.runningCount()).toBe(0);
+  });
   it('queues autonomous deliveries behind an active turn rather than steering', async () => {
     const alice = bot('Alice');
     const chat = direct(alice.id);

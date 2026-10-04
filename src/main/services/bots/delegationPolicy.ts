@@ -33,5 +33,7 @@ export function intersectBotPermissions(parent: BotProfile, target: BotProfile):
     ...target,
     tools: parent.tools === 'readonly' || target.tools === 'readonly' ? 'readonly' : 'all',
     approvalMode,
+    skillIds: target.skillIds.filter((id) => parent.skillIds.includes(id)),
+    mcpServerIds: target.mcpServerIds.filter((id) => parent.mcpServerIds.includes(id)),
   };
 }

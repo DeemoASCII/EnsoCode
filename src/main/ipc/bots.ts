@@ -78,6 +78,7 @@ interface BotServices {
   delegations: DelegationService;
   routines: BotRoutineStore;
   scheduler: RoutineScheduler;
+  runner: RoutineRunner;
 }
 
 type GroupSender = (
@@ -218,6 +219,7 @@ function createRuntime(botsRoot: string): BotRuntimePort {
 
 /** 首次使用时才建；开关关闭时不创建任何 Bot 服务 */
 export function getBotServices(): BotServices | null {
+  if (!botModeEnabled()) return null;
   if (services) return services;
   const authority = getSourceAuthorityRegistry();
   if (!authority) return null;
@@ -233,6 +235,9 @@ export function getBotServices(): BotServices | null {
     emit: emitBotEvent,
   });
   const groups = new GroupChatService({ bots, chats, host, emit: emitBotEvent });
+  host.onDiscard((scope) => {
+    if (scope.chatId) groups.discard(scope.chatId);
+  });
   const delegations = new DelegationService({
     bots,
     chats,
@@ -287,6 +292,7 @@ export function getBotServices(): BotServices | null {
   const memory = new BotMemoryService({
     bots,
     chats,
+    watermarksFile: path.join(userData, 'bot-chats', 'memory-watermarks.json'),
     isCodeProject: (id) => {
       const project = authority.project(id);
       return project?.state === 'active' && project.kind !== 'bot-home';
@@ -294,15 +300,30 @@ export function getBotServices(): BotServices | null {
     schedule: async (payload) =>
       (await import('../services/memoryHost')).scheduleMemoryDistill(payload),
   });
+  host.onDiscard((scope) => {
+    if (scope.conversationId) memory.remove(scope.conversationId);
+  });
   setBotGroupSender((chat, text, options) => groups.send(chat.id, text, options));
-  services = { bots, chats, host, groups, memory, delegations, routines, scheduler };
+  services = { bots, chats, host, groups, memory, delegations, routines, scheduler, runner };
   if (botModeEnabled()) scheduler.start();
   return services;
 }
 
 export function syncBotModeServices(): void {
   if (botModeEnabled()) getBotServices()?.scheduler.start();
-  else services?.scheduler.stop();
+  else if (services) {
+    const previous = services;
+    previous.host.freeze();
+    previous.scheduler.stop();
+    previous.groups.dispose();
+    previous.delegations.disable();
+    previous.host.dispose();
+    previous.runner.dispose();
+    previous.memory.dispose();
+    setBotWorkerEventObserver(null);
+    setBotGroupSender(null);
+    services = null;
+  }
 }
 
 function reservedNames(): string[] {

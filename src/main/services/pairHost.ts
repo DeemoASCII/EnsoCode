@@ -71,6 +71,7 @@ import { isDirectPeerAvailable, mainDirectPeerFactory, preloadDirectPeer } from 
 import { flushChangedMeta, requestPairMeta } from './pairMetaFlush';
 import { startPairNetworkWatch } from './pairNetworkWatch';
 import {
+  botCommandError,
   checkSetModel,
   checkSpawn,
   narrowSnapshot,
@@ -871,6 +872,16 @@ async function handleFrame(
     return;
   }
   const command = parsed.command;
+  if ('sessionId' in command && command.sessionId) {
+    const error = botCommandError(
+      command.type,
+      (botPort?.sessionAccess(command.sessionId) ?? 'none') !== 'none'
+    );
+    if (error) {
+      console.warn(`[pair] command rejected: ${error}`);
+      return;
+    }
+  }
   switch (command.type) {
     case 'prompt':
       agentBridge?.prompt(command.sessionId, command.text, command.images);

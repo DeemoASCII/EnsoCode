@@ -8,10 +8,12 @@ import type { GroupChatService } from './groupChat';
 
 type Result = { ok: boolean; error?: string };
 export class RoutineRunner {
+  private readonly unsubscribe: () => void;
+  private disposed = false;
   private pending = new Map<string, (result: Result) => void>();
   private approvals = new Map<
     string,
-    { conversationId: string; timer: ReturnType<typeof setTimeout> }
+    { conversationId: string; deliveryId: string; timer: ReturnType<typeof setTimeout> }
   >();
   constructor(
     private readonly deps: {
@@ -21,7 +23,7 @@ export class RoutineRunner {
       deny: (identity: SessionIdentity, requestId: string) => void;
     }
   ) {
-    deps.host.onTurnFinished((event) => {
+    this.unsubscribe = deps.host.onTurnFinished((event) => {
       if (event.deliveryId) {
         this.pending.get(event.deliveryId)?.({
           ok: event.ok,
@@ -30,7 +32,10 @@ export class RoutineRunner {
         this.pending.delete(event.deliveryId);
       }
       for (const [key, approval] of this.approvals)
-        if (approval.conversationId === event.conversationId) {
+        if (
+          approval.conversationId === event.conversationId &&
+          approval.deliveryId === event.deliveryId
+        ) {
           clearTimeout(approval.timer);
           this.approvals.delete(key);
         }
@@ -38,6 +43,7 @@ export class RoutineRunner {
   }
 
   run(routine: BotRoutine): Promise<Result> {
+    if (this.disposed) return Promise.resolve({ ok: false, error: 'disabled' });
     const deliveryId = `routine:${randomUUID()}`;
     const text = `<routine title="${routine.title.replaceAll('&', '&amp;').replaceAll('"', '&quot;').replaceAll('<', '&lt;')}">${routine.prompt}</routine>`;
     return new Promise((resolve) => {
@@ -67,6 +73,7 @@ export class RoutineRunner {
   }
 
   observe(event: AgentWorkerEvent | { type: 'worker-exited' }): void {
+    if (this.disposed) return;
     if (event.type !== 'approval-request' && event.type !== 'approval-resolved') return;
     const requestId = event.type === 'approval-request' ? event.request.requestId : event.requestId;
     const key = `${event.identity.sessionId}:${event.identity.generation}:${requestId}`;
@@ -87,6 +94,15 @@ export class RoutineRunner {
       30 * 60 * 1000
     );
     timer.unref?.();
-    this.approvals.set(key, { conversationId, timer });
+    this.approvals.set(key, { conversationId, deliveryId: delivery, timer });
+  }
+
+  dispose(): void {
+    this.disposed = true;
+    this.unsubscribe();
+    for (const resolve of this.pending.values()) resolve({ ok: false, error: 'canceled' });
+    this.pending.clear();
+    for (const approval of this.approvals.values()) clearTimeout(approval.timer);
+    this.approvals.clear();
   }
 }

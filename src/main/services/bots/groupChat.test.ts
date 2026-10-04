@@ -15,10 +15,15 @@ let a: string;
 let b: string;
 let id: string;
 let finish: (event: BotTurnFinished) => void;
+let deliverySent: (event: { conversationId: string; deliveryId: string }) => void;
 const deliver = vi.fn();
 const stopTurn = vi.fn(async () => {});
 const emit = vi.fn();
 const host = {
+  onDeliverySent: (listener: typeof deliverySent) => {
+    deliverySent = listener;
+    return () => {};
+  },
   deliver,
   stopTurn,
   onTurnFinished: (listener: typeof finish) => {
@@ -79,6 +84,32 @@ it('routes mentions in order, then uses the boss without mentions', async () => 
   await group.send(id, 'question');
   expect(group.state(id)).toMatchObject({ current: a });
   expect(emit).toHaveBeenCalledWith({ kind: 'timeline', chatId: id, seq: 1 });
+});
+it('queued delivery only commits cursor after the worker receives the message', async () => {
+  chats.update(id, (chat) => ({ ...chat, sessions: { [a]: { conversationId: a, cursor: 0 } } }));
+  deliver.mockResolvedValueOnce({ ok: true, conversationId: a, queued: true });
+  await group.send(id, 'hello');
+  expect(chats.get(id)!.sessions[a].cursor).toBe(0);
+  const options = deliver.mock.calls[0][3];
+  deliverySent({ conversationId: a, deliveryId: options.deliveryId });
+  expect(chats.get(id)!.sessions[a].cursor).toBe(1);
+});
+it('failed delivery is not a skip and continues to the next member', async () => {
+  deliver.mockResolvedValueOnce({ ok: false, error: 'offline' });
+  await group.send(id, '@Bob @Alice hello');
+  expect(deliver.mock.calls.map((call) => call[1])).toEqual([b, a]);
+  expect(entries()).toEqual(
+    expect.arrayContaining([expect.objectContaining({ kind: 'system', text: 'Bob 暂时无法回复' })])
+  );
+});
+it('disposing prevents background relay and settles autonomous waiters', async () => {
+  await group.send(id, 'hello');
+  const pending = group.runAs(id, b, 'routine', 'routine');
+  await group.settled(id);
+  group.dispose();
+  expect(await pending).toMatchObject({ ok: false });
+  await done(a, '@Bob next');
+  expect(deliver).toHaveBeenCalledTimes(1);
 });
 
 it('queues routine replies behind the group round and selects the requested member', async () => {

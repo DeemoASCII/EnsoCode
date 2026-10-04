@@ -59,17 +59,23 @@ describe('delegation policy', () => {
     expect(delegationPolicy(parent, target, 2, 3)).toBeDefined();
     expect(delegationPolicy(parent, target, 2, 2, [a, b])).toBeUndefined();
   });
-  it('never widens parent permissions and retains target assets', () => {
+  it('never widens parent permissions and intersects target assets', () => {
     expect(
       intersectBotPermissions(
-        { ...profile(a), tools: 'readonly', approvalMode: 'supervised' },
-        { ...profile(b), skillIds: ['target'], mcpServerIds: ['mcp'] }
+        {
+          ...profile(a),
+          tools: 'readonly',
+          approvalMode: 'supervised',
+          skillIds: ['shared', 'parent'],
+          mcpServerIds: ['common', 'private'],
+        },
+        { ...profile(b), skillIds: ['target', 'shared'], mcpServerIds: ['mcp', 'common'] }
       )
     ).toMatchObject({
       tools: 'readonly',
       approvalMode: 'supervised',
-      skillIds: ['target'],
-      mcpServerIds: ['mcp'],
+      skillIds: ['shared'],
+      mcpServerIds: ['common'],
     });
     expect(
       intersectBotPermissions(
@@ -77,6 +83,23 @@ describe('delegation policy', () => {
         { ...profile(b), approvalMode: 'auto-edits' }
       ).approvalMode
     ).toBe('supervised');
+  });
+  it('persists effective permissions and rejects malformed permission snapshots', () => {
+    const effectivePermissions = {
+      tools: 'readonly',
+      approvalMode: 'supervised',
+      skillIds: ['shared'],
+      mcpServerIds: [],
+    };
+    expect(parseDelegation({ ...record, effectivePermissions })).toMatchObject({
+      effectivePermissions,
+    });
+    expect(
+      parseDelegation({
+        ...record,
+        effectivePermissions: { ...effectivePermissions, skillIds: 'all' },
+      })
+    ).toBeUndefined();
   });
 });
 

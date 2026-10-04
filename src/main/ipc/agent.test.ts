@@ -293,6 +293,38 @@ describe('agent IPC Main identity boundary', () => {
     expect(mocks.spawnSession).not.toHaveBeenCalled();
   });
 
+  it('Bot authority rejects generic execution and policy changes but keeps abort available', async () => {
+    vi.spyOn(getSourceAuthorityRegistry()!, 'conversation').mockReturnValue({
+      conversationId: 'bot-target',
+      projectId: 'p',
+      kind: 'root',
+      lifecycle: 'ready',
+      version: 1,
+      bot: { botId: '11111111-1111-4111-8111-111111111111', chatId: null },
+    });
+    mocks.currentIdentity.mockReturnValue({ sessionId: 'bot-target', generation: 'g' });
+    for (const [channel, args] of [
+      [IPC_CHANNELS.AGENT_PROMPT, ['hello']],
+      [IPC_CHANNELS.AGENT_STEER, ['hello']],
+      [IPC_CHANNELS.AGENT_SET_MODEL, ['provider', 'model']],
+      [IPC_CHANNELS.AGENT_SET_THINKING, ['high']],
+      [IPC_CHANNELS.AGENT_SET_REASONING, [true]],
+      [IPC_CHANNELS.AGENT_SET_APPROVAL_MODE, ['full']],
+    ] as const) {
+      expect(await mocks.handlers.get(channel)!(event, 'bot-target', ...args)).toMatchObject({
+        ok: false,
+        error: expect.stringContaining('Bot'),
+      });
+    }
+    const bridge = mocks.setPairAgentBridge.mock.calls.at(-1)![0];
+    expect(bridge.prompt('bot-target', 'hello')).toMatchObject({ ok: false });
+    expect(bridge.steer('bot-target', 'hello')).toMatchObject({ ok: false });
+    bridge.abort('bot-target');
+    expect(mocks.abortSession).toHaveBeenCalled();
+    expect(mocks.promptSession).not.toHaveBeenCalled();
+    expect(mocks.steerSession).not.toHaveBeenCalled();
+  });
+
   it('cleans a late fork file if the target was removed before completion', () => {
     const sourceId = '11111111-1111-4111-8111-111111111111';
     const targetId = '33333333-3333-4333-8333-333333333333';

@@ -18,7 +18,7 @@ afterEach(() => {
   vi.useRealTimers();
   rmSync(root, { recursive: true, force: true });
 });
-function fixture() {
+function fixture(autoStart = true) {
   const bots = new BotStore(join(root, 'bots'));
   const a = bots.create({ name: 'Alice' }, []),
     b = bots.create({ name: 'Bob' }, []);
@@ -32,7 +32,7 @@ function fixture() {
     workspace: { kind: 'member-home' },
   })!;
   const authority = new SourceAuthorityRegistry({ registryFile: join(root, 'authority.json') });
-  const prompts: Array<{ id: string; text: string }> = [];
+  const prompts: Array<{ id: string; text: string; deliveryId?: string }> = [];
   const abort = vi.fn();
   const host = new BotSessionHost({
     bots,
@@ -41,8 +41,17 @@ function fixture() {
     emit: () => {},
     runtime: {
       spawn: async () => ({ ok: true }),
-      prompt: (id, text) => {
-        prompts.push({ id, text });
+      prompt: (id, text, _images, deliveryId) => {
+        prompts.push({ id, text, deliveryId });
+        if (autoStart)
+          queueMicrotask(() =>
+            host.observe({
+              type: 'status',
+              status: 'running',
+              identity: { sessionId: id, generation: 'g' },
+              seq: 1,
+            })
+          );
         return { ok: true };
       },
       steer: () => ({ ok: true }),
@@ -107,6 +116,49 @@ it('truncates context, finishes once, and waits for the busy parent', async () =
   expect(f.prompts.filter((p) => p.text.includes('<delegation-result'))).toHaveLength(1);
   f.service.dispose();
 });
+it('persists permission intersections and keeps nested delegations restricted after restore', async () => {
+  const f = fixture();
+  const alice = f.deps.bots.list().find((bot) => bot.name === 'Alice')!;
+  const bob = f.deps.bots.list().find((bot) => bot.name === 'Bob')!;
+  f.deps.bots.update(
+    alice.id,
+    {
+      tools: 'readonly',
+      approvalMode: 'supervised',
+      skillIds: ['shared'],
+      mcpServerIds: ['common'],
+    },
+    []
+  );
+  f.deps.bots.update(bob.id, { skillIds: ['shared', 'bob'], mcpServerIds: ['common', 'bob'] }, []);
+  const first = f.service.delegate(f.parent, { to: 'Bob', task: 'one' });
+  if (!first.ok) throw new Error(first.error);
+  const record = f.store.get(first.delegationId)!;
+  expect(record.effectivePermissions).toEqual({
+    tools: 'readonly',
+    approvalMode: 'supervised',
+    skillIds: ['shared'],
+    mcpServerIds: ['common'],
+  });
+  await vi.advanceTimersByTimeAsync(0);
+  f.deps.bots.update(
+    alice.id,
+    { tools: 'all', skillIds: ['shared', 'bob'], mcpServerIds: ['common', 'bob'] },
+    []
+  );
+  const nested = f.service.delegate(record.childConversationId, { to: 'Alice', task: 'nested' });
+  if (!nested.ok) throw new Error(nested.error);
+  const child = f.store.get(nested.delegationId)!;
+  expect(child.effectivePermissions).toEqual(record.effectivePermissions);
+  await vi.advanceTimersByTimeAsync(0);
+  f.finish(record.childConversationId);
+  f.finish(child.childConversationId);
+  await vi.advanceTimersByTimeAsync(0);
+  expect(f.host.effectiveBot(record.childConversationId)).toMatchObject(
+    record.effectivePermissions!
+  );
+  f.service.dispose();
+});
 it('times out and aborts; cancellation is final', async () => {
   const f = fixture();
   const sent = f.service.delegate(f.parent, { to: 'Bob', task: 'work' });
@@ -116,6 +168,35 @@ it('times out and aborts; cancellation is final', async () => {
   expect(f.abort).toHaveBeenCalled();
   f.service.dispose();
 });
+it('disabling cancels running delegation timers and rejects subsequent delegate calls', async () => {
+  const f = fixture();
+  const sent = f.service.delegate(f.parent, { to: 'Bob', task: 'work' });
+  if (!sent.ok) throw new Error(sent.error);
+  await vi.advanceTimersByTimeAsync(0);
+  f.service.disable();
+  await vi.advanceTimersByTimeAsync(2000);
+  expect(f.store.get(sent.delegationId)?.state).toBe('canceled');
+  expect(f.abort).toHaveBeenCalled();
+  expect(f.service.delegate(f.parent, { to: 'Bob', task: 'more' })).toEqual({
+    ok: false,
+    error: 'disabled',
+  });
+});
+it.each(['chat', 'initiator', 'target'] as const)(
+  'deleting %s cancels associated delegations and aborts their child sessions',
+  async (kind) => {
+    const f = fixture();
+    const sent = f.service.delegate(f.parent, { to: 'Bob', task: 'work' });
+    if (!sent.ok) throw new Error(sent.error);
+    await vi.advanceTimersByTimeAsync(0);
+    const record = f.store.get(sent.delegationId)!;
+    if (kind === 'chat') f.host.discardChat(record.chatId!);
+    else f.host.discardBot(kind === 'initiator' ? record.parentBotId : record.targetBotId);
+    expect(f.store.get(record.id)?.state).toBe('canceled');
+    expect(f.abort).toHaveBeenCalledWith(record.childConversationId);
+    f.service.dispose();
+  }
+);
 it('marks unfinished work interrupted on restart without replaying it', async () => {
   const f = fixture();
   const sent = f.service.delegate(f.parent, { to: 'Bob', task: 'work' });
@@ -162,4 +243,65 @@ it('does not mark a result delivered while global slots are exhausted', async ()
   await f.service.deliverPending();
   expect(f.store.get(record.id)?.deliveredAt).toBeDefined();
   f.service.dispose();
+});
+it('uses delegationId and only marks delivered after the parent turn actually starts', async () => {
+  const f = fixture(false);
+  const sent = f.service.delegate(f.parent, { to: 'Bob', task: 'work' });
+  if (!sent.ok) throw new Error(sent.error);
+  await vi.advanceTimersByTimeAsync(0);
+  f.finish(f.store.get(sent.delegationId)!.childConversationId);
+  await vi.advanceTimersByTimeAsync(0);
+  const results = () => f.prompts.filter((prompt) => prompt.text.includes('<delegation-result'));
+  expect(results()).toMatchObject([{ deliveryId: sent.delegationId }]);
+  expect(f.store.get(sent.delegationId)?.deliveredAt).toBeUndefined();
+  await f.service.deliverPending();
+  expect(results()).toHaveLength(1);
+  f.host.observe({
+    type: 'status',
+    status: 'running',
+    identity: { sessionId: f.parent, generation: 'g' },
+    seq: 2,
+  });
+  expect(f.store.get(sent.delegationId)?.deliveredAt).toBeDefined();
+  f.service.dispose();
+});
+it('publishes only a delegation summary in groups without duplicating a bot message', async () => {
+  const f = fixture();
+  const members = f.deps.bots.list().map((bot) => bot.id);
+  const alice = f.deps.bots.list().find((bot) => bot.name === 'Alice')!;
+  const chat = f.deps.chats.create({
+    kind: 'group',
+    title: 'team',
+    members,
+    bossBotId: alice.id,
+    workspace: { kind: 'chat-home', projectId: 'home' },
+  })!;
+  const parent = f.host.ensureSession(chat.id, alice.id);
+  if (!parent.ok) throw new Error(parent.error);
+  const sent = f.service.delegate(parent.conversationId, { to: 'Bob', task: 'work' });
+  if (!sent.ok) throw new Error(sent.error);
+  await vi.advanceTimersByTimeAsync(0);
+  const record = f.store.get(sent.delegationId)!;
+  f.host.observe({
+    type: 'turn-completed',
+    identity: { sessionId: record.childConversationId, generation: 'g' },
+    seq: 2,
+    turnId: 'turn',
+    digest: { assistantText: 'result summary' },
+  } as Parameters<BotSessionHost['observe']>[0]);
+  await vi.advanceTimersByTimeAsync(0);
+  expect(f.deps.chats.readEntries(chat.id)).toEqual([
+    expect.objectContaining({ kind: 'delegation', summary: 'result summary' }),
+  ]);
+  f.service.dispose();
+  const completed = f.store.get(record.id)!;
+  f.store.save({ ...completed, deliveredAt: undefined });
+  vi.spyOn(f.host, 'isBusy').mockReturnValue(false);
+  const deliverGroupResult = vi.fn(async () => ({ ok: true as const }));
+  const restarted = new DelegationService({ ...f.deps, deliverGroupResult });
+  await vi.advanceTimersByTimeAsync(0);
+  expect(deliverGroupResult).not.toHaveBeenCalled();
+  expect(f.store.get(record.id)?.deliveredAt).toBeDefined();
+  expect(f.deps.chats.readEntries(chat.id)).toHaveLength(1);
+  restarted.dispose();
 });

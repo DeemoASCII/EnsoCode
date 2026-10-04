@@ -544,13 +544,23 @@ export async function readSessionHistoryFile(
  * 准入是策略，留在本文件（与渲染层走同一套 exactIdentity / persistedRootSpawn 守卫）；
  * pairHost 只做传输。解析不出身份就丢弃命令，不降级成按 sessionId 盲发。
  */
+function botControlError(sessionId: unknown): { ok: false; error: string } | undefined {
+  return typeof sessionId === 'string' && sourceAuthority?.conversation(sessionId)?.bot
+    ? { ok: false, error: 'Bot sessions must use Bot services for execution and policy changes.' }
+    : undefined;
+}
+
 function wirePairAgentBridge(): void {
   setPairAgentBridge({
     prompt: (sessionId, text, images) => {
+      const rejected = botControlError(sessionId);
+      if (rejected) return rejected;
       const identity = exactIdentity(sessionId);
       if (identity) promptSession(identity, text, images);
     },
     steer: (sessionId, text, images) => {
+      const rejected = botControlError(sessionId);
+      if (rejected) return rejected;
       const identity = exactIdentity(sessionId);
       if (identity) steerSession(identity, text, images);
     },
@@ -604,10 +614,14 @@ function wirePairSessionHost(): void {
       return spawnBoundSession(identity, request, credentialKeys);
     },
     prompt: (sessionId, text, images) => {
+      const rejected = botControlError(sessionId);
+      if (rejected) return rejected;
       const identity = exactIdentity(sessionId);
       if (identity) promptSession(identity, text, images);
     },
     steer: (sessionId, text, images) => {
+      const rejected = botControlError(sessionId);
+      if (rejected) return rejected;
       const identity = exactIdentity(sessionId);
       if (identity) steerSession(identity, text, images);
     },
@@ -616,6 +630,8 @@ function wirePairSessionHost(): void {
       if (identity) abortSession(identity);
     },
     setModel: (sessionId, providerId, modelId) => {
+      const rejected = botControlError(sessionId);
+      if (rejected) return rejected;
       const identity = rootIdentity(sessionId);
       if (!identity) return;
       void readStoredOauthCredentialKeys()
@@ -623,6 +639,8 @@ function wirePairSessionHost(): void {
         .catch(() => {});
     },
     setReasoning: (sessionId, enabled, level) => {
+      const rejected = botControlError(sessionId);
+      if (rejected) return rejected;
       const identity = exactIdentity(sessionId);
       if (!identity) return;
       const thinking =
@@ -632,19 +650,27 @@ function wirePairSessionHost(): void {
       setSessionReasoning(identity, enabled, thinking);
     },
     setThinking: (sessionId, level) => {
+      const rejected = botControlError(sessionId);
+      if (rejected) return rejected;
       const identity = exactIdentity(sessionId);
       if (!identity || !(THINKING_LEVELS as readonly string[]).includes(level)) return;
       setSessionThinking(identity, level as ThinkingLevel);
     },
     compact: (sessionId, instructions) => {
+      const rejected = botControlError(sessionId);
+      if (rejected) return rejected;
       const identity = exactIdentity(sessionId);
       if (identity) compactSession(identity, instructions);
     },
     rewind: (sessionId, userIndexFromEnd, restoreFiles) => {
+      const rejected = botControlError(sessionId);
+      if (rejected) return rejected;
       const identity = exactIdentity(sessionId);
       if (identity) rewindSession(identity, userIndexFromEnd, restoreFiles);
     },
     retry: (sessionId) => {
+      const rejected = botControlError(sessionId);
+      if (rejected) return rejected;
       const identity = exactIdentity(sessionId);
       if (identity) retrySession(identity);
     },
@@ -1100,7 +1126,9 @@ export function registerAgentHandlers(): void {
         if (!service || !params || typeof params !== 'object' || Array.isArray(params)) {
           sendDelegationResultToSession(identity, requestId, {
             ok: false,
-            error: 'Bot delegation unavailable or invalid arguments.',
+            error: botModeEnabled()
+              ? 'Bot delegation unavailable or invalid arguments.'
+              : 'disabled',
           });
           return;
         }
@@ -1482,6 +1510,8 @@ export function registerAgentHandlers(): void {
       images?: unknown,
       deliveryId?: unknown
     ): AgentActionResult => {
+      const rejected = botControlError(sessionId);
+      if (rejected) return rejected;
       const identity = exactIdentity(sessionId);
       if (
         !identity ||
@@ -1508,6 +1538,8 @@ export function registerAgentHandlers(): void {
       images?: unknown,
       deliveryId?: unknown
     ): AgentActionResult => {
+      const rejected = botControlError(sessionId);
+      if (rejected) return rejected;
       const identity = exactIdentity(sessionId);
       if (
         !identity ||
@@ -1543,6 +1575,8 @@ export function registerAgentHandlers(): void {
   );
 
   ipcMain.handle(IPC_CHANNELS.AGENT_RETRY, (_event, sessionId: unknown): AgentActionResult => {
+    const rejected = botControlError(sessionId);
+    if (rejected) return rejected;
     const identity = exactIdentity(sessionId);
     return identity
       ? retrySession(identity)
@@ -1626,6 +1660,8 @@ export function registerAgentHandlers(): void {
   ipcMain.handle(
     IPC_CHANNELS.AGENT_SET_MODEL,
     async (_event, sessionId: unknown, providerId: unknown, modelId: unknown) => {
+      const rejected = botControlError(sessionId);
+      if (rejected) return rejected;
       const identity = exactIdentity(sessionId);
       if (!identity || 'parent' in identity) {
         return { ok: false, error: 'invalid session or stale generation' };
@@ -1646,6 +1682,8 @@ export function registerAgentHandlers(): void {
   ipcMain.handle(
     IPC_CHANNELS.AGENT_SET_THINKING,
     (_event, sessionId: unknown, level: unknown): AgentActionResult => {
+      const rejected = botControlError(sessionId);
+      if (rejected) return rejected;
       const identity = exactIdentity(sessionId);
       if (!identity || !THINKING_LEVELS.includes(level as ThinkingLevel)) {
         return { ok: false, error: 'invalid thinking level or stale generation' };
@@ -1657,6 +1695,8 @@ export function registerAgentHandlers(): void {
   ipcMain.handle(
     IPC_CHANNELS.AGENT_SET_REASONING,
     (_event, sessionId: unknown, enabled: unknown, level?: unknown): AgentActionResult => {
+      const rejected = botControlError(sessionId);
+      if (rejected) return rejected;
       const identity = exactIdentity(sessionId);
       if (!identity || typeof enabled !== 'boolean') {
         return { ok: false, error: 'invalid reasoning input or stale generation' };
@@ -1686,6 +1726,8 @@ export function registerAgentHandlers(): void {
   ipcMain.handle(
     IPC_CHANNELS.AGENT_SET_APPROVAL_MODE,
     async (_event, sessionId: unknown, mode: unknown): Promise<AgentActionResult> => {
+      const rejected = botControlError(sessionId);
+      if (rejected) return rejected;
       const identity = exactIdentity(sessionId);
       if (!identity || !APPROVAL_MODES.includes(mode as ApprovalMode)) {
         return { ok: false, error: 'invalid approval mode or stale generation' };
@@ -1701,6 +1743,8 @@ export function registerAgentHandlers(): void {
   ipcMain.handle(
     IPC_CHANNELS.AGENT_SET_PLAN_MODE,
     (_event, sessionId: unknown, active: unknown): AgentActionResult => {
+      const rejected = botControlError(sessionId);
+      if (rejected) return rejected;
       const identity = exactIdentity(sessionId);
       const command = identity && parseAgentCommand({ type: 'set-plan-mode', identity, active });
       if (!command) return { ok: false, error: 'invalid plan mode or stale generation' };
@@ -1736,6 +1780,8 @@ export function registerAgentHandlers(): void {
   ipcMain.handle(
     IPC_CHANNELS.AGENT_COMPACT,
     (_event, sessionId: unknown, instructions: unknown): AgentActionResult => {
+      const rejected = botControlError(sessionId);
+      if (rejected) return rejected;
       const identity = exactIdentity(sessionId);
       if (
         !identity ||
@@ -1751,6 +1797,8 @@ export function registerAgentHandlers(): void {
   ipcMain.handle(
     IPC_CHANNELS.AGENT_REWIND,
     (_event, sessionId: unknown, entryId: unknown, restoreFiles: unknown): AgentActionResult => {
+      const rejected = botControlError(sessionId);
+      if (rejected) return rejected;
       const identity = exactIdentity(sessionId);
       if (
         !identity ||
@@ -1772,6 +1820,8 @@ export function registerAgentHandlers(): void {
       targetConversationId: unknown,
       anchor: unknown
     ): AgentActionResult => {
+      const rejected = botControlError(sessionId);
+      if (rejected) return rejected;
       const identity = exactIdentity(sessionId);
       const record = asRecord(anchor);
       const entryId = typeof record?.entryId === 'string' ? record.entryId : undefined;

@@ -41,9 +41,27 @@ export class DelegationService {
   private readonly timers = new Map<string, ReturnType<typeof setTimeout>>();
   private readonly delivering = new Set<string>();
   private readonly unsubscribe: () => void;
+  private readonly unsubscribeDiscard: () => void;
+  private readonly unsubscribeStarted: () => void;
   private disposed = false;
 
   constructor(private readonly deps: Deps) {
+    this.unsubscribeStarted = deps.host.onDeliveryStarted((event) => {
+      const record = deps.store.get(event.deliveryId);
+      if (record && record.parentConversationId === event.conversationId && !active(record))
+        this.delivered(record);
+    });
+    this.unsubscribeDiscard = deps.host.onDiscard((scope) => {
+      for (const record of deps.store.list()) {
+        if (
+          (scope.chatId && record.chatId === scope.chatId) ||
+          (scope.botId &&
+            (record.parentBotId === scope.botId || record.targetBotId === scope.botId)) ||
+          (scope.conversationId && record.parentConversationId === scope.conversationId)
+        )
+          this.cancel(record.id);
+      }
+    });
     for (const record of deps.store.list()) {
       if (active(record))
         this.save({ ...record, state: 'failed', failure: 'interrupted', finishedAt: Date.now() });
@@ -71,8 +89,9 @@ export class DelegationService {
   }
 
   delegate(parentConversationId: string, input: DelegateInput): DelegateResult {
+    if (this.disposed) return { ok: false, error: 'disabled' };
     const conversation = this.deps.authority.conversation(parentConversationId);
-    const parent = this.deps.host.effectiveBot(parentConversationId);
+    let parent = this.deps.host.effectiveBot(parentConversationId);
     const target = this.deps.bots
       .list()
       .find((bot) => bot.id === input.to || botNameKey(bot.name) === botNameKey(input.to));
@@ -84,6 +103,20 @@ export class DelegationService {
       conversation.bot.delegationId && this.deps.store.get(conversation.bot.delegationId);
     if (conversation.bot.delegationId && !ancestor)
       return { ok: false, error: 'Parent delegation record unavailable.' };
+    if (ancestor) {
+      parent = intersectBotPermissions(
+        {
+          ...parent,
+          ...(ancestor.effectivePermissions ?? {
+            tools: 'readonly',
+            approvalMode: 'supervised',
+            skillIds: [],
+            mcpServerIds: [],
+          }),
+        },
+        parent
+      );
+    }
     const depth = (ancestor ? ancestor.depth : 0) + 1;
     const chatId = conversation.bot.chatId ?? (ancestor ? ancestor.chatId : null);
     const chat = chatId ? this.deps.chats.get(chatId) : undefined;
@@ -108,13 +141,8 @@ export class DelegationService {
       chatId: null,
       delegationId: id,
     });
-    if (
-      !child ||
-      !this.deps.host.registerDelegation(
-        child.conversationId,
-        intersectBotPermissions(parent, target)
-      )
-    )
+    const effective = intersectBotPermissions(parent, target);
+    if (!child || !this.deps.host.registerDelegation(child.conversationId, effective))
       return { ok: false, error: 'Delegation workspace unavailable.' };
     const record: Delegation = {
       id,
@@ -128,6 +156,12 @@ export class DelegationService {
       state: 'queued',
       depth,
       createdAt: Date.now(),
+      effectivePermissions: {
+        tools: effective.tools,
+        approvalMode: effective.approvalMode,
+        skillIds: effective.skillIds,
+        mcpServerIds: effective.mcpServerIds,
+      },
     };
     this.save(record);
     const timer = setTimeout(
@@ -224,13 +258,21 @@ export class DelegationService {
         continue;
       const parent = this.deps.authority.conversation(record.parentConversationId);
       if (!parent || parent.lifecycle === 'ended') continue;
+      if (this.deps.host.hasStartedDelivery(record.parentConversationId, record.id)) {
+        this.delivered(record);
+        continue;
+      }
       if (parent.bot?.delegationId) {
         const bot = this.deps.bots.get(record.parentBotId);
+        const saved = this.deps.store.get(parent.bot.delegationId)?.effectivePermissions;
         // Interrupted delegation parents must not be restarted with their original task.
         if (
           !bot ||
           !this.deps.host.registerDelegation(parent.conversationId, {
-            ...bot,
+            ...intersectBotPermissions(
+              { ...bot, ...(saved ?? { skillIds: [], mcpServerIds: [] }) },
+              bot
+            ),
             tools: 'readonly',
             approvalMode: 'supervised',
           })
@@ -245,7 +287,7 @@ export class DelegationService {
             ? (record.result ?? '')
             : (record.error ?? record.failure ?? record.state);
         const text = `<delegation-result id="${record.id}" from="${escapeXml(from)}" status="${record.state}">${escapeXml(body)}</delegation-result>`;
-        const deliveryId = `delegation-result:${record.id}`;
+        const deliveryId = record.id;
         const sent =
           parent.bot?.chatId &&
           this.deps.chats.get(parent.bot.chatId)?.kind === 'group' &&
@@ -255,30 +297,8 @@ export class DelegationService {
                 onlyIfIdle: true,
                 deliveryId,
               });
-        if (!sent.ok) continue;
-        this.save({ ...record, deliveredAt: Date.now() });
-        if (record.chatId && this.deps.chats.get(record.chatId)?.kind === 'group') {
-          this.deps.chats.appendEntry(record.chatId, {
-            kind: 'delegation',
-            id: `delegation:${record.id}`,
-            at: Date.now(),
-            delegationId: record.id,
-            from: record.parentBotId,
-            to: record.targetBotId,
-            state: record.state,
-            summary: body.slice(0, 500),
-          });
-          this.deps.chats.appendEntry(record.chatId, {
-            kind: 'bot',
-            id: `delegation-bot:${record.id}`,
-            at: Date.now(),
-            botId: record.targetBotId,
-            text: body,
-            conversationId: record.childConversationId,
-            turnId: record.id,
-          });
-          this.deps.emit({ kind: 'timeline', chatId: record.chatId });
-        }
+        if (sent.ok && this.deps.host.hasStartedDelivery(record.parentConversationId, record.id))
+          this.delivered(record);
       } catch (cause) {
         console.warn('[bots] delegation delivery failed', cause);
       } finally {
@@ -290,8 +310,16 @@ export class DelegationService {
   dispose(): void {
     this.disposed = true;
     this.unsubscribe();
+    this.unsubscribeDiscard();
+    this.unsubscribeStarted();
     for (const timer of this.timers.values()) clearTimeout(timer);
     this.timers.clear();
+  }
+
+  disable(): void {
+    this.disposed = true;
+    for (const record of this.deps.store.list()) if (active(record)) this.cancel(record.id);
+    this.dispose();
   }
 
   private finish(
@@ -314,6 +342,34 @@ export class DelegationService {
     queueMicrotask(() => {
       void this.deliverPending(record.parentConversationId);
     });
+  }
+
+  private delivered(record: Delegation): void {
+    const latest = this.deps.store.get(record.id);
+    if (!latest || latest.deliveredAt !== undefined) return;
+    if (record.chatId && this.deps.chats.get(record.chatId)?.kind === 'group') {
+      const body =
+        record.state === 'completed'
+          ? (record.result ?? '')
+          : (record.error ?? record.failure ?? record.state);
+      if (
+        !this.deps.chats
+          .readEntries(record.chatId, { limit: Number.MAX_SAFE_INTEGER })
+          .some((entry) => entry.id === `delegation:${record.id}`)
+      )
+        this.deps.chats.appendEntry(record.chatId, {
+          kind: 'delegation',
+          id: `delegation:${record.id}`,
+          at: Date.now(),
+          delegationId: record.id,
+          from: record.parentBotId,
+          to: record.targetBotId,
+          state: record.state,
+          summary: body.slice(0, 500),
+        });
+      this.deps.emit({ kind: 'timeline', chatId: record.chatId });
+    }
+    this.save({ ...latest, deliveredAt: Date.now() });
   }
 
   private save(record: Delegation): void {

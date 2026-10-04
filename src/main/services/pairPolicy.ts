@@ -24,6 +24,28 @@ const isSafeIndex = (v: unknown): v is number =>
 const isChatId = (v: unknown): v is string => isStr(v) && v.length <= 128;
 const BOT_TEXT_MAX_CHARS = 100_000;
 
+export function botCommandError(type: string, bot: boolean): string | undefined {
+  return bot &&
+    [
+      'prompt',
+      'steer',
+      'enqueue',
+      'queue-send-now',
+      'queue-interrupt-send',
+      'set-model',
+      'set-thinking',
+      'set-reasoning',
+      'goal-set',
+      'goal-resume',
+      'retry',
+      'rewind',
+      'compact',
+      'spawn',
+    ].includes(type)
+    ? 'Bot sessions must use Bot services for execution and policy changes.'
+    : undefined;
+}
+
 function parseImages(value: unknown): { data: string; mimeType: string }[] | null {
   if (!Array.isArray(value) || value.length > 20) return null;
   const images: { data: string; mimeType: string }[] = [];

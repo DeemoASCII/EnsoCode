@@ -12,7 +12,7 @@ let bots: BotStore;
 let chats: BotChatStore;
 let botId: string;
 let chatId: string;
-const schedule = vi.fn(async () => 'entry-2');
+const schedule = vi.fn(async (_payload?: unknown) => 'entry-2');
 let memory: BotMemoryService;
 const conversation = () => ({
   conversationId: 'session',
@@ -93,4 +93,24 @@ it('does not overwrite a replacement session watermark', async () => {
   });
   await memory.distill(conversation());
   expect(chats.get(chatId)!.sessions[botId]).toEqual({ conversationId: 'new', cursor: 0 });
+});
+
+it('persists watermarks by conversation even after chat session replacement and deletes them with the conversation', async () => {
+  const deps = {
+    bots,
+    chats,
+    isCodeProject: () => true,
+    schedule,
+    watermarksFile: join(root, 'watermarks.json'),
+  };
+  const old = { ...conversation(), conversationId: 'delegation', bot: { botId, chatId: null } };
+  memory = new BotMemoryService(deps);
+  await memory.distill(old);
+  memory = new BotMemoryService(deps);
+  await memory.distill(old);
+  expect(schedule).toHaveBeenLastCalledWith(expect.objectContaining({ fromEntryId: 'entry-2' }));
+  memory.remove(old.conversationId);
+  memory = new BotMemoryService(deps);
+  await memory.distill(old);
+  expect(schedule.mock.calls.at(-1)![0]).not.toHaveProperty('fromEntryId');
 });

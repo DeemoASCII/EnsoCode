@@ -88,6 +88,28 @@ async function createBot(name: string): Promise<string> {
 }
 
 describe('bots IPC', () => {
+  it('mode off disposes the host and rebuilding on mode on creates fresh services', async () => {
+    const alice = await createBot('Alice');
+    const created = await call(IPC_CHANNELS.BOT_CHAT_CREATE, {
+      kind: 'direct',
+      members: [alice],
+      workspace: { kind: 'member-home' },
+    });
+    const chatId = (created.chat as { id: string }).id;
+    const { getBotServices, syncBotModeServices } = await import('./bots');
+    const previous = getBotServices()!;
+    await previous.host.deliver(chatId, alice, 'first');
+    mocks.settings.botModeEnabled = false;
+    syncBotModeServices();
+    expect(await previous.host.deliver(chatId, alice, 'later')).toEqual({
+      ok: false,
+      error: 'disabled',
+    });
+    expect(getBotServices()).toBeNull();
+    mocks.settings.botModeEnabled = true;
+    syncBotModeServices();
+    expect(getBotServices()).not.toBe(previous);
+  });
   it('validates routine ownership and cron; projects list/save/remove and disabled lists', async () => {
     const alice = await createBot('Alice');
     const bob = await createBot('Bob');

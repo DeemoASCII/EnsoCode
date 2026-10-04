@@ -192,7 +192,7 @@ bot 会话额外挂两个工具：
 
 **完成判定**：子会话 `turn-completed` 且这一轮没有以错误或中断结束，才算完成；result 取最后一条 assistant 文本。
 
-**结果投递**：复用 `ParentNotifier` 的形态。父会话空闲时注入 `<delegation-result>` 唤醒它；父会话忙时排到本轮结束之后。投递成功后写 `deliveredAt`，保证只投一次。在群聊里，同时向时间线写一条 `delegation` 条目，并以被委派成员的名义写一条 `bot` 消息；这条消息不触发路由（见路由规则 5）。
+**结果投递**：父会话空闲时注入 `<delegation-result id="delegationId">` 唤醒它；父会话忙时等到本轮终态。稳定 `deliveryId = delegationId`，父会话实际开始处理后才写 `deliveredAt`；重启后未确认结果至少一次重投，父会话依据内存及 jsonl 用户消息中的结果 id 去重。群时间线只保留一条带 `summary` 的 `delegation` 条目，供卡片与增量上下文使用，不再以被委派成员名义重复写 `bot` 消息；该条目不触发路由。
 
 **重启**：在 worker 恢复之前，把所有 queued 和 running 的委派标为 `failed/interrupted`，不自动重放（可能已经写盘），并通知父会话。用户可以在 UI 里点「重试」，重试会生成一条新记录。
 

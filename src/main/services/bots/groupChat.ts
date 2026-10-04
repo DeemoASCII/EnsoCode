@@ -45,7 +45,7 @@ interface AutonomousReply {
 interface GroupChatDeps {
   bots: BotStore;
   chats: BotChatStore;
-  host: Pick<BotSessionHost, 'deliver' | 'onTurnFinished' | 'stopTurn'>;
+  host: Pick<BotSessionHost, 'deliver' | 'onTurnFinished' | 'stopTurn' | 'onDeliverySent'>;
   emit: (event: BotEvent) => void;
 }
 const empty = (): RouterState => ({
@@ -62,6 +62,10 @@ export class GroupChatService {
   private rounds = new Map<string, Round>();
   private locks = new Map<string, Promise<unknown>>();
   private autonomous = new Map<string, AutonomousReply[]>();
+  private readonly cursors = new Map<string, { chatId: string; botId: string; cursor: number }>();
+  private readonly unsubscribe: () => void;
+  private readonly unsubscribeSent: () => void;
+  private disposed = false;
 
   constructor(private readonly deps: GroupChatDeps) {
     for (const chat of deps.chats.list()) {
@@ -80,8 +84,27 @@ export class GroupChatService {
       }
       this.persist(chat.id);
     }
-    deps.host.onTurnFinished((event) => {
-      if (!event.chatId || event.delegationId) return;
+    this.unsubscribeSent = deps.host.onDeliverySent((event) => {
+      const pending = this.cursors.get(event.deliveryId);
+      if (!pending) return;
+      this.cursors.delete(event.deliveryId);
+      deps.chats.update(pending.chatId, (chat) => {
+        const session = chat.sessions[pending.botId];
+        if (session?.conversationId === event.conversationId)
+          session.cursor = Math.max(session.cursor, pending.cursor);
+        return chat;
+      });
+    });
+    this.unsubscribe = deps.host.onTurnFinished((event) => {
+      if (event.deliveryId) this.cursors.delete(event.deliveryId);
+      if (
+        this.disposed ||
+        !event.chatId ||
+        event.delegationId ||
+        !this.rounds.has(event.chatId) ||
+        deps.chats.get(event.chatId)?.kind !== 'group'
+      )
+        return;
       const id = event.chatId;
       const generation = this.round(id).generation;
       void this.lock(id, () => this.finished(event, generation)).catch((error) =>
@@ -110,6 +133,7 @@ export class GroupChatService {
 
   send(chatId: string, text: string, options: BotDeliverOptions = {}): Promise<BotSendResult> {
     return this.lock(chatId, async () => {
+      if (this.disposed) return { ok: false, error: 'disabled' };
       const chat = this.deps.chats.get(chatId);
       if (chat?.kind !== 'group' || chat.archivedAt !== undefined)
         return { ok: false, error: 'group-unavailable' };
@@ -151,6 +175,10 @@ export class GroupChatService {
   ): Promise<BotSendResult> {
     return new Promise((resolve) => {
       void this.lock(chatId, async () => {
+        if (this.disposed) {
+          resolve({ ok: false, error: 'disabled' });
+          return;
+        }
         const chat = this.deps.chats.get(chatId);
         if (
           chat?.kind !== 'group' ||
@@ -195,6 +223,7 @@ export class GroupChatService {
   }
 
   private async finished(event: BotTurnFinished, generation: number): Promise<void> {
+    if (this.disposed) return;
     const chat = event.chatId ? this.deps.chats.get(event.chatId) : undefined;
     if (chat?.kind !== 'group') return;
     const round = this.round(chat.id);
@@ -219,7 +248,7 @@ export class GroupChatService {
         id: randomUUID(),
         at: Date.now(),
       });
-    this.advance(chat, event.ok ? event.text : '[skip]');
+    this.advance(chat, event.ok ? event.text : '');
     const pending = mergePending(round.pending);
     if (pending) {
       round.pending = [];
@@ -241,6 +270,7 @@ export class GroupChatService {
   }
 
   private async dispatch(chatId: string): Promise<void> {
+    if (this.disposed) return;
     const round = this.round(chatId);
     if (!round.state.current) {
       const job = this.autonomous.get(chatId)?.shift();
@@ -284,15 +314,15 @@ export class GroupChatService {
       const bot = this.deps.bots.get(botId);
       if (!bot || bot.archivedAt !== undefined || !chat.members.includes(botId)) {
         unavailable = true;
-        this.advance(chat, '[skip]');
+        this.advance(chat, '');
         continue;
       }
       round.generation++;
       this.persist(chatId);
       const sent = await this.deliver(chat, botId, round.options);
       if (sent.ok) return;
-      this.system(chatId, `${bot.name} 回复失败：${sent.error}`);
-      this.advance(chat, '[skip]');
+      this.system(chatId, `${bot.name} 暂时无法回复`);
+      this.advance(chat, '');
     }
     if (unavailable) this.system(chatId, '请先指定群主');
     if (this.autonomous.get(chatId)?.length) await this.dispatch(chatId);
@@ -308,8 +338,10 @@ export class GroupChatService {
       chatTitle: chat.title,
     });
     let result: BotDeliverResult;
+    const deliveryId = options?.deliveryId ?? randomUUID();
+    this.cursors.set(deliveryId, { chatId: chat.id, botId, cursor: delta.cursor });
     try {
-      result = await this.deps.host.deliver(chat.id, botId, delta.text, options);
+      result = await this.deps.host.deliver(chat.id, botId, delta.text, { ...options, deliveryId });
     } catch (error) {
       result = {
         ok: false as const,
@@ -319,10 +351,34 @@ export class GroupChatService {
     // ensureSession 首建会话会设到末尾；失败也要恢复投递前水位。
     this.deps.chats.update(chat.id, (draft) => {
       const session = draft.sessions[botId];
-      if (session) session.cursor = result.ok ? delta.cursor : cursor;
+      if (session) session.cursor = result.ok && !result.queued ? delta.cursor : cursor;
       return draft;
     });
+    if (!result.ok || !result.queued) this.cursors.delete(deliveryId);
     return result;
+  }
+
+  dispose(): void {
+    this.disposed = true;
+    this.unsubscribe();
+    this.unsubscribeSent();
+    for (const id of this.rounds.keys()) {
+      for (const job of this.autonomous.get(id) ?? [])
+        job.resolve({ ok: false, error: 'canceled' });
+      this.rounds.set(id, { state: empty(), pending: [], generation: 0 });
+      this.persist(id);
+    }
+    this.rounds.clear();
+    this.autonomous.clear();
+    this.cursors.clear();
+  }
+
+  discard(chatId: string): void {
+    for (const job of this.autonomous.get(chatId) ?? [])
+      job.resolve({ ok: false, error: 'canceled' });
+    this.autonomous.delete(chatId);
+    this.rounds.delete(chatId);
+    for (const [id, cursor] of this.cursors) if (cursor.chatId === chatId) this.cursors.delete(id);
   }
 
   private members(chat: BotChat) {

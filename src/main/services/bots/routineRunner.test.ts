@@ -6,6 +6,50 @@ import type { GroupChatService } from './groupChat';
 import { RoutineRunner } from './routineRunner';
 
 afterEach(() => vi.useRealTimers());
+it('dispose cancels pending routines and clears approval timers', async () => {
+  vi.useFakeTimers();
+  let deliveryId: string | undefined;
+  const deny = vi.fn();
+  const runner = new RoutineRunner({
+    host: {
+      onTurnFinished: () => () => {},
+      activeDeliveryId: () => deliveryId,
+      deliver: async (
+        _chat: string,
+        _bot: string,
+        _text: string,
+        options: { deliveryId: string }
+      ) => {
+        deliveryId = options.deliveryId;
+        return { ok: true, conversationId: 's', queued: true };
+      },
+    } as unknown as BotSessionHost,
+    chats: { get: () => ({ kind: 'direct' }) } as unknown as BotChatStore,
+    groups: {} as GroupChatService,
+    deny,
+  });
+  const pending = runner.run({
+    id: 'r',
+    botId: 'b',
+    chatId: 'c',
+    title: 'run',
+    prompt: 'work',
+    schedule: '* * * * *',
+    enabled: true,
+    createdAt: 0,
+    updatedAt: 0,
+  });
+  runner.observe({
+    type: 'approval-request',
+    identity: { sessionId: 's', generation: 'g' },
+    seq: 1,
+    request: { requestId: 'req' },
+  } as AgentWorkerEvent);
+  runner.dispose();
+  expect(await pending).toEqual({ ok: false, error: 'canceled' });
+  await vi.advanceTimersByTimeAsync(30 * 60 * 1000);
+  expect(deny).not.toHaveBeenCalled();
+});
 it('denies unanswered approvals after 30 minutes only for the routine delivery and exact identity', async () => {
   vi.useFakeTimers();
   let deliveryId: string | undefined;
@@ -54,6 +98,15 @@ it('denies unanswered approvals after 30 minutes only for the routine delivery a
     updatedAt: 0,
   });
   runner.observe(approval);
+  finish({
+    botId: 'b',
+    chatId: 'c',
+    conversationId: 's',
+    text: '',
+    ok: false,
+    error: 'canceled',
+    deliveryId: 'other-queued-routine',
+  });
   await vi.advanceTimersByTimeAsync(30 * 60 * 1000 - 1);
   expect(deny).not.toHaveBeenCalled();
   await vi.advanceTimersByTimeAsync(1);

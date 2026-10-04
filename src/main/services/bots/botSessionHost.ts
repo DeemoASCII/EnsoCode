@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import type {
   AgentWorkerEvent,
   AttachedImage,
@@ -129,6 +130,74 @@ export class BotSessionHost {
   private readonly independentSpecs = new Map<string, BotSpawnSpec>();
   private readonly liveProfiles = new Map<string, BotProfile>();
   private readonly activeDeliveries = new Map<string, string>();
+  private disposed = false;
+  private readonly deliveries = new Map<string, Map<string, 'sent' | 'started'>>();
+  private readonly startedListeners = new Set<
+    (event: { conversationId: string; deliveryId: string }) => void
+  >();
+
+  onDeliveryStarted(
+    listener: (event: { conversationId: string; deliveryId: string }) => void
+  ): () => void {
+    this.startedListeners.add(listener);
+    return () => this.startedListeners.delete(listener);
+  }
+
+  hasStartedDelivery(conversationId: string, deliveryId: string): boolean {
+    if (this.deliveries.get(conversationId)?.get(deliveryId) === 'started') return true;
+    const file = this.deps.authority.conversation(conversationId)?.sessionFile;
+    if (!file) return false;
+    try {
+      for (const line of readFileSync(file, 'utf8').split('\n')) {
+        try {
+          const entry = JSON.parse(line);
+          if (entry?.type !== 'message' || entry.message?.role !== 'user') continue;
+          const content = entry.message.content;
+          const texts =
+            typeof content === 'string'
+              ? [content]
+              : Array.isArray(content)
+                ? content.flatMap((part: { type?: string; text?: unknown }) =>
+                    part?.type === 'text' && typeof part.text === 'string' ? [part.text] : []
+                  )
+                : [];
+          if (
+            texts.some((text: string) =>
+              text.trimStart().startsWith(`<delegation-result id="${deliveryId}"`)
+            )
+          ) {
+            this.rememberDelivery(conversationId, deliveryId, 'started');
+            return true;
+          }
+        } catch {
+          /* torn line */
+        }
+      }
+    } catch {
+      /* no persisted session yet */
+    }
+    return false;
+  }
+  private readonly sentListeners = new Set<
+    (event: { conversationId: string; deliveryId: string }) => void
+  >();
+
+  onDeliverySent(
+    listener: (event: { conversationId: string; deliveryId: string }) => void
+  ): () => void {
+    this.sentListeners.add(listener);
+    return () => this.sentListeners.delete(listener);
+  }
+  private readonly discardListeners = new Set<
+    (scope: { chatId?: string; botId?: string; conversationId?: string }) => void
+  >();
+
+  onDiscard(
+    listener: (scope: { chatId?: string; botId?: string; conversationId?: string }) => void
+  ): () => void {
+    this.discardListeners.add(listener);
+    return () => this.discardListeners.delete(listener);
+  }
 
   constructor(private readonly deps: BotSessionHostDeps) {
     this.maxRunning = deps.maxRunningTurns ?? BOT_MAX_RUNNING_TURNS;
@@ -193,9 +262,10 @@ export class BotSessionHost {
   }
 
   async abortConversation(conversationId: string): Promise<void> {
-    this.queue = this.queue.filter((item) => item.conversationId !== conversationId);
+    this.cancelQueued((item) => item.conversationId === conversationId);
+    this.deps.runtime.abort?.(conversationId);
     await this.withLock(conversationId, async () => {
-      this.deps.runtime.abort?.(conversationId);
+      this.cancelActive(conversationId);
       await this.deps.runtime.release(conversationId);
       this.live.delete(conversationId);
       this.running.delete(conversationId);
@@ -216,9 +286,10 @@ export class BotSessionHost {
   async stopTurn(chatId: string, botId: string): Promise<void> {
     const id = this.deps.chats.get(chatId)?.sessions[botId]?.conversationId;
     if (!id) return;
-    this.queue = this.queue.filter((item) => item.conversationId !== id);
+    this.cancelQueued((item) => item.conversationId === id);
     await this.withLock(id, async () => {
       this.deps.runtime.abort?.(id);
+      this.cancelActive(id);
       // 等旧 generation 结束再允许后续发送，避免迟到的完成事件污染新一轮。
       await this.deps.runtime.release(id);
       this.live.delete(id);
@@ -302,6 +373,7 @@ export class BotSessionHost {
     text: string,
     options: BotDeliverOptions = {}
   ): Promise<BotDeliverResult> {
+    if (this.disposed) return { ok: false, error: 'disabled' };
     const session = this.ensureSession(chatId, botId);
     if (!session.ok) return session;
     const { conversationId } = session;
@@ -313,12 +385,26 @@ export class BotSessionHost {
     text: string,
     options: BotDeliverOptions = {}
   ): Promise<BotDeliverResult> {
+    if (this.disposed) return { ok: false, error: 'disabled' };
     const binding = this.binding(conversationId);
     if (!binding) return { ok: false, error: 'not-bot-session' };
     const { botId } = binding;
     const chatId = binding.chatId ?? '';
     const delivery: Delivery = { ...options, chatId, botId, conversationId, text };
     return this.withLock(conversationId, async (): Promise<BotDeliverResult> => {
+      if (this.disposed) return { ok: false, error: 'disabled' };
+      if (options.deliveryId) {
+        if (this.hasStartedDelivery(conversationId, options.deliveryId))
+          return { ok: true, conversationId };
+        if (
+          this.deliveries.get(conversationId)?.has(options.deliveryId) ||
+          this.queue.some(
+            (item) =>
+              item.conversationId === conversationId && item.deliveryId === options.deliveryId
+          )
+        )
+          return { ok: true, conversationId, queued: true };
+      }
       if (
         options.onlyIfIdle &&
         (this.isBusy(conversationId) || this.runningCount() >= this.maxRunning)
@@ -358,6 +444,7 @@ export class BotSessionHost {
   discardChat(chatId: string): boolean {
     const chat = this.deps.chats.get(chatId);
     if (!chat) return false;
+    for (const listener of this.discardListeners) listener({ chatId });
     for (const conversation of this.deps.authority.botConversations()) {
       if (conversation.bot?.chatId === chatId) this.discardConversation(conversation);
     }
@@ -375,6 +462,7 @@ export class BotSessionHost {
     const chats = this.deps.chats.list();
     const bossOf = chats.filter((chat) => chat.bossBotId === botId).map((chat) => chat.id);
     if (bossOf.length > 0) return { ok: false, reason: 'boss', chatIds: bossOf };
+    for (const listener of this.discardListeners) listener({ botId });
     for (const chat of chats) {
       if (chat.kind === 'direct' && chat.members.includes(botId)) this.discardChat(chat.id);
       else if (chat.sessions[botId]) this.resetSessions(chat.id, [botId]);
@@ -392,6 +480,7 @@ export class BotSessionHost {
   }
 
   observe(event: AgentWorkerEvent | { type: 'worker-exited' }): void {
+    if (this.disposed) return;
     if (event.type === 'worker-exited') {
       const interrupted = [...this.slots.keys()];
       this.live.clear();
@@ -412,10 +501,9 @@ export class BotSessionHost {
           if (!this.running.has(id) && !slot?.sawRunning) this.lastAssistant.delete(id);
           this.running.add(id);
           if (slot) slot.sawRunning = true;
+          this.deliveryStarted(id);
           return;
         }
-        this.running.delete(id);
-        if (slot && (slot.sawRunning || event.status === 'failed')) this.release(id);
         return;
       }
       case 'message-upsert': {
@@ -434,6 +522,8 @@ export class BotSessionHost {
         return;
       }
       case 'turn-completed': {
+        if (!this.turnActive(id)) return;
+        this.deliveryStarted(id);
         const last = this.lastAssistant.get(id);
         const failed = last?.stopReason === 'error' || last?.stopReason === 'aborted';
         this.running.delete(id);
@@ -449,6 +539,7 @@ export class BotSessionHost {
         return;
       }
       case 'turn-failed':
+        if (!this.turnActive(id)) return;
         this.running.delete(id);
         this.finish(id, event.turnId, false, event.error, this.lastAssistant.get(id)?.text ?? '');
         this.lastAssistant.delete(id);
@@ -475,7 +566,7 @@ export class BotSessionHost {
     const cached = this.bindings.get(conversationId);
     if (cached !== undefined) return cached;
     const binding = this.deps.authority.conversation(conversationId)?.bot ?? null;
-    this.bindings.set(conversationId, binding);
+    if (binding) this.bindings.set(conversationId, binding);
     return binding;
   }
 
@@ -490,12 +581,14 @@ export class BotSessionHost {
       delivery.images,
       delivery.deliveryId
     );
+    if (sent.ok) this.deliverySent(delivery);
     return sent.ok
       ? { ok: true, conversationId: delivery.conversationId }
       : { ok: false, error: sent.error ?? 'steer-failed' };
   }
 
   private async start(delivery: Delivery): Promise<BotDeliverResult> {
+    if (this.disposed) return { ok: false, error: 'disabled' };
     const { conversationId } = delivery;
     const conversation = this.deps.authority.conversation(conversationId);
     const bot = this.deps.bots.get(delivery.botId);
@@ -525,6 +618,13 @@ export class BotSessionHost {
       if (!spec.ok) return fail(spec.error);
       const spawned = await this.deps.runtime.spawn(spec.spec);
       if (!spawned.ok) return fail(spawned.error ?? 'spawn-failed');
+      if (
+        this.disposed ||
+        this.deps.authority.conversation(conversationId)?.lifecycle === 'ended'
+      ) {
+        await this.deps.runtime.release(conversationId);
+        return fail(this.disposed ? 'disabled' : 'canceled');
+      }
       this.liveProfiles.set(conversationId, spec.spec.bot);
       this.live.add(conversationId);
     }
@@ -535,7 +635,32 @@ export class BotSessionHost {
       delivery.deliveryId
     );
     if (!sent.ok) return fail(sent.error ?? 'prompt-failed');
+    this.deliverySent(delivery);
     return { ok: true, conversationId };
+  }
+
+  private deliverySent(delivery: Delivery): void {
+    if (!delivery.deliveryId) return;
+    this.rememberDelivery(delivery.conversationId, delivery.deliveryId, 'sent');
+    for (const listener of this.sentListeners)
+      listener({ conversationId: delivery.conversationId, deliveryId: delivery.deliveryId });
+  }
+
+  private rememberDelivery(
+    conversationId: string,
+    deliveryId: string,
+    state: 'sent' | 'started'
+  ): void {
+    const records = this.deliveries.get(conversationId) ?? new Map();
+    if (records.get(deliveryId) !== 'started') records.set(deliveryId, state);
+    this.deliveries.set(conversationId, records);
+  }
+
+  private deliveryStarted(conversationId: string): void {
+    const deliveryId = this.activeDeliveries.get(conversationId);
+    if (!deliveryId || this.deliveries.get(conversationId)?.get(deliveryId) === 'started') return;
+    this.rememberDelivery(conversationId, deliveryId, 'started');
+    for (const listener of this.startedListeners) listener({ conversationId, deliveryId });
   }
 
   private spawnSpec(delivery: Delivery): { ok: true; spec: BotSpawnSpec } | Fail {
@@ -575,6 +700,7 @@ export class BotSessionHost {
   }
 
   private pump(): void {
+    if (this.disposed) return;
     const touched = new Set<string>();
     while (this.queue.length > 0) {
       const index = this.queue.findIndex(
@@ -590,16 +716,32 @@ export class BotSessionHost {
         // 走同一把锁：同会话前一条可能还在 spawn
         void this.withLock(next.conversationId, async () => {
           const steered = this.steer(next);
-          if (!steered.ok) this.finish(next.conversationId, undefined, false, steered.error);
+          if (!steered.ok)
+            this.finish(
+              next.conversationId,
+              undefined,
+              false,
+              steered.error,
+              '',
+              next.deliveryId ?? null
+            );
         });
         continue;
       }
       this.slots.set(next.conversationId, { sawRunning: false });
+      if (next.deliveryId) this.activeDeliveries.set(next.conversationId, next.deliveryId);
       void this.withLock(next.conversationId, async () => {
         this.slots.delete(next.conversationId);
         const started = await this.start(next);
         if (!started.ok) {
-          this.finish(next.conversationId, undefined, false, started.error);
+          this.finish(
+            next.conversationId,
+            undefined,
+            false,
+            started.error,
+            '',
+            next.deliveryId ?? null
+          );
           this.pump();
         }
       });
@@ -612,14 +754,13 @@ export class BotSessionHost {
     turnId: string | undefined,
     ok: boolean,
     error?: string,
-    text = ''
+    text = '',
+    deliveryId: string | null | undefined = this.activeDeliveries.get(conversationId)
   ): void {
     const binding = this.binding(conversationId);
     if (!binding) return;
     const event: BotTurnFinished = {
-      ...(this.activeDeliveries.has(conversationId)
-        ? { deliveryId: this.activeDeliveries.get(conversationId) }
-        : {}),
+      ...(deliveryId ? { deliveryId } : {}),
       chatId: binding.chatId,
       botId: binding.botId,
       conversationId,
@@ -629,6 +770,10 @@ export class BotSessionHost {
       ...(error ? { error } : {}),
       ...(binding.delegationId ? { delegationId: binding.delegationId } : {}),
     };
+    if (deliveryId === this.activeDeliveries.get(conversationId))
+      this.activeDeliveries.delete(conversationId);
+    if (deliveryId && this.deliveries.get(conversationId)?.get(deliveryId) !== 'started')
+      this.deliveries.get(conversationId)?.delete(deliveryId);
     for (const listener of this.listeners) {
       try {
         listener(event);
@@ -640,15 +785,71 @@ export class BotSessionHost {
 
   /** 结束会话（只读保留）并释放 worker 里的实例；丢弃它的排队投递 */
   retireSession(conversationId: string): void {
-    this.queue = this.queue.filter((item) => item.conversationId !== conversationId);
+    this.cancelQueued((item) => item.conversationId === conversationId);
+    this.cancelActive(conversationId);
     if (this.live.has(conversationId) || this.slots.has(conversationId)) {
       void this.deps.runtime.release(conversationId).catch(() => {});
     }
     this.live.delete(conversationId);
+    this.clearSession(conversationId);
     this.deps.authority.endBotConversation(conversationId);
+    this.pump();
+  }
+
+  freeze(): void {
+    this.disposed = true;
+  }
+
+  dispose(): void {
+    this.freeze();
+    this.cancelQueued(() => true);
+    for (const id of new Set([...this.live, ...this.slots.keys()])) {
+      this.cancelActive(id);
+      this.deps.runtime.abort?.(id);
+      void this.deps.runtime.release(id).catch(console.warn);
+      this.clearSession(id);
+    }
+    this.live.clear();
+    this.bindings.clear();
+    this.independentSpecs.clear();
+    this.liveProfiles.clear();
+    this.listeners.clear();
+    this.discardListeners.clear();
+    this.sentListeners.clear();
+    this.startedListeners.clear();
+    this.deliveries.clear();
+  }
+
+  private cancelQueued(predicate: (item: Delivery) => boolean): void {
+    const canceled = this.queue.filter(predicate);
+    this.queue = this.queue.filter((item) => !predicate(item));
+    for (const item of canceled) {
+      this.finish(item.conversationId, undefined, false, 'canceled', '', item.deliveryId ?? null);
+      this.deps.emit({ kind: 'queue', chatId: item.chatId });
+    }
+  }
+
+  private cancelActive(id: string): void {
+    if (this.turnActive(id)) this.finish(id, undefined, false, 'canceled');
+    this.running.delete(id);
+    this.slots.delete(id);
+    this.lastAssistant.delete(id);
+  }
+
+  private clearSession(id: string): void {
+    this.running.delete(id);
+    this.slots.delete(id);
+    this.lastAssistant.delete(id);
+    this.activeDeliveries.delete(id);
+    this.bindings.delete(id);
+    this.independentSpecs.delete(id);
+    this.liveProfiles.delete(id);
+    this.deliveries.delete(id);
   }
 
   private discardConversation(conversation: ConversationAuthority): void {
+    for (const listener of this.discardListeners)
+      listener({ conversationId: conversation.conversationId });
     this.retireSession(conversation.conversationId);
     const removed = this.deps.authority.removeBotConversation(conversation.conversationId);
     if (removed) this.deps.runtime.removeSessionFiles(removed);

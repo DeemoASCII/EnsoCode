@@ -68,6 +68,10 @@ export interface BotChat {
 
 export const DELEGATION_STATES = ['queued', 'running', 'completed', 'failed', 'canceled'] as const;
 export type DelegationState = (typeof DELEGATION_STATES)[number];
+export type BotPermissions = Pick<
+  BotProfile,
+  'tools' | 'approvalMode' | 'skillIds' | 'mcpServerIds'
+>;
 
 export interface Delegation {
   id: string;
@@ -86,6 +90,7 @@ export interface Delegation {
   depth: number;
   createdAt: number;
   finishedAt?: number;
+  effectivePermissions?: BotPermissions;
 }
 
 export function parseDelegation(value: unknown): Delegation | undefined {
@@ -133,6 +138,25 @@ export function parseDelegation(value: unknown): Delegation | undefined {
   if (typeof value.result === 'string') record.result = value.result;
   if (isTime(value.deliveredAt)) record.deliveredAt = value.deliveredAt;
   if (isTime(value.finishedAt)) record.finishedAt = value.finishedAt;
+  if (value.effectivePermissions !== undefined) {
+    const permissions = value.effectivePermissions;
+    if (
+      !isObject(permissions) ||
+      (permissions.tools !== 'all' && permissions.tools !== 'readonly') ||
+      !APPROVAL_MODES.includes(permissions.approvalMode as ApprovalMode) ||
+      !Array.isArray(permissions.skillIds) ||
+      !permissions.skillIds.every(isText) ||
+      !Array.isArray(permissions.mcpServerIds) ||
+      !permissions.mcpServerIds.every(isText)
+    )
+      return undefined;
+    record.effectivePermissions = {
+      tools: permissions.tools,
+      approvalMode: permissions.approvalMode as ApprovalMode,
+      skillIds: [...permissions.skillIds],
+      mcpServerIds: [...permissions.mcpServerIds],
+    };
+  }
   return record;
 }
 

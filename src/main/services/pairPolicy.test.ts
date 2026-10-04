@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  botCommandError,
   checkSetModel,
   checkSpawn,
   narrowSnapshot,
@@ -11,6 +12,23 @@ import {
 } from './pairPolicy';
 
 describe('手机命令白名单', () => {
+  it('Bot sessions reject generic execution/queue/policy commands but permit abort and answers', () => {
+    for (const type of [
+      'prompt',
+      'steer',
+      'enqueue',
+      'queue-send-now',
+      'queue-interrupt-send',
+      'set-model',
+      'set-thinking',
+      'retry',
+    ]) {
+      expect(botCommandError(type, true)).toContain('Bot');
+      expect(botCommandError(type, false)).toBeUndefined();
+    }
+    for (const type of ['abort', 'approval-respond', 'ask-respond', 'subscribe', 'history'])
+      expect(botCommandError(type, true)).toBeUndefined();
+  });
   it('放行 prompt/steer/abort/审批/ask/snapshot/subscribe', () => {
     const ok = [
       { type: 'prompt', sessionId: 's', text: 'hi' },
