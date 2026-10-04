@@ -32,7 +32,6 @@ import { type ChatSummary, chatSummary, pendingItems, sortChats } from '@/stores
 import { isUnread } from '@/stores/bots/unread';
 import { BotAvatar, GroupAvatar } from './BotAvatar';
 import { chatErrorText, chatTitle } from './botText';
-import { ModeSwitch } from './ModeSwitch';
 
 const ICON_BUTTON_CLASS =
   'relative flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground';
@@ -125,7 +124,6 @@ export function BotSidebar({ width, onCollapse, onNewMember, onNewGroup }: BotSi
     >
       <div className="flex h-12 shrink-0 items-center gap-1 pr-2 pl-1.5">
         <NodeSwitcher className="max-w-32" />
-        <ModeSwitch />
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto pb-2">

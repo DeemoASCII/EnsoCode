@@ -51,7 +51,6 @@ import {
 import type * as React from 'react';
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { ModeSwitch } from '@/components/bots/ModeSwitch';
 import { AddProjectDialog } from '@/components/chat/AddProjectDialog';
 import { ConfirmDialog } from '@/components/chat/ConfirmDialog';
 import { ConversationStatusIndicator } from '@/components/chat/ConversationStatusIndicator';
@@ -773,10 +772,9 @@ export function Sidebar({ width, collapsed, onToggleCollapse, onOpenSearch }: Si
       )}
       <div className={cn('flex h-full min-h-0 flex-col', collapsed && 'hidden')} style={{ width }}>
         <div className="flex h-12 shrink-0 items-center justify-between pr-3 pl-1.5">
-          {/* 节点切换器：本机 / 已连的远程 EnsoCode 桌面；Bot 模式开关打开时旁边是 Code | Bot */}
+          {/* 节点切换器：本机 / 已连的远程 EnsoCode 桌面 */}
           <div className="flex min-w-0 items-center gap-1">
             <NodeSwitcher />
-            <ModeSwitch />
           </div>
           <div className="flex items-center">
             <button

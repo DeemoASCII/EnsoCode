@@ -13,6 +13,7 @@ import { BackgroundLayer } from '@/components/app/BackgroundLayer';
 import { TitleBar } from '@/components/app/TitleBar';
 import { UpdateBanner } from '@/components/app/UpdateBanner';
 import { BotView } from '@/components/bots/BotView';
+import { ModeSwitch } from '@/components/bots/ModeSwitch';
 import { requestOpenChatFind } from '@/components/chat/ChatFindBar';
 import { ChatView } from '@/components/chat/ChatView';
 import { requestFocusComposer } from '@/components/chat/composerMentionBridge';
@@ -314,6 +315,7 @@ export default function App() {
       <OauthCredentialBootstrap />
       <TitleBar
         title="EnsoCode"
+        leading={botModeEnabled && !remoteNodeActive ? <ModeSwitch /> : undefined}
         actions={
           <>
             <button
