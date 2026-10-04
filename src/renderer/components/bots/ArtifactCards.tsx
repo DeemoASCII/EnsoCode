@@ -7,6 +7,7 @@ import type {
 import { ExternalLink, FolderOpen, Loader2 } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { Markdown } from '@/components/chat/Markdown';
+import { ReadFileView } from '@/components/chat/ReadFileView';
 import { fileTypeIcon, fileTypeIconClass } from '@/components/sidepanel/fileIcons';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { addToast } from '@/components/ui/toast';
@@ -223,7 +224,9 @@ function PreviewBody({ name, content }: { name: string; content: BotArtifactRead
         <iframe title={name} sandbox="" srcDoc={content.text} className="h-full w-full bg-white" />
       )}
       {content?.ok && content.kind === 'text' && (
-        <pre className="whitespace-pre-wrap break-words p-4 font-mono text-xs">{content.text}</pre>
+        <div className="p-2 text-xs">
+          <ReadFileView path={name} contents={content.text} />
+        </div>
       )}
     </div>
   );
