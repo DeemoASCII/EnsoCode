@@ -1,0 +1,82 @@
+export type BotInjectedMessage =
+  | { kind: 'routine'; title: string; prompt: string }
+  | { kind: 'group'; messages: { from: string; text: string }[]; instruction: string }
+  | { kind: 'delegation-task'; from: string; task: string; context: string }
+  | { kind: 'delegation-result'; from: string; status: string; text: string };
+
+const entities: Record<string, string> = {
+  '&amp;': '&',
+  '&lt;': '<',
+  '&gt;': '>',
+  '&quot;': '"',
+  '&apos;': "'",
+};
+const decode = (text: string) =>
+  text.replace(/&(?:amp|lt|gt|quot|apos);/g, (entity) => entities[entity]);
+
+function attributes(text: string): Record<string, string> | null {
+  const result: Record<string, string> = Object.create(null);
+  const rest = text.replace(/\s+([\w-]+)="([^"]*)"/g, (_, key: string, value: string) => {
+    result[key] = decode(value);
+    return '';
+  });
+  return rest.trim() ? null : result;
+}
+
+/** 只识别 Main 的整段注入协议；不是通用 XML，正文始终作为文本渲染。 */
+export function parseBotInjectedMessage(text: string): BotInjectedMessage | null {
+  const source = text.trim();
+  const omittedPattern = /^（省略了 \d+ 条更早的消息）\s*/;
+  if (
+    source.startsWith('<group-info>') ||
+    source.startsWith('<group-message ') ||
+    omittedPattern.test(source)
+  ) {
+    let rest = source.replace(/^<group-info>[\s\S]*?<\/group-info>\s*/, '');
+    const omitted = omittedPattern.exec(rest)?.[0].trim();
+    rest = rest.replace(omittedPattern, '');
+    const messages: { from: string; text: string }[] = [];
+    while (rest.startsWith('<group-message ')) {
+      const match = /^<group-message([^>]*)>([\s\S]*?)<\/group-message>\s*/.exec(rest);
+      if (!match) return null;
+      const attrs = attributes(match[1]);
+      if (!attrs?.from) return null;
+      messages.push({ from: attrs.from, text: decode(match[2].trim()) });
+      rest = rest.slice(match[0].length);
+    }
+    return messages.length
+      ? {
+          kind: 'group',
+          messages,
+          instruction: decode([omitted, rest.trim()].filter(Boolean).join('\n')),
+        }
+      : null;
+  }
+  const match = /^<(routine|delegation-task|delegation-result)(\s[^>]*)?>([\s\S]*)<\/\1>$/.exec(
+    source
+  );
+  if (!match) return null;
+  const attrs = attributes(match[2] ?? '');
+  if (!attrs) return null;
+  const body = match[3].trim();
+  if (match[1] === 'routine') {
+    return attrs.title ? { kind: 'routine', title: attrs.title, prompt: decode(body) } : null;
+  }
+  if (!attrs.from) return null;
+  if (match[1] === 'delegation-result') {
+    return {
+      kind: 'delegation-result',
+      from: attrs.from,
+      status: attrs.status ?? '',
+      text: decode(body),
+    };
+  }
+  const context = /\s*<context>([\s\S]*)<\/context>$/.exec(body);
+  if (!context && /<\/?context>/.test(body)) return null;
+  return {
+    kind: 'delegation-task',
+    from: attrs.from,
+    task: decode((context ? body.slice(0, context.index) : body).trim()),
+    context: decode(context?.[1].trim() ?? ''),
+  };
+}

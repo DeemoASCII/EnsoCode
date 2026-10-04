@@ -1,6 +1,7 @@
 import type { ApprovalRequestInfo, AskRequestInfo, ProjectedMessage } from '@shared/types/agent';
 import type { BotChat, GroupEntry } from '@shared/types/bot';
 import type { BotQueueItem } from '@shared/types/botIpc';
+import { parseBotInjectedMessage } from './injectedMessage';
 import type { BotSessions } from './projection';
 import { directMarker, readKey } from './unread';
 
@@ -62,7 +63,19 @@ export interface ChatSummary {
 const plain = (text: string) => text.replace(/\s+/gu, ' ').trim();
 
 export function messagePreview(message: ProjectedMessage): string {
-  return plain(message.content.map((part) => (part.type === 'text' ? part.text : '')).join(' '));
+  const text = message.content.map((part) => (part.type === 'text' ? part.text : '')).join(' ');
+  const injected = message.role === 'user' ? parseBotInjectedMessage(text) : null;
+  if (!injected) return plain(text);
+  switch (injected.kind) {
+    case 'routine':
+      return plain(`${injected.title} · ${injected.prompt}`);
+    case 'group':
+      return plain(injected.messages.map((item) => `${item.from}: ${item.text}`).join(' · '));
+    case 'delegation-task':
+      return plain(`${injected.from}: ${injected.task}`);
+    case 'delegation-result':
+      return plain(`${injected.from}: ${injected.text}`);
+  }
 }
 
 function entryPreview(entry: GroupEntry, names: Record<string, string>): string {

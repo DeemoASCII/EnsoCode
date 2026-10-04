@@ -2,7 +2,7 @@ import type { ApprovalRequestInfo, ProjectedMessage } from '@shared/types/agent'
 import type { BotChat } from '@shared/types/bot';
 import { describe, expect, it } from 'vitest';
 import { emptyProjection } from '@/stores/sessions/reducer';
-import { chatSummary, pendingItems, sessionOwners, sortChats } from './selectors';
+import { chatSummary, messagePreview, pendingItems, sessionOwners, sortChats } from './selectors';
 
 const chat = (over: Partial<BotChat>): BotChat => ({
   id: 'c1',
@@ -45,6 +45,11 @@ describe('sessionOwners / pendingItems', () => {
 });
 
 describe('chatSummary', () => {
+  it('Main 注入的用户输入用卡片内容作摘要，普通 assistant 内容不误解析', () => {
+    const text = '<routine title="晨报">今天 &amp; 明天</routine>';
+    expect(messagePreview(msg('user', text, 1))).toBe('晨报 · 今天 & 明天');
+    expect(messagePreview(msg('assistant', text, 1))).toBe(text);
+  });
   it('私聊取最后一条有文字的消息作摘要，按消息数作已读标记', () => {
     const summary = chatSummary(chat({ sessions: { b1: { conversationId: 's1', cursor: 0 } } }), {
       sessions: {

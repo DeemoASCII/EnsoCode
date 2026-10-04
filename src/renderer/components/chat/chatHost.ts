@@ -15,6 +15,7 @@ export interface ChatHost {
   canFork?: boolean;
   /** 回复头的发言人；缺省显示 Enso（Bot 模式显示成员名与头像色） */
   speaker?: { name: string; color: string };
+  botSession?: boolean;
 }
 
 export const ChatHostContext = createContext<ChatHost | null>(null);

@@ -77,6 +77,7 @@ export function SessionHistoryDialog({
       sessionId: conversationId,
       canRewind: false,
       canRetry: false,
+      botSession: true,
       speaker: speakerName && speakerColor ? { name: speakerName, color: speakerColor } : undefined,
     }),
     [conversationId, speakerName, speakerColor]

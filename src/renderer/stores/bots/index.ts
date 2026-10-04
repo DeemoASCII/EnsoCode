@@ -192,6 +192,7 @@ export const useBotsStore = create<BotsState>()((set, get) => {
     view: loadView(),
 
     bind: () => {
+      let active = true;
       const offBot = window.electronAPI.bots.onEvent(onBotEvent);
       const offAgent = window.electronAPI.agent.onEvent((event) => {
         const { sessions } = get();
@@ -199,6 +200,20 @@ export const useBotsStore = create<BotsState>()((set, get) => {
         if (result.sessions !== sessions) set({ sessions: result.sessions });
         for (const id of result.resync) void window.electronAPI.agent.requestSnapshot(id);
       });
+      // Code 模式会解绑订阅，但 seeding 保留已完成的加载；重入时缓存必须重新向权威源补齐。
+      for (const [id, cached] of Object.entries(get().sessions)) {
+        void window.electronAPI.agent.requestSnapshot(id);
+        void window.electronAPI.bots
+          .sessionHistory({ conversationId: id })
+          .then((result) => {
+            if (!active || !result.ok) return;
+            // 热会话的快照/事件优先；已冷回收的会话没有快照，用 jsonl 并清掉旧代运行状态。
+            patchSession(id, (current) =>
+              current === cached ? seedHistory(emptyProjection, result) : current
+            );
+          })
+          .catch(() => {});
+      }
       void (async () => {
         await Promise.all([
           get().refreshCatalog(),
@@ -214,6 +229,7 @@ export const useBotsStore = create<BotsState>()((set, get) => {
         set({ loaded: true });
       })();
       return () => {
+        active = false;
         offBot();
         offAgent();
       };

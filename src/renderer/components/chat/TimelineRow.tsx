@@ -38,6 +38,7 @@ import {
   Wrench,
 } from 'lucide-react';
 import { memo, type ReactNode, useCallback, useEffect, useRef, useState } from 'react';
+import { InjectedMessageCard } from '@/components/bots/InjectedMessageCard';
 import {
   Dialog,
   DialogContent,
@@ -54,6 +55,7 @@ import { addSidePanelChanges } from '@/lib/sidePanelDock';
 import { stripAnsi } from '@/lib/terminalText';
 import { SUBAGENT_OP_LABEL_KEYS, TOOL_LABEL_KEYS, toolLabel } from '@/lib/toolLabels';
 import { cn } from '@/lib/utils';
+import { parseBotInjectedMessage } from '@/stores/bots/injectedMessage';
 import { useSessionsStore } from '@/stores/sessions';
 import {
   canShowConversationFork,
@@ -479,6 +481,9 @@ function UserText({
   activeNth?: number;
 }) {
   const { t } = useI18n();
+  const host = useChatHost();
+  const injected = host?.speaker || host?.botSession ? parseBotInjectedMessage(text) : null;
+  if (injected) return <InjectedMessageCard message={injected} />;
   const planPrefix = splitPlanPrefix(text);
   if (planPrefix.note) {
     const remainder = planPrefix.rest.trim();
