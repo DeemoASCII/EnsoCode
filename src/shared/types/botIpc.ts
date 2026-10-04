@@ -1,3 +1,4 @@
+import type { AbilitySuggestion } from '../bots/abilitySuggest';
 import type { AttachedImage, ConversationAuthority } from './agent';
 import type { BotChat, BotProfile, BotRoutine, Delegation, GroupEntry } from './bot';
 
@@ -71,6 +72,21 @@ export interface BotEvent {
 }
 
 export type BotIpcError = { ok: false; error: string; reason?: string; chatIds?: string[] };
+
+/** 「自动设置能力」入参：只传成员描述；候选技能 / MCP / 成员由 Main 从权威记录取 */
+export interface BotAbilitySuggestRequest {
+  name?: string;
+  title?: string;
+  scope?: string;
+  persona?: string;
+  language?: 'zh' | 'en';
+  botId?: string;
+}
+
+/** error：no-model / timeout / invalid-reply / failed（detail 为原始错误）/ disabled / invalid */
+export type BotAbilitySuggestResult =
+  | { ok: true; suggestion: AbilitySuggestion }
+  | (BotIpcError & { detail?: string });
 
 export interface BotQueueItem {
   chatId: string;

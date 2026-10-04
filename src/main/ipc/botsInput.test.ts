@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  parseAbilitySuggestRequest,
   parseBotDraftInput,
   parseBotUpdateInput,
   parseChatCreateInput,
@@ -161,5 +162,25 @@ describe('send / timeline / workspace / history inputs', () => {
       beforeIndex: 3,
     });
     expect(parseSessionHistoryInput({ conversationId: '../x' })).toBeNull();
+  });
+});
+
+describe('parseAbilitySuggestRequest', () => {
+  it('收窄成员描述，缺省字段补空串、语言缺省 en', () => {
+    expect(parseAbilitySuggestRequest({ name: 'Rex', scope: 'Reviews', botId: A })).toEqual({
+      profile: { name: 'Rex', title: '', scope: 'Reviews', persona: '' },
+      language: 'en',
+      botId: A,
+    });
+    expect(parseAbilitySuggestRequest({ name: 'Rex', language: 'zh' })?.language).toBe('zh');
+  });
+
+  it('拒绝多余字段、非法 id、超长文本和全空描述', () => {
+    expect(parseAbilitySuggestRequest({ name: 'Rex', skills: [] })).toBeNull();
+    expect(parseAbilitySuggestRequest({ name: 'Rex', botId: '../x' })).toBeNull();
+    expect(parseAbilitySuggestRequest({ name: 'Rex', language: 'fr' })).toBeNull();
+    expect(parseAbilitySuggestRequest({ name: 'x'.repeat(201) })).toBeNull();
+    expect(parseAbilitySuggestRequest({ name: ' ', scope: '' })).toBeNull();
+    expect(parseAbilitySuggestRequest(null)).toBeNull();
   });
 });

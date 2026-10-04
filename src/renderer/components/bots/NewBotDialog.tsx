@@ -1,6 +1,5 @@
-import type { ApprovalMode } from '@shared/types/agent';
-import type { BotEngine, BotProfile } from '@shared/types/bot';
-import { FileJson, Loader2, Plus } from 'lucide-react';
+import type { BotEngine } from '@shared/types/bot';
+import { ChevronRight, FileJson, Loader2, Plus } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import {
@@ -20,40 +19,30 @@ import { Z_INDEX } from '@/lib/z-index';
 import { useBotsStore } from '@/stores/bots';
 import { parseCharacterCard } from '@/stores/bots/characterCard';
 import { BOT_TEMPLATES, type BotTemplate, templateDraft } from '@/stores/bots/templates';
+import { type AbilityForm, BotAbilityFields, DEFAULT_ABILITIES } from './BotAbilities';
 import { BotAvatar } from './BotAvatar';
-import {
-  ApprovalSelect,
-  AVATAR_PALETTE,
-  ColorPicker,
-  EngineField,
-  FieldLabel,
-  nameError,
-  Segmented,
-} from './BotFields';
+import { AVATAR_PALETTE, ColorPicker, EngineField, FieldLabel, nameError } from './BotFields';
 import { botErrorText } from './botText';
 
-interface Draft {
+interface Draft extends AbilityForm {
   name: string;
   title: string;
   scope: string;
   persona: string;
   color: string;
   engine: BotEngine | null;
-  approvalMode: ApprovalMode;
-  tools: BotProfile['tools'];
 }
 
 type Source = { kind: 'template'; id: BotTemplate['id'] } | { kind: 'blank' } | { kind: 'import' };
 
 const blankDraft = (color: string): Draft => ({
+  ...DEFAULT_ABILITIES,
   name: '',
   title: '',
   scope: '',
   persona: '',
   color,
   engine: null,
-  approvalMode: 'auto-edits',
-  tools: 'all',
 });
 
 export function NewBotDialog({
@@ -71,11 +60,13 @@ export function NewBotDialog({
   const [error, setError] = useState<string | null>(null);
   const [touched, setTouched] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [abilitiesOpen, setAbilitiesOpen] = useState(false);
 
   const applyTemplate = (template: BotTemplate) => {
     const input = templateDraft(template, locale === 'zh' ? 'zh' : 'en');
     setSource({ kind: 'template', id: template.id });
     setDraft({
+      ...DEFAULT_ABILITIES,
       name: input.name ?? '',
       title: input.title ?? '',
       scope: input.scope ?? '',
@@ -94,6 +85,7 @@ export function NewBotDialog({
     applyTemplate(BOT_TEMPLATES[0]);
     setTouched(false);
     setBusy(false);
+    setAbilitiesOpen(false);
   }, [open]);
 
   const patch = (next: Partial<Draft>) => {
@@ -133,6 +125,10 @@ export function NewBotDialog({
         engine: draft.engine,
         approvalMode: draft.approvalMode,
         tools: draft.tools,
+        skillIds: draft.skillIds,
+        mcpServerIds: draft.mcpServerIds,
+        delegation: { canDelegateTo: draft.canDelegateTo, acceptFrom: draft.acceptFrom },
+        memory: { enabled: draft.memoryEnabled },
       });
       if (!result.ok) {
         setError(botErrorText(result.reason, result.error, t));
@@ -257,26 +253,9 @@ export function NewBotDialog({
                 zIndex={Z_INDEX.DROPDOWN_IN_MODAL}
               />
             </div>
-            <div className="space-y-3">
-              <div>
-                <FieldLabel>{t('Approval mode')}</FieldLabel>
-                <ApprovalSelect
-                  value={draft.approvalMode}
-                  onChange={(approvalMode) => patch({ approvalMode })}
-                  zIndex={Z_INDEX.DROPDOWN_IN_MODAL}
-                />
-              </div>
-              <div>
-                <FieldLabel>{t('Tools')}</FieldLabel>
-                <Segmented
-                  value={draft.tools}
-                  options={[
-                    { value: 'all', label: t('All tools') },
-                    { value: 'readonly', label: t('Read-only') },
-                  ]}
-                  onChange={(tools) => patch({ tools })}
-                />
-              </div>
+            <div>
+              <FieldLabel>{t('Avatar color')}</FieldLabel>
+              <ColorPicker value={draft.color} onChange={(color) => patch({ color })} />
             </div>
             <div className="col-span-2">
               <FieldLabel hint={t('Used for routing and the delegation directory')}>
@@ -295,9 +274,31 @@ export function NewBotDialog({
                 onChange={(event) => patch({ persona: event.target.value })}
               />
             </div>
-            <div className="col-span-2">
-              <FieldLabel>{t('Avatar color')}</FieldLabel>
-              <ColorPicker value={draft.color} onChange={(color) => patch({ color })} />
+            <div className="col-span-2 rounded-lg border">
+              <button
+                type="button"
+                className="flex w-full items-center gap-1.5 px-3 py-2 text-left text-sm"
+                aria-expanded={abilitiesOpen}
+                onClick={() => setAbilitiesOpen((value) => !value)}
+              >
+                <ChevronRight
+                  className={cn('h-4 w-4 transition-transform', abilitiesOpen && 'rotate-90')}
+                />
+                <span className="font-medium">{t('Abilities')}</span>
+                <span className="truncate text-muted-foreground text-xs">
+                  {t('Tools, approval, skills, MCP, delegation and memory')}
+                </span>
+              </button>
+              {abilitiesOpen && (
+                <div className="border-t px-3 py-3">
+                  <BotAbilityFields
+                    value={draft}
+                    onChange={patch}
+                    profile={draft}
+                    zIndex={Z_INDEX.DROPDOWN_IN_MODAL}
+                  />
+                </div>
+              )}
             </div>
           </div>
           {error && <p className="text-destructive text-sm">{error}</p>}

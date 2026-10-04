@@ -2217,8 +2217,25 @@ export const zhTranslations: Record<string, string> = {
   "{{name}}'s workspace": '{{name}}的工作区',
   'Group workspace': '群工作区',
   'Missing project': '项目已不存在',
-  'Bot mode (experimental)': 'Bot 模式（实验）',
   'Group reply picker model': '群聊选人模型',
+  'Features still being tested. They may change or be removed.':
+    '仍在测试中的功能，之后可能调整或移除。',
+  'Bot mode settings': 'Bot 模式设置',
+  'Settings shared by all members and group chats.': '所有成员和群聊共用的设置。',
+  Apply: '应用',
+  'None selected': '未选择',
+  'Suggested changes': '建议的修改',
+  'Auto-configure abilities': '自动设置能力',
+  'Let a model suggest abilities from the name, title, responsibilities and persona.':
+    '让模型根据名称、头衔、职责和人设推荐能力配置。',
+  'Current abilities already match the suggestion.': '当前能力已与推荐一致。',
+  'No model is available. Set a default model or a title summary model first.':
+    '没有可用的模型，请先设置默认模型或标题总结模型。',
+  'The model did not answer in time. Try again.': '模型未及时响应，请重试。',
+  'The model reply could not be understood. Try again.': '无法理解模型的回复，请重试。',
+  'Fill in a name, title or responsibilities first.': '请先填写名称、头衔或职责。',
+  'Could not get suggestions': '获取推荐失败',
+  'Tools, approval, skills, MCP, delegation and memory': '工具、审批、技能、MCP、委派与记忆',
   'When nobody is @-mentioned in a smart-routing group, this model picks which member replies.':
     '在「智能选人」的群里没人被 @ 时，用这个模型选出回复的成员。',
   'Default (title model)': '默认（跟随标题总结模型）',

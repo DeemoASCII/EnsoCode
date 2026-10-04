@@ -1,47 +1,29 @@
-import type { ApprovalMode } from '@shared/types/agent';
-import type { BotChat, BotEngine, BotList, BotProfile } from '@shared/types/bot';
+import type { BotChat, BotEngine, BotProfile } from '@shared/types/bot';
 import type { BotDraftInput, BotSessionRecord } from '@shared/types/botIpc';
 import { Archive, Download, Loader2, Trash2 } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ConfirmDialog } from '@/components/chat/ConfirmDialog';
-import { DetailRows, PickList, setFilteredIds } from '@/components/settings/PresetsSettings';
 import { Button } from '@/components/ui/button';
-import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
-import { Switch } from '@/components/ui/switch';
 import { Tabs, TabsList, TabsPanel, TabsTab } from '@/components/ui/tabs';
 import { Textarea } from '@/components/ui/textarea';
 import { addToast } from '@/components/ui/toast';
 import { useI18n } from '@/i18n';
 import { useBotsStore } from '@/stores/bots';
-import { useSettingsStore } from '@/stores/settings';
+import { type AbilityForm, BotAbilityFields } from './BotAbilities';
 import { BotAvatar } from './BotAvatar';
-import {
-  ApprovalSelect,
-  ColorPicker,
-  EngineField,
-  FieldLabel,
-  nameError,
-  Segmented,
-} from './BotFields';
+import { ColorPicker, EngineField, FieldLabel, nameError } from './BotFields';
 import { botErrorText, chatTitle } from './botText';
 import { MemorySpaceList } from './MemorySpaceList';
 import { RoutineList } from './RoutineList';
 
-interface FormState {
+interface FormState extends AbilityForm {
   name: string;
   title: string;
   scope: string;
   persona: string;
   color: string;
   engine: BotEngine | null;
-  tools: BotProfile['tools'];
-  approvalMode: ApprovalMode;
-  skillIds: string[];
-  mcpServerIds: string[];
-  canDelegateTo: BotList;
-  acceptFrom: BotList;
-  memoryEnabled: boolean;
 }
 
 function formOf(bot: BotProfile, persona: string): FormState {
@@ -305,44 +287,7 @@ export function BotProfilePanel({ botId, chat, onOpenHistory }: BotProfilePanelP
               <FieldLabel>{t('Model')}</FieldLabel>
               <EngineField engine={form.engine} onChange={(engine) => patch({ engine })} />
             </div>
-            <div>
-              <FieldLabel>{t('Tools')}</FieldLabel>
-              <Segmented
-                value={form.tools}
-                options={[
-                  { value: 'all', label: t('All tools') },
-                  { value: 'readonly', label: t('Read-only') },
-                ]}
-                onChange={(tools) => patch({ tools })}
-              />
-            </div>
-            <div>
-              <FieldLabel>{t('Approval mode')}</FieldLabel>
-              <ApprovalSelect
-                value={form.approvalMode}
-                onChange={(approvalMode) => patch({ approvalMode })}
-              />
-            </div>
-            <AssetPickers form={form} patch={patch} />
-            <DelegationField
-              label={t('Can delegate to')}
-              value={form.canDelegateTo}
-              bots={bots.filter((item) => item.id !== bot.id && !item.archivedAt)}
-              onChange={(canDelegateTo) => patch({ canDelegateTo })}
-            />
-            <DelegationField
-              label={t('Accepts delegation from')}
-              value={form.acceptFrom}
-              bots={bots.filter((item) => item.id !== bot.id && !item.archivedAt)}
-              onChange={(acceptFrom) => patch({ acceptFrom })}
-            />
-            <label className="flex items-center justify-between gap-2 text-sm">
-              <span>{t('Long-term memory')}</span>
-              <Switch
-                checked={form.memoryEnabled}
-                onCheckedChange={(memoryEnabled) => patch({ memoryEnabled })}
-              />
-            </label>
+            <BotAbilityFields value={form} onChange={patch} profile={form} botId={bot.id} />
           </TabsPanel>
 
           <TabsPanel value="memory">
@@ -398,114 +343,6 @@ export function BotProfilePanel({ botId, chat, onOpenHistory }: BotProfilePanelP
         confirmLabel={confirm === 'delete' ? t('Delete permanently') : t('Archive member')}
         onConfirm={() => void runDanger()}
       />
-    </div>
-  );
-}
-
-function AssetPickers({
-  form,
-  patch,
-}: {
-  form: FormState;
-  patch: (next: Partial<FormState>) => void;
-}) {
-  const { t } = useI18n();
-  const skills = useSettingsStore((s) => s.skills);
-  const mcpServers = useSettingsStore((s) => s.mcpServers);
-  const toggle = (list: string[], id: string) =>
-    list.includes(id) ? list.filter((item) => item !== id) : [...list, id];
-  return (
-    <>
-      <PickList
-        title={t('Skills')}
-        emptyText={t('No skills yet')}
-        items={skills}
-        getName={(skill) => skill.name}
-        getSource={(skill) => skill.source}
-        isChecked={(skill) => form.skillIds.includes(skill.id)}
-        onToggle={(skill) => patch({ skillIds: toggle(form.skillIds, skill.id) })}
-        onSetFiltered={(ids, selected) =>
-          patch({ skillIds: setFilteredIds(form.skillIds, ids, selected) })
-        }
-        placeholder={t('Filter skills...')}
-        renderDetail={(skill) => (
-          <DetailRows
-            rows={[
-              [t('Source'), skill.source],
-              [t('Path'), skill.path],
-              [t('Description'), skill.description],
-            ]}
-          />
-        )}
-      />
-      <PickList
-        title={t('MCP Servers')}
-        emptyText={t('No MCP servers yet')}
-        items={mcpServers}
-        getName={(server) => server.name}
-        getSource={(server) => server.source}
-        isChecked={(server) => form.mcpServerIds.includes(server.id)}
-        onToggle={(server) => patch({ mcpServerIds: toggle(form.mcpServerIds, server.id) })}
-        onSetFiltered={(ids, selected) =>
-          patch({ mcpServerIds: setFilteredIds(form.mcpServerIds, ids, selected) })
-        }
-        placeholder={t('Filter MCP servers...')}
-        renderDetail={(server) => (
-          <DetailRows
-            rows={[
-              [t('Source'), server.source],
-              ['Transport', server.transport],
-              ['URL', server.url],
-            ]}
-          />
-        )}
-      />
-    </>
-  );
-}
-
-function DelegationField({
-  label,
-  value,
-  bots,
-  onChange,
-}: {
-  label: string;
-  value: BotList;
-  bots: BotProfile[];
-  onChange: (value: BotList) => void;
-}) {
-  const { t } = useI18n();
-  return (
-    <div>
-      <FieldLabel>{label}</FieldLabel>
-      <Segmented
-        value={value === 'any' ? 'any' : 'some'}
-        options={[
-          { value: 'any', label: t('All members') },
-          { value: 'some', label: t('Selected members') },
-        ]}
-        onChange={(mode) => onChange(mode === 'any' ? 'any' : [])}
-      />
-      {value !== 'any' && (
-        <div className="mt-1.5 space-y-1">
-          {bots.length === 0 && (
-            <p className="text-muted-foreground text-xs">{t('No other members')}</p>
-          )}
-          {bots.map((bot) => (
-            <label key={bot.id} className="flex items-center gap-2 text-sm">
-              <Checkbox
-                checked={value.includes(bot.id)}
-                onCheckedChange={(checked) =>
-                  onChange(checked ? [...value, bot.id] : value.filter((id) => id !== bot.id))
-                }
-              />
-              <BotAvatar bot={bot} size="xs" />
-              {bot.name}
-            </label>
-          ))}
-        </div>
-      )}
     </div>
   );
 }

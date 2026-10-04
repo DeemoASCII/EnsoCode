@@ -354,3 +354,34 @@ export function parseSessionHistoryInput(
     ...(input.beforeIndex !== undefined ? { beforeIndex: input.beforeIndex } : {}),
   };
 }
+
+export interface AbilitySuggestRequest {
+  profile: { name: string; title: string; scope: string; persona: string };
+  language: 'zh' | 'en';
+  /** 已有成员：委派候选排除自己 */
+  botId?: string;
+}
+
+export function parseAbilitySuggestRequest(value: unknown): AbilitySuggestRequest | null {
+  const input = record(value);
+  if (!input || !onlyKeys(input, ['name', 'title', 'scope', 'persona', 'language', 'botId']))
+    return null;
+  const field = (key: string, max: number): string | null => {
+    if (input[key] === undefined) return '';
+    return text(input[key], max) ? input[key] : null;
+  };
+  const name = field('name', MAX.short);
+  const title = field('title', MAX.short);
+  const scope = field('scope', MAX.scope);
+  const persona = field('persona', MAX.persona);
+  if (name === null || title === null || scope === null || persona === null) return null;
+  if (![name, title, scope, persona].some((item) => item.trim())) return null;
+  const language = input.language ?? 'en';
+  if (language !== 'zh' && language !== 'en') return null;
+  if (input.botId !== undefined && !isBotId(input.botId)) return null;
+  return {
+    profile: { name, title, scope, persona },
+    language,
+    ...(input.botId !== undefined ? { botId: input.botId } : {}),
+  };
+}

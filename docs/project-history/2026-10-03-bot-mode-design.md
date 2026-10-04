@@ -275,6 +275,7 @@ Main 在 `spawnSession` 里根据 `ConversationAuthority.bot` 组装提示词，
 - `BOT_SEND(chatId, text, attachments, deliveryId)`
 - `BOT_DELEGATION_CANCEL / BOT_DELEGATION_RETRY`
 - `BOT_ROUTINE_SAVE / BOT_ROUTINE_DELETE / BOT_ROUTINE_RUN_NOW`
+- `BOT_SUGGEST_ABILITIES(name, title, scope, persona, language, botId?)`：「自动设置能力」。候选技能 / MCP / 成员由 Main 从设置与成员库取；模型链为群聊选人的快聊天模型（judge 时）→ 标题总结模型回退链，20s 超时；回复严格解析（未知 id 丢弃、枚举校验，没有其他成员时不给委派建议），只返回建议，renderer 逐项确认后写入表单，仍需保存 / 创建。
 - 推送 `BOT_EVENT`：`{kind:'catalog'|'chat'|'timeline'|'delegation'|'routine', chatId?, seq}`，按 chatId 去重，过期 seq 丢弃。
 
 所有入参都按 `unknown` 收窄。

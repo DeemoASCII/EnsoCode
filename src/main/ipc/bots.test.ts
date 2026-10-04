@@ -89,6 +89,21 @@ async function createBot(name: string): Promise<string> {
 }
 
 describe('bots IPC', () => {
+  it('自动设置能力：入参收窄；worker 未就绪时报 no-model；开关关闭报 disabled', async () => {
+    expect(await call(IPC_CHANNELS.BOT_SUGGEST_ABILITIES, { name: 'x', path: '/etc' })).toEqual({
+      ok: false,
+      error: 'invalid',
+    });
+    expect(
+      await call(IPC_CHANNELS.BOT_SUGGEST_ABILITIES, { name: 'Rex', scope: 'Reviews PRs' })
+    ).toEqual({ ok: false, error: 'no-model' });
+    mocks.settings.botModeEnabled = false;
+    expect(await call(IPC_CHANNELS.BOT_SUGGEST_ABILITIES, { name: 'Rex' })).toEqual({
+      ok: false,
+      error: 'disabled',
+    });
+  });
+
   it('mode off disposes the host and rebuilding on mode on creates fresh services', async () => {
     const alice = await createBot('Alice');
     const created = await call(IPC_CHANNELS.BOT_CHAT_CREATE, {

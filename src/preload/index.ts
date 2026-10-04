@@ -125,6 +125,8 @@ import type {
 } from '@shared/types/agent';
 import { parseDispatchMainEvent } from '@shared/types/agent';
 import type {
+  BotAbilitySuggestRequest,
+  BotAbilitySuggestResult,
   BotActionResult,
   BotChatCreateInput,
   BotChatSessionsResult,
@@ -1142,6 +1144,8 @@ const electronAPI = {
       ipcRenderer.invoke(IPC_CHANNELS.BOT_GET, { botId }),
     create: (draft: BotDraftInput): Promise<BotWriteIpcResult> =>
       ipcRenderer.invoke(IPC_CHANNELS.BOT_CREATE, draft),
+    suggestAbilities: (request: BotAbilitySuggestRequest): Promise<BotAbilitySuggestResult> =>
+      ipcRenderer.invoke(IPC_CHANNELS.BOT_SUGGEST_ABILITIES, request),
     update: (request: {
       botId: string;
       expectedVersion?: number;

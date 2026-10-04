@@ -6,6 +6,7 @@ import { BUILTIN_AGENT_TYPES, IPC_CHANNELS } from '@shared/types';
 import type { AttachedImage } from '@shared/types/agent';
 import { type BotChat, type BotChatWorkspace, isBotId } from '@shared/types/bot';
 import type {
+  BotAbilitySuggestResult,
   BotActionResult,
   BotChatSessionsResult,
   BotChatsListResult,
@@ -18,6 +19,7 @@ import type {
   BotTimelineResult,
   BotWriteIpcResult,
 } from '@shared/types/botIpc';
+import { parseVirtualClassifier } from '@shared/virtualModels';
 import { app, ipcMain, shell } from 'electron';
 import {
   abortCompleteText,
@@ -35,6 +37,7 @@ import {
   spawnSession,
   steerSession,
 } from '../services/agentHost';
+import { suggestAbilities } from '../services/bots/abilitySuggester';
 import { BotMemoryService } from '../services/bots/botMemory';
 import {
   BOT_READONLY_DISABLED_TOOLS,
@@ -66,6 +69,7 @@ import {
 } from './agent';
 import {
   type ChatWorkspaceInput,
+  parseAbilitySuggestRequest,
   parseBotDraftInput,
   parseBotUpdateInput,
   parseChatCreateInput,
@@ -439,6 +443,18 @@ const chatIdOf = (request: unknown): string | null => {
   return isBotId(chatId) ? chatId : null;
 };
 
+/** 设置里的技能 / MCP 条目 → 推荐候选（只取 id、名称、描述） */
+function catalogItems(value: unknown): { id: string; name: string; description?: string }[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((item) => {
+    if (!item || typeof item !== 'object') return [];
+    const { id, name, description, enabled } = item as Record<string, unknown>;
+    // 全局停用的条目成员也用不上，不作为候选
+    if (typeof id !== 'string' || typeof name !== 'string' || enabled === false) return [];
+    return [{ id, name, ...(typeof description === 'string' ? { description } : {}) }];
+  });
+}
+
 /** 桌面 BOT_SEND 与手机 bot-send 共用 */
 export async function sendBotMessage(
   { chats, host }: BotServices,
@@ -608,6 +624,40 @@ export function registerBotHandlers(): void {
     emitBotEvent({ kind: 'catalog' });
     return result;
   });
+
+  handle(
+    IPC_CHANNELS.BOT_SUGGEST_ABILITIES,
+    'write',
+    (_sender, request, { bots }): Promise<BotAbilitySuggestResult> | BotAbilitySuggestResult => {
+      const parsed = parseAbilitySuggestRequest(request);
+      if (!parsed) return INVALID;
+      const state = readSettingsState();
+      const route = parseVirtualClassifier(state?.botRouteClassifier);
+      return suggestAbilities(
+        {
+          ...parsed,
+          skills: catalogItems(state?.skills),
+          mcpServers: catalogItems(state?.mcpServers),
+          members: bots
+            .list()
+            .filter((bot) => bot.id !== parsed.botId && !bot.archivedAt)
+            .map((bot) => ({ id: bot.id, name: bot.name, title: bot.title, scope: bot.scope })),
+        },
+        async (completion, signal) => {
+          if (!state || !isAgentWorkerReady()) return null;
+          // 群聊选人配的是快聊天模型（judge）时优先用它，其后是标题模型回退链
+          const candidates = await remoteCandidates(
+            state,
+            route?.source === 'judge' ? route.model : undefined
+          );
+          if (candidates.length === 0) return null;
+          const requestId = randomUUID();
+          signal.addEventListener('abort', () => abortCompleteText(requestId), { once: true });
+          return completeText({ requestId, ...completion, candidates, maxTokens: 2048 });
+        }
+      );
+    }
+  );
 
   handle(IPC_CHANNELS.BOT_UPDATE, 'write', (_sender, request, { bots }): BotWriteIpcResult => {
     const parsed = parseBotUpdateInput(request);

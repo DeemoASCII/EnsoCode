@@ -15,17 +15,21 @@ const TOOL_GATED: Partial<Record<SettingsCategory, string>> = {
 
 export function isCategoryVisible(
   category: SettingsCategory,
-  disabledBuiltinTools: readonly string[]
+  disabledBuiltinTools: readonly string[],
+  botModeEnabled = false
 ): boolean {
+  // Bot 模式页跟随「实验」里的开关；开关所在的实验页始终可见
+  if (category === 'bots') return botModeEnabled;
   const tool = TOOL_GATED[category];
   return !tool || !disabledBuiltinTools.includes(tool);
 }
 
 export function visibleCategories<T extends { id: SettingsCategory }>(
   categories: readonly T[],
-  disabledBuiltinTools: readonly string[]
+  disabledBuiltinTools: readonly string[],
+  botModeEnabled = false
 ): T[] {
-  return categories.filter((c) => isCategoryVisible(c.id, disabledBuiltinTools));
+  return categories.filter((c) => isCategoryVisible(c.id, disabledBuiltinTools, botModeEnabled));
 }
 
 /**
@@ -35,7 +39,9 @@ export function visibleCategories<T extends { id: SettingsCategory }>(
  */
 export function resolveActiveCategory(
   active: SettingsCategory,
-  disabledBuiltinTools: readonly string[]
+  disabledBuiltinTools: readonly string[],
+  botModeEnabled = false
 ): SettingsCategory {
-  return isCategoryVisible(active, disabledBuiltinTools) ? active : 'tools';
+  if (isCategoryVisible(active, disabledBuiltinTools, botModeEnabled)) return active;
+  return active === 'bots' ? 'experimental' : 'tools';
 }

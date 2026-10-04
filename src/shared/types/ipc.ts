@@ -393,6 +393,8 @@ export const IPC_CHANNELS = {
   BOT_ROUTINE_SAVE: 'bots:routine-save',
   BOT_ROUTINE_DELETE: 'bots:routine-delete',
   BOT_ROUTINE_RUN_NOW: 'bots:routine-run-now',
+  /** 「自动设置能力」：便宜模型按成员描述推荐能力，只返回建议不落盘 */
+  BOT_SUGGEST_ABILITIES: 'bots:suggest-abilities',
   /** main → renderer：Bot 数据变化提示 */
   BOT_EVENT: 'bots:event',
 } as const;

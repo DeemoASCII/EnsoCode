@@ -1,7 +1,6 @@
 import { isValidProxyUrl, type ProxyMode } from '@shared/proxy';
 import { type TerminalShell, terminalShellsForPlatform } from '@shared/terminalShell';
 import type { UpdateStatus } from '@shared/types/updater';
-import { canBeVirtualMember, classifierProviderFor } from '@shared/virtualModels';
 import type { WindowsLocalShell } from '@shared/windowsLocalShell';
 import { isAbsolutePathLike } from '@shared/worktreeRoot';
 import * as React from 'react';
@@ -16,10 +15,6 @@ import {
 } from '@/components/ui/select';
 import { Switch } from '@/components/ui/switch';
 import { useI18n } from '@/i18n';
-import {
-  usableProvidersForOauthSnapshot,
-  useOauthCredentialStore,
-} from '@/stores/oauthCredentials';
 import { GENERATION_STALL_TIMEOUT_MINUTES } from '@/stores/sessions/stallTimeout';
 import { useSettingsStore } from '@/stores/settings';
 import {
@@ -28,7 +23,6 @@ import {
 } from '@/stores/settings/autoArchiveIdleDays';
 import { ConfigSyncSettings } from './ConfigSyncSettings';
 import { SmartCompactPicker } from './SmartCompactPicker';
-import { ClassifierSourceField } from './VirtualModelsSettings';
 
 const TERMINAL_SHELL_LABELS: Record<Exclude<TerminalShell, 'auto'>, string> = {
   cmd: 'Command Prompt',
@@ -76,7 +70,6 @@ export function GeneralSettings() {
       <TerminalShellSection />
       <WorktreeRootSection />
       <ProxySection />
-      <BotModeSection />
       <ConfigSyncSettings />
       <UpdateSection />
     </div>
@@ -97,62 +90,6 @@ function NotificationSection() {
       checked={notifyMainAgentOnly}
       onChange={setNotifyMainAgentOnly}
     />
-  );
-}
-
-function BotModeSection() {
-  const { t } = useI18n();
-  const botModeEnabled = useSettingsStore((s) => s.botModeEnabled);
-  const setBotModeEnabled = useSettingsStore((s) => s.setBotModeEnabled);
-  return (
-    <div className="space-y-2">
-      <SwitchRow
-        rowId="general.botMode"
-        title={t('Bot mode (experimental)')}
-        description={t(
-          'Adds a Code | Bot switch to the sidebar. Create members with their own persona, model and tools, and chat with them alone or in groups.'
-        )}
-        checked={botModeEnabled}
-        onChange={setBotModeEnabled}
-      />
-      {botModeEnabled && <BotRouteClassifierRow />}
-    </div>
-  );
-}
-
-function BotRouteClassifierRow() {
-  const { t } = useI18n();
-  const value = useSettingsStore((s) => s.botRouteClassifier);
-  const setValue = useSettingsStore((s) => s.setBotRouteClassifier);
-  const providers = useSettingsStore((s) => s.providers);
-  const snapshot = useOauthCredentialStore((s) => s.snapshot);
-  const usable = React.useMemo(
-    () => usableProvidersForOauthSnapshot(providers, snapshot),
-    [providers, snapshot]
-  );
-  const candidates = React.useMemo(() => usable.filter(canBeVirtualMember), [usable]);
-  const classifierProviders = React.useMemo(
-    () => usable.filter((provider) => classifierProviderFor(provider) !== undefined),
-    [usable]
-  );
-  return (
-    <div className="rounded-md border px-3 py-2.5" data-settings-row="general.botRouteClassifier">
-      <p className="text-sm">{t('Group reply picker model')}</p>
-      <p className="mb-2 text-xs text-muted-foreground">
-        {t(
-          'When nobody is @-mentioned in a smart-routing group, this model picks which member replies.'
-        )}
-      </p>
-      <ClassifierSourceField
-        value={value ?? undefined}
-        onChange={(next) => setValue(next ?? null)}
-        providers={candidates}
-        classifierProviders={classifierProviders}
-        offLabel={t('Default (title model)')}
-        judgeLabel={t('Fast chat model')}
-        description={t('Falls back to the group owner on timeout, error or an unclear answer.')}
-      />
-    </div>
   );
 }
 
@@ -518,7 +455,7 @@ function WindowsLocalShellSection() {
   );
 }
 
-function SwitchRow({
+export function SwitchRow({
   title,
   description,
   checked,

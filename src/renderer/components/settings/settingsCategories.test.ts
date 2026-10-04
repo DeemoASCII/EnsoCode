@@ -59,3 +59,22 @@ describe('isCategoryVisible', () => {
     expect(isCategoryVisible('memory', ['browser'])).toBe(true);
   });
 });
+
+describe('Bot mode page', () => {
+  const withBots = [
+    ...cats,
+    { id: 'experimental' as SettingsCategory },
+    { id: 'bots' as SettingsCategory },
+  ];
+
+  it('is hidden until Bot mode is enabled; Experimental always stays', () => {
+    expect(visibleCategories(withBots, []).map((c) => c.id)).not.toContain('bots');
+    expect(visibleCategories(withBots, [], false).map((c) => c.id)).toContain('experimental');
+    expect(visibleCategories(withBots, [], true).map((c) => c.id)).toContain('bots');
+  });
+
+  it('falls back to Experimental, where the switch lives', () => {
+    expect(resolveActiveCategory('bots', [], false)).toBe('experimental');
+    expect(resolveActiveCategory('bots', [], true)).toBe('bots');
+  });
+});
