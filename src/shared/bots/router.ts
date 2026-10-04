@@ -16,6 +16,15 @@ export interface RouterState {
   turnsByBot: Record<BotId, number>;
   /** 已发过的上限提示：'hops' 或 'turns:<botId>'，每种只提示一次 */
   noticed: string[];
+  /** 群主本轮 @ 派出、尚未回复的成员；清空时提醒群主汇总 */
+  waiting?: BotId[];
+  /** 已回复的派单成员；[skip] / 未能回复的没有 seq */
+  reports?: SummaryReport[];
+}
+
+export interface SummaryReport {
+  botId: BotId;
+  seq?: number;
 }
 
 export interface ReplyResult {
@@ -25,6 +34,8 @@ export interface ReplyResult {
   skipped: boolean;
   /** 需写入时间线的 system 提示 */
   notices: string[];
+  /** 本次追加了一跳群主汇总提醒 */
+  summary?: { botId: BotId; reports: SummaryReport[] };
 }
 
 export type HumanDecision =
@@ -159,12 +170,13 @@ function nameOf(members: readonly RouterMember[], id: BotId): string {
 /**
  * 当前回复人说完：解析其回复里的 @ 接力，超出上限的拦下并提示。
  * delegated：本轮刚委派出去的成员，结果会经委派回传，正文 @ 他们不再接力。
+ * 群主 @ 派出的成员都回复后（最后一条没 @ 群主），给群主追加一跳汇总提醒。
  */
 export function onReply(
   state: RouterState,
   chat: RouterChat,
   members: readonly RouterMember[],
-  reply: { botId: BotId; text: string; delegated?: readonly BotId[] }
+  reply: { botId: BotId; text: string; delegated?: readonly BotId[]; seq?: number }
 ): ReplyResult {
   if (state.current === null || reply.botId !== state.current) {
     return { state, next: state.current, skipped: false, notices: [] };
@@ -174,6 +186,7 @@ export function onReply(
   const noticed = [...state.noticed];
   const notices: string[] = [];
   const hopBlocked: string[] = [];
+  const relayed: BotId[] = [];
   let hops = state.hops;
   // [skip] 不算一次回复，不占 maxTurnsPerBot
   const turnsByBot = skipped
@@ -194,6 +207,7 @@ export function onReply(
     } else {
       hops += 1;
       queue.push(id);
+      relayed.push(id);
     }
   }
   if (hopBlocked.length > 0 && !noticed.includes('hops')) {
@@ -202,8 +216,65 @@ export function onReply(
       `本轮接力已达上限（${chat.routing.maxHops} 次），未再交给「${hopBlocked.join('」「')}」。`
     );
   }
-  const next = advance({ ...state, queue, hops, noticed, turnsByBot });
-  return { state: next, next: next.current, skipped, notices };
+  let waiting = Array.isArray(state.waiting) ? state.waiting : [];
+  let reports = Array.isArray(state.reports) ? state.reports : [];
+  let summary: ReplyResult['summary'];
+  const boss = chat.bossBotId;
+  if (waiting.includes(reply.botId)) {
+    waiting = waiting.filter((id) => id !== reply.botId);
+    const seq = skipped || typeof reply.seq !== 'number' ? {} : { seq: reply.seq };
+    reports = [...reports, { botId: reply.botId, ...seq }];
+    if (
+      waiting.length === 0 &&
+      boss &&
+      reports.some((r) => typeof r.seq === 'number') &&
+      !targets.includes(boss) &&
+      !queue.includes(boss) &&
+      mentionedActive(chat, members, [boss]).length > 0
+    ) {
+      const turns = turnsByBot[boss] ?? 0;
+      const name = nameOf(members, boss);
+      if (turns >= chat.routing.maxTurnsPerBot) {
+        if (!noticed.includes(`turns:${boss}`)) {
+          noticed.push(`turns:${boss}`);
+          notices.push(`「${name}」本轮已回复 ${turns} 次，达到上限，未再请 TA 汇总。`);
+        }
+      } else if (hops >= chat.routing.maxHops) {
+        if (!noticed.includes('hops')) {
+          noticed.push('hops');
+          notices.push(`本轮接力已达上限（${chat.routing.maxHops} 次），未再请「${name}」汇总。`);
+        }
+      } else {
+        hops += 1;
+        queue.push(boss);
+        summary = { botId: boss, reports };
+      }
+    }
+  }
+  if (reply.botId === boss) waiting = [...waiting, ...relayed];
+  const { waiting: _w, reports: _r, ...rest } = state;
+  const next = advance({
+    ...rest,
+    queue,
+    hops,
+    noticed,
+    turnsByBot,
+    ...(waiting.length > 0 ? { waiting, reports } : {}),
+  });
+  return { state: next, next: next.current, skipped, notices, ...(summary ? { summary } : {}) };
+}
+
+export function buildSummaryNote(
+  members: readonly RouterMember[],
+  reports: readonly SummaryReport[]
+): string {
+  const list = reports
+    .map(
+      (r) =>
+        `「${nameOf(members, r.botId)}」${typeof r.seq === 'number' ? `（seq ${r.seq}）` : '（未发言）'}`
+    )
+    .join('、');
+  return `你派出的成员都已回复：${list}。请在群里汇总结论或决定下一步，不要复述他们的原话；需要原文可用 group_history 按 seq 查。`;
 }
 
 /**

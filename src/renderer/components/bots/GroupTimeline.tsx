@@ -48,6 +48,7 @@ const ROUTED_BY_LABELS: Record<BotRoutedBy, string> = {
   'smart:build': 'Smart pick · build',
   'smart:answer': 'Smart pick · answer',
   'smart:discuss': 'Smart pick · discuss',
+  summary: 'Owner summary',
 };
 
 interface GroupTimelineProps {
@@ -456,7 +457,11 @@ const EntryRow = memo(function EntryRow({
                 )}
                 {entry.routedBy && (
                   <span
-                    title={t('Picked automatically because nobody was @-mentioned')}
+                    title={t(
+                      entry.routedBy === 'summary'
+                        ? 'Asked to sum up after the assigned members replied'
+                        : 'Picked automatically because nobody was @-mentioned'
+                    )}
                     className="ml-1.5 rounded border px-1 py-px text-[10px]"
                   >
                     {t(ROUTED_BY_LABELS[entry.routedBy])}

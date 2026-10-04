@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { BotChat, GroupEntry } from '../types/bot';
 import {
+  buildSummaryNote,
   isSkipReply,
   mergePending,
   needsSmartRoute,
@@ -301,6 +302,141 @@ describe('onReply', () => {
     const snapshot = JSON.parse(JSON.stringify(s)) as RouterState;
     onReply(s, chat(), members, { botId: 'boss', text: '@前端' });
     expect(s).toEqual(snapshot);
+  });
+});
+
+describe('群主派单后的汇总提醒', () => {
+  const dispatched = (c = chat({ maxHops: 6, maxTurnsPerBot: 2 })) =>
+    onReply(startRound(c, members, human('出方案')), c, members, {
+      botId: 'boss',
+      text: '@前端 @Backend 各给一个方案',
+    });
+
+  it('群主 @ 派出的成员记入待回报名单，全部回复后追加一跳群主汇总', () => {
+    const c = chat({ maxHops: 6, maxTurnsPerBot: 2 });
+    const r = dispatched(c);
+    expect(r.state.waiting).toEqual(['fe', 'be']);
+    const r2 = onReply(r.state, c, members, { botId: 'fe', text: '方案 A', seq: 10 });
+    expect(r2.summary).toBeUndefined();
+    expect(r2.state.waiting).toEqual(['be']);
+    const r3 = onReply(r2.state, c, members, { botId: 'be', text: '方案 B', seq: 11 });
+    expect(r3.next).toBe('boss');
+    expect(r3.summary).toEqual({
+      botId: 'boss',
+      reports: [
+        { botId: 'fe', seq: 10 },
+        { botId: 'be', seq: 11 },
+      ],
+    });
+    expect(r3.state.hops).toBe(3);
+    expect(r3.state.turnsByBot.boss).toBe(2);
+    expect(r3.state.waiting).toBeUndefined();
+    const r4 = onReply(r3.state, c, members, { botId: 'boss', text: '结论：用 A', seq: 12 });
+    expect(r4.next).toBeNull();
+    expect(r4.summary).toBeUndefined();
+  });
+
+  it('[skip] 视为已回报但没有 seq', () => {
+    const c = chat({ maxHops: 6, maxTurnsPerBot: 2 });
+    const r = onReply(dispatched(c).state, c, members, { botId: 'fe', text: '[skip]', seq: 10 });
+    const r2 = onReply(r.state, c, members, { botId: 'be', text: '方案 B', seq: 11 });
+    expect(r2.summary?.reports).toEqual([{ botId: 'fe' }, { botId: 'be', seq: 11 }]);
+  });
+
+  it('派出的成员都没发言（[skip] / 失败）时不提醒', () => {
+    const c = chat({ maxHops: 6, maxTurnsPerBot: 2 });
+    const r = onReply(dispatched(c).state, c, members, { botId: 'fe', text: '[skip]', seq: 10 });
+    const r2 = onReply(r.state, c, members, { botId: 'be', text: '' });
+    expect(r2.next).toBeNull();
+    expect(r2.summary).toBeUndefined();
+    expect(r2.notices).toEqual([]);
+  });
+
+  it('最后一条回复已 @ 群主或群主已在队列中时不另发', () => {
+    const c = chat({ maxHops: 6, maxTurnsPerBot: 2 });
+    const r = onReply(dispatched(c).state, c, members, { botId: 'fe', text: 'A', seq: 10 });
+    const r2 = onReply(r.state, c, members, { botId: 'be', text: '@老板 B', seq: 11 });
+    expect(r2.next).toBe('boss');
+    expect(r2.summary).toBeUndefined();
+    expect(r2.state.hops).toBe(3);
+    const q = onReply(dispatched(c).state, c, members, { botId: 'fe', text: '@老板 A', seq: 10 });
+    const q2 = onReply(q.state, c, members, { botId: 'be', text: 'B', seq: 11 });
+    expect([q2.next, ...q2.state.queue]).toEqual(['boss']);
+    expect(q2.summary).toBeUndefined();
+  });
+
+  it('普通成员互相 @ 与智能选出多人不触发', () => {
+    const c = chat({ maxHops: 6, maxTurnsPerBot: 2 });
+    const s = startRound(c, members, human('@前端'));
+    const r = onReply(s, c, members, { botId: 'fe', text: '@Backend 你看看', seq: 2 });
+    expect(r.state.waiting).toBeUndefined();
+    const r2 = onReply(r.state, c, members, { botId: 'be', text: '好', seq: 3 });
+    expect(r2.next).toBeNull();
+    expect(r2.summary).toBeUndefined();
+    const smart = startRound(c, members, human('出方案'), ['fe', 'be']);
+    const m = onReply(smart, c, members, { botId: 'fe', text: 'A', seq: 2 });
+    const m2 = onReply(m.state, c, members, { botId: 'be', text: 'B', seq: 3 });
+    expect(m2.next).toBeNull();
+    expect(m2.summary).toBeUndefined();
+  });
+
+  it('只记实际入队的：排除自己、归档、已在队列、本轮已委派的', () => {
+    const c = chat({ maxHops: 6, maxTurnsPerBot: 2 });
+    const s = startRound(c, members, human('@老板 @前端'));
+    const r = onReply(s, c, members, {
+      botId: 'boss',
+      text: '@老板 @老员工 @前端 @Backend',
+    });
+    expect(r.state.waiting).toEqual(['be']);
+    const d = onReply(startRound(c, members, human('x')), c, members, {
+      botId: 'boss',
+      text: '@前端 @Backend',
+      delegated: ['fe'],
+    });
+    expect(d.state.waiting).toEqual(['be']);
+    const r2 = onReply(r.state, c, members, { botId: 'fe', text: 'A', seq: 5 });
+    expect(r2.summary).toBeUndefined();
+    const r3 = onReply(r2.state, c, members, { botId: 'be', text: 'B', seq: 6 });
+    expect(r3.summary?.reports).toEqual([{ botId: 'be', seq: 6 }]);
+  });
+
+  it('跳数或群主次数到上限时不发，写一条说明', () => {
+    const hopsCap = chat({ maxHops: 2, maxTurnsPerBot: 2 });
+    const h = dispatched(hopsCap);
+    const h2 = onReply(h.state, hopsCap, members, { botId: 'fe', text: 'A', seq: 10 });
+    const h3 = onReply(h2.state, hopsCap, members, { botId: 'be', text: 'B', seq: 11 });
+    expect(h3.next).toBeNull();
+    expect(h3.summary).toBeUndefined();
+    expect(h3.notices).toHaveLength(1);
+    expect(h3.notices[0]).toContain('老板');
+    expect(h3.state.waiting).toBeUndefined();
+    const turnsCap = chat({ maxHops: 6, maxTurnsPerBot: 1 });
+    const t = dispatched(turnsCap);
+    const t2 = onReply(t.state, turnsCap, members, { botId: 'fe', text: 'A', seq: 10 });
+    const t3 = onReply(t2.state, turnsCap, members, { botId: 'be', text: 'B', seq: 11 });
+    expect(t3.next).toBeNull();
+    expect(t3.summary).toBeUndefined();
+    expect(t3.notices).toHaveLength(1);
+    expect(t3.notices[0]).toContain('老板');
+  });
+
+  it('没有 waiting 字段的旧状态照常推进', () => {
+    const c = chat({ maxHops: 6, maxTurnsPerBot: 2 });
+    const old = JSON.parse(
+      '{"rootEntrySeq":1,"queue":["be"],"current":"fe","hops":1,"turnsByBot":{"fe":1},"noticed":[]}'
+    ) as RouterState;
+    const r = onReply(old, c, members, { botId: 'fe', text: 'A', seq: 3 });
+    expect(r.next).toBe('be');
+    expect(r.summary).toBeUndefined();
+  });
+
+  it('汇总提醒列出回复 seq，并提示用 group_history 查原文、不复述', () => {
+    const note = buildSummaryNote(members, [{ botId: 'fe', seq: 10 }, { botId: 'be' }]);
+    expect(note).toContain('前端');
+    expect(note).toContain('seq 10');
+    expect(note).toContain('Backend');
+    expect(note).toContain('group_history');
+    expect(note).toContain('不要复述');
   });
 });
 

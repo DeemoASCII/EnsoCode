@@ -249,7 +249,7 @@ export type GroupEntry =
       text: string;
       conversationId: string;
       turnId: string;
-      /** 该轮回复人由智能选人选出（群主兜底不标）；带意图时为 smart:<intent> */
+      /** 该轮回复人由智能选人选出（群主兜底不标）；带意图时为 smart:<intent>；summary 为派单后的群主汇总 */
       routedBy?: BotRoutedBy;
       /** 产出该回复的模型 id（虚拟模型为实际路由到的真实模型） */
       model?: string;
@@ -276,7 +276,13 @@ export type GroupEntryInput = GroupEntry extends infer E
   : never;
 
 export const BOT_ROUTING_DEFAULTS: BotChatRouting = { mode: 'boss', maxHops: 4, maxTurnsPerBot: 2 };
-export const BOT_ROUTED_BY = ['smart', 'smart:build', 'smart:answer', 'smart:discuss'] as const;
+export const BOT_ROUTED_BY = [
+  'smart',
+  'smart:build',
+  'smart:answer',
+  'smart:discuss',
+  'summary',
+] as const;
 export type BotRoutedBy = (typeof BOT_ROUTED_BY)[number];
 const ROUTING_LIMITS = { maxHops: 20, maxTurnsPerBot: 10 } as const;
 

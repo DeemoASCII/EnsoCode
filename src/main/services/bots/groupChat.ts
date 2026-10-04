@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { dirname, join } from 'node:path';
 import { parseMentions } from '../../../shared/bots/mentions';
 import {
+  buildSummaryNote,
   type HumanEntry,
   isSkipReply,
   mergePending,
@@ -61,6 +62,8 @@ interface Round {
   smartIntent?: SmartRouteIntent;
   /** build 被选中的成员：其下一次投递附「先动手」指令 */
   buildNote?: BotId;
+  /** 派单成员都回复后排队的群主汇总：投递时附 note，其发言标 routedBy: summary */
+  summary?: { botId: BotId; note?: string };
 }
 interface AutonomousReply {
   botId: string;
@@ -326,6 +329,9 @@ export class GroupChatService {
       chat.sessions[event.botId]?.conversationId !== event.conversationId
     )
       return;
+    let seq: number | undefined;
+    const summarized = round.summary?.botId === event.botId && round.summary.note === undefined;
+    if (summarized) delete round.summary;
     if (!event.ok) {
       const name = this.deps.bots.get(event.botId)?.name ?? '已删除成员';
       this.system(
@@ -338,28 +344,31 @@ export class GroupChatService {
       );
     } else if (!isSkipReply(event.text) && event.turnId) {
       const smart = round.smartPicked?.includes(event.botId) ?? false;
-      this.append(chat.id, {
+      seq = this.append(chat.id, {
         kind: 'bot',
         botId: event.botId,
         text: event.text,
         conversationId: event.conversationId,
         turnId: event.turnId,
         ...(event.model ? { model: event.model } : {}),
-        ...(smart
-          ? {
-              routedBy: round.smartIntent ? (`smart:${round.smartIntent}` as const) : 'smart',
-            }
-          : {}),
+        ...(summarized
+          ? { routedBy: 'summary' as const }
+          : smart
+            ? {
+                routedBy: round.smartIntent ? (`smart:${round.smartIntent}` as const) : 'smart',
+              }
+            : {}),
         id: randomUUID(),
         at: Date.now(),
-      });
+      })?.seq;
     }
     round.smartPicked = round.smartPicked?.filter((botId) => botId !== event.botId);
     this.recordBatch(round, event);
     this.advance(
       chat,
       event.ok ? event.text : '',
-      event.turnKey ? this.deps.delegatedTargets?.(event.conversationId, event.turnKey) : undefined
+      event.turnKey ? this.deps.delegatedTargets?.(event.conversationId, event.turnKey) : undefined,
+      seq
     );
     const pending = mergePending(round.pending);
     if (pending) {
@@ -501,16 +510,24 @@ export class GroupChatService {
     delete round.smartPicked;
     delete round.smartIntent;
     delete round.buildNote;
+    delete round.summary;
   }
 
-  private advance(chat: BotChat, text: string, delegated?: readonly string[]): void {
+  private advance(chat: BotChat, text: string, delegated?: readonly string[], seq?: number): void {
     const round = this.round(chat.id);
-    const result = onReply(round.state, chat, this.members(chat), {
+    const members = this.members(chat);
+    const result = onReply(round.state, chat, members, {
       botId: round.state.current!,
       text,
       ...(delegated?.length ? { delegated } : {}),
+      ...(seq !== undefined ? { seq } : {}),
     });
     round.state = result.state;
+    if (result.summary)
+      round.summary = {
+        botId: result.summary.botId,
+        note: buildSummaryNote(members, result.summary.reports),
+      };
     for (const notice of result.notices) this.system(chat.id, notice);
   }
 
@@ -568,11 +585,14 @@ export class GroupChatService {
       }
       round.generation++;
       this.persist(chatId);
-      const note = round.buildNote === botId ? SMART_ROUTE_BUILD_NOTE : undefined;
+      const summary = round.summary?.botId === botId ? round.summary.note : undefined;
+      if (summary !== undefined) round.summary = { botId };
+      const note = round.buildNote === botId ? SMART_ROUTE_BUILD_NOTE : summary;
       delete round.buildNote;
       const sent = await this.deliver(chat, botId, round.options, note);
       round.options = relayOptions(round.options);
       if (sent.ok && !sent.duplicate) return;
+      if (round.summary?.botId === botId) delete round.summary;
       this.system(
         chatId,
         sent.ok

@@ -1,6 +1,6 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { SmartRouteDecision, SmartRouteInput } from '../../../shared/bots/smartRoute';
 import type { BotTurnFinished } from './botSessionHost';
@@ -632,6 +632,65 @@ describe('smart routing', () => {
     await group.send(id, 'anyone');
     expect(select).toHaveBeenCalledTimes(1);
     expect(deliver.mock.calls.at(-1)?.[1]).toBe(a);
+  });
+});
+
+describe('群主派单后的汇总提醒', () => {
+  let c: string;
+  const routerFile = () =>
+    JSON.parse(readFileSync(join(dirname(chats.workspaceDir(id)), 'router.json'), 'utf8'));
+  const to = () => deliver.mock.calls.map((call) => call[1]);
+  beforeEach(() => {
+    const carol = bots.create({ name: 'Carol' }, []);
+    if (!carol.ok) throw new Error('fixture');
+    c = carol.bot.id;
+    chats.update(id, (chat) => ({ ...chat, members: [a, b, c] }));
+  });
+
+  it('派出的成员都回复后提醒群主汇总一次，汇总发言带 routedBy: summary', async () => {
+    await group.send(id, '出方案');
+    await done(a, '@Bob @Carol 各给一个方案');
+    expect(routerFile().state.waiting).toEqual([b, c]);
+    await done(b, 'B 方案');
+    await done(c, 'C 方案');
+    expect(to()).toEqual([a, b, c, a]);
+    const seqOf = (botId: string) =>
+      entries().find((e) => e.kind === 'bot' && e.botId === botId && e.text.endsWith('方案'))!.seq;
+    const note = String(deliver.mock.calls[3][2]);
+    expect(note).toContain('<routing-note>');
+    expect(note).toContain(`seq ${seqOf(b)}`);
+    expect(note).toContain(`seq ${seqOf(c)}`);
+    expect(entries().filter((e) => e.kind === 'human')).toHaveLength(1);
+    await done(a, '结论：用 B');
+    expect(entries().at(-1)).toMatchObject({ kind: 'bot', botId: a, routedBy: 'summary' });
+    expect(entries().filter((e) => e.kind === 'bot' && e.routedBy)).toHaveLength(1);
+    expect(group.state(id)).toMatchObject({ current: null, queue: [] });
+    expect(to()).toHaveLength(4);
+    expect(routerFile().state.waiting).toBeUndefined();
+  });
+
+  it('人类插话打断本轮时清空名单，不再提醒', async () => {
+    await group.send(id, '出方案');
+    await done(a, '@Bob @Carol 各给一个方案');
+    await group.send(id, '换个话题');
+    await done(b, 'B 方案');
+    expect(to()).toEqual([a, b, a]);
+    await done(a, '好');
+    expect(group.state(id)).toMatchObject({ current: null });
+    expect(deliver.mock.calls.some((call) => String(call[2]).includes('routing-note'))).toBe(false);
+  });
+
+  it('接力到上限时不提醒，写一条 system', async () => {
+    chats.update(id, (chat) => ({ ...chat, routing: { ...chat.routing, maxHops: 2 } }));
+    await group.send(id, '出方案');
+    await done(a, '@Bob @Carol 各给一个方案');
+    await done(b, 'B');
+    await done(c, 'C');
+    expect(to()).toEqual([a, b, c]);
+    expect(entries().at(-1)).toMatchObject({
+      kind: 'system',
+      text: expect.stringContaining('汇总'),
+    });
   });
 });
 

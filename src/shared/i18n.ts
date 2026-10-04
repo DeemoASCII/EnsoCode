@@ -2353,6 +2353,8 @@ export const zhTranslations: Record<string, string> = {
   'Smart pick · build': '智能选人 · 执行',
   'Smart pick · answer': '智能选人 · 解答',
   'Smart pick · discuss': '智能选人 · 讨论',
+  'Owner summary': '群主汇总',
+  'Asked to sum up after the assigned members replied': '派出的成员都回复后，提醒群主汇总',
   Mute: '静音',
   Unmute: '取消静音',
   Muted: '静音',

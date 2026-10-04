@@ -343,7 +343,7 @@ describe('parseGroupEntry', () => {
     };
     expect(parseGroupEntry({ ...base, routedBy: 'smart' })).toEqual({ ...base, routedBy: 'smart' });
     expect(parseGroupEntry({ ...base, routedBy: 'other' })).toEqual(base);
-    for (const routedBy of ['smart:build', 'smart:answer', 'smart:discuss'])
+    for (const routedBy of ['smart:build', 'smart:answer', 'smart:discuss', 'summary'])
       expect(parseGroupEntry({ ...base, routedBy })).toEqual({ ...base, routedBy });
     expect(parseGroupEntry({ ...base, routedBy: 'smart:x' })).toEqual(base);
   });
