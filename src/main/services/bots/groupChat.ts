@@ -344,6 +344,7 @@ export class GroupChatService {
         text: event.text,
         conversationId: event.conversationId,
         turnId: event.turnId,
+        ...(event.model ? { model: event.model } : {}),
         ...(smart
           ? {
               routedBy: round.smartIntent ? (`smart:${round.smartIntent}` as const) : 'smart',

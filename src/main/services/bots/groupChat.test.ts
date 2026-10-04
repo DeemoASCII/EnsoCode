@@ -123,6 +123,20 @@ it('a member over budget gets a system note and the queue moves on', async () =>
     expect.objectContaining({ text: 'Bob 今日预算已用完' }),
   ]);
 });
+it('a bot reply records the model that produced it', async () => {
+  await group.send(id, '@Bob hello');
+  finish({
+    chatId: id,
+    botId: b,
+    conversationId: b,
+    turnId: 't',
+    text: 'hi',
+    ok: true,
+    model: 'glm-5.3',
+  });
+  await group.settled(id);
+  expect(entries().at(-1)).toMatchObject({ kind: 'bot', botId: b, model: 'glm-5.3' });
+});
 it('a turn stopped by the budget writes the same note and relays onwards', async () => {
   await group.send(id, '@Bob @Alice hello');
   finish({

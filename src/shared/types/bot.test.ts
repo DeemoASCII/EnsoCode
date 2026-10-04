@@ -347,4 +347,20 @@ describe('parseGroupEntry', () => {
       expect(parseGroupEntry({ ...base, routedBy })).toEqual({ ...base, routedBy });
     expect(parseGroupEntry({ ...base, routedBy: 'smart:x' })).toEqual(base);
   });
+
+  it('bot 条目保留非空 model，其余丢弃', () => {
+    const base = {
+      seq: 2,
+      id: 'e2',
+      at: 2,
+      kind: 'bot',
+      botId: BOT_A,
+      text: 'yo',
+      conversationId: 'c1',
+      turnId: 't1',
+    };
+    expect(parseGroupEntry({ ...base, model: 'glm-5.3' })).toEqual({ ...base, model: 'glm-5.3' });
+    expect(parseGroupEntry({ ...base, model: '' })).toEqual(base);
+    expect(parseGroupEntry({ ...base, model: 3 })).toEqual(base);
+  });
 });

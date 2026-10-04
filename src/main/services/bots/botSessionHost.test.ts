@@ -360,6 +360,29 @@ describe('BotSessionHost.ensureSession', () => {
     expect(runtime.prompts).toHaveLength(2);
   });
 
+  it('reports the model of the final assistant message', async () => {
+    const alice = bot('Alice');
+    const chat = direct(alice.id);
+    const results: BotTurnFinished[] = [];
+    host.onTurnFinished((event) => results.push(event));
+    const first = await host.deliver(chat.id, alice.id, 'hi');
+    if (!first.ok) throw new Error(first.error);
+    host.observe(ev({ type: 'status', status: 'running' }, first.conversationId));
+    host.observe(
+      ev(
+        {
+          type: 'message-upsert',
+          index: 1,
+          message: { role: 'assistant', model: 'glm-5.3', content: [{ type: 'text', text: 'ok' }] },
+        },
+        first.conversationId
+      )
+    );
+    host.observe(ev({ type: 'turn-completed', turnId: 't1' }, first.conversationId));
+    await flush();
+    expect(results).toMatchObject([{ text: 'ok', model: 'glm-5.3' }]);
+  });
+
   it('retiring a session settles queued deliveries exactly once as canceled', async () => {
     const alice = bot('Alice');
     const chat = direct(alice.id);

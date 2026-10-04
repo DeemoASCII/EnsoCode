@@ -445,6 +445,11 @@ const EntryRow = memo(function EntryRow({
                 </span>
                 {bot?.title ? `${bot.title} · ` : ''}
                 {timeOf(entry.at)}
+                {entry.model && (
+                  <span className="ml-1.5 rounded-md bg-muted px-1.5 py-0.5 font-mono text-[10px]">
+                    {entry.model}
+                  </span>
+                )}
                 {entry.routedBy && (
                   <span
                     title={t('Picked automatically because nobody was @-mentioned')}

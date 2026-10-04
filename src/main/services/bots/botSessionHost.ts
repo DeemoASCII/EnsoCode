@@ -152,6 +152,8 @@ export interface BotTurnFinished {
   stopped?: true;
   /** 单回合上限停止时，只算厂商实报用量并未超限，是按估算停的 */
   estimated?: true;
+  /** 最后一条 assistant 消息的模型 id */
+  model?: string;
 }
 
 interface Delivery extends BotDeliverOptions {
@@ -166,6 +168,7 @@ interface LastAssistant {
   text: string;
   stopReason?: string;
   errorMessage?: string;
+  model?: string;
 }
 
 type Workspace = { ok: true; cwd: string; projectId: string } | Fail;
@@ -703,6 +706,7 @@ export class BotSessionHost {
           text,
           ...(event.message.stopReason ? { stopReason: event.message.stopReason } : {}),
           ...(event.message.errorMessage ? { errorMessage: event.message.errorMessage } : {}),
+          ...(event.message.model ? { model: event.message.model } : {}),
         });
         const binding = this.binding(id);
         const usage = event.message.usage;
@@ -1198,6 +1202,7 @@ export class BotSessionHost {
     const binding = this.binding(conversationId);
     if (!binding) return;
     const turnKey = this.turnKeys.get(conversationId);
+    const model = this.lastAssistant.get(conversationId)?.model;
     const event: BotTurnFinished = {
       ...(deliveryId ? { deliveryId } : {}),
       chatId: binding.chatId,
@@ -1211,6 +1216,7 @@ export class BotSessionHost {
       ...(turnKey ? { turnKey } : {}),
       ...(stopped ? { stopped: true as const } : {}),
       ...(estimated ? { estimated: true as const } : {}),
+      ...(model ? { model } : {}),
     };
     if (deliveryId === this.activeDeliveries.get(conversationId))
       this.activeDeliveries.delete(conversationId);

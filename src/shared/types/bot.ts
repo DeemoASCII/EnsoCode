@@ -251,6 +251,8 @@ export type GroupEntry =
       turnId: string;
       /** 该轮回复人由智能选人选出（群主兜底不标）；带意图时为 smart:<intent> */
       routedBy?: BotRoutedBy;
+      /** 产出该回复的模型 id（虚拟模型为实际路由到的真实模型） */
+      model?: string;
     })
   | (GroupEntryBase & {
       kind: 'delegation';
@@ -518,6 +520,7 @@ export function parseGroupEntry(value: unknown): GroupEntry | undefined {
             ...(BOT_ROUTED_BY.includes(value.routedBy as BotRoutedBy)
               ? { routedBy: value.routedBy as BotRoutedBy }
               : {}),
+            ...(typeof value.model === 'string' && value.model ? { model: value.model } : {}),
           }
         : undefined;
     case 'delegation': {
