@@ -1,7 +1,7 @@
 import { buildTeamFile } from '@shared/bots/team';
 import type { BotChat, BotProfile, BotRoutingMode } from '@shared/types/bot';
 import type { BotChatUpdateInput } from '@shared/types/botIpc';
-import { Crown, Download, MoreHorizontal, Plus, UserMinus } from 'lucide-react';
+import { BellOff, Crown, Download, MoreHorizontal, Plus, UserMinus } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -106,6 +106,7 @@ export function GroupInfoPanel({
   };
 
   const members = chat.members.map((id) => ({ id, bot: byId.get(id) }));
+  const muted = chat.routing.muted ?? [];
   const candidates = bots.filter((bot) => !bot.archivedAt && !chat.members.includes(bot.id));
   const name = (id: string | null | undefined) => (id ? (byId.get(id)?.name ?? '?') : '—');
   const workspaceProject =
@@ -166,6 +167,15 @@ export function GroupInfoPanel({
                           {t('Owner')}
                         </span>
                       )}
+                      {muted.includes(id) && (
+                        <span
+                          title={t('Replies only when @-mentioned by name')}
+                          className="flex shrink-0 items-center gap-0.5 rounded bg-muted px-1.5 text-[10px] text-muted-foreground"
+                        >
+                          <BellOff className="h-2.5 w-2.5" />
+                          {t('Muted')}
+                        </span>
+                      )}
                     </div>
                     <div className="truncate text-muted-foreground text-xs">
                       {bot?.scope || bot?.title}
@@ -183,6 +193,21 @@ export function GroupInfoPanel({
                     >
                       <Crown />
                       {t('Make owner')}
+                    </MenuItem>
+                    <MenuItem
+                      disabled={chat.bossBotId === id}
+                      onClick={() =>
+                        void update({
+                          routing: {
+                            muted: muted.includes(id)
+                              ? muted.filter((member) => member !== id)
+                              : [...muted, id],
+                          },
+                        })
+                      }
+                    >
+                      <BellOff />
+                      {muted.includes(id) ? t('Unmute') : t('Mute')}
                     </MenuItem>
                     <MenuItem
                       disabled={chat.bossBotId === id || chat.members.length <= 2}

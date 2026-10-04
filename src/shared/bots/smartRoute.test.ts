@@ -2,9 +2,15 @@ import { describe, expect, it } from 'vitest';
 import type { GroupEntry } from '../types/bot';
 import {
   buildSmartRouteInput,
+  decideSmartRoute,
+  guessSmartRouteIntent,
+  parseSmartRouteIntent,
   parseSmartRouteReply,
   pickSmartRouteChoice,
+  pickSmartRouteIntent,
+  rankSmartRouteChoice,
   SMART_ROUTE_MIN_CONFIDENCE,
+  smartRouteIntentQuestion,
   smartRouteJudgePrompt,
   smartRouteQuestion,
 } from './smartRoute';
@@ -224,5 +230,108 @@ describe('pickSmartRouteChoice', () => {
     expect(pickSmartRouteChoice({ old: 0.9, fe: Number.NaN, be: 0.5 }, input)).toEqual(['be']);
     expect(pickSmartRouteChoice(null, input)).toEqual([]);
     expect(pickSmartRouteChoice({ fe: '0.9' }, input)).toEqual([]);
+  });
+});
+
+describe('静音成员', () => {
+  it('不进入候选', () => {
+    const input = buildSmartRouteInput(
+      { ...chat, routing: { muted: ['fe'] } },
+      members,
+      [],
+      human(1, 'hi')
+    );
+    expect(input.candidates.map((c) => c.id)).toEqual(['boss', 'be']);
+  });
+});
+
+describe('意图', () => {
+  const input = buildSmartRouteInput(chat, members, [], human(1, 'hi'));
+
+  it('judge 提示要求先输出 INTENT 行，名单解析忽略该行', () => {
+    expect(smartRouteJudgePrompt(input).systemPrompt).toMatch(/INTENT: build\|answer\|discuss/);
+    expect(parseSmartRouteReply('INTENT: build\nBackend', input)).toEqual(['be']);
+    expect(parseSmartRouteIntent('INTENT: build\nBackend')).toBe('build');
+    expect(parseSmartRouteIntent('intent：Discuss\n前端')).toBe('discuss');
+    expect(parseSmartRouteIntent('Backend')).toBeUndefined();
+    expect(parseSmartRouteIntent(null as never)).toBeUndefined();
+  });
+
+  it('关键词兜底：中英文的执行、讨论、提问', () => {
+    for (const text of [
+      '把 README 标题改成 X',
+      '帮我修一下登录 bug',
+      '能帮我加个单测吗？',
+      'Change the README title to X',
+      'please fix the failing test',
+      'Can you run the migration?',
+    ])
+      expect(guessSmartRouteIntent(text), text).toBe('build');
+    for (const text of [
+      '大家讨论一下缓存方案',
+      '这个设计大家怎么看',
+      'What do you think about adding caching?',
+      "Let's brainstorm names",
+    ])
+      expect(guessSmartRouteIntent(text), text).toBe('discuss');
+    for (const text of ['怎么改 README 标题？', '登录接口在哪个文件', 'how do I fix this?', 'hi'])
+      expect(guessSmartRouteIntent(text), text).toBe('answer');
+  });
+
+  it('分类器意图题：criteria 为三种意图，概率不足 0.5 视为无法判定', () => {
+    expect(Object.keys(smartRouteIntentQuestion(input).criteria)).toEqual([
+      'build',
+      'answer',
+      'discuss',
+    ]);
+    expect(pickSmartRouteIntent({ build: 0.7, answer: 0.2, discuss: 0.1 })).toBe('build');
+    expect(pickSmartRouteIntent({ build: 0.4, answer: 0.35, discuss: 0.25 })).toBeUndefined();
+    expect(pickSmartRouteIntent(null)).toBeUndefined();
+  });
+
+  it('rankSmartRouteChoice 按概率降序列出全部候选', () => {
+    expect(rankSmartRouteChoice({ boss: 0.2, fe: 0.1, be: 0.7, old: 0.9 }, input)).toEqual([
+      'be',
+      'boss',
+      'fe',
+    ]);
+  });
+});
+
+describe('decideSmartRoute', () => {
+  const input = buildSmartRouteInput(chat, members, [], human(1, 'hi'));
+
+  it('answer / discuss 保留名单', () => {
+    expect(decideSmartRoute(input, 'discuss', ['fe', 'be'])).toEqual({
+      ids: ['fe', 'be'],
+      intent: 'discuss',
+    });
+    expect(decideSmartRoute(input, undefined, ['fe'])).toEqual({ ids: ['fe'] });
+  });
+
+  it('build 只选一位有写能力的成员，优先名单/排序靠前者', () => {
+    expect(decideSmartRoute(input, 'build', ['boss', 'be', 'fe'])).toEqual({
+      ids: ['be'],
+      intent: 'build',
+    });
+    expect(decideSmartRoute(input, 'build', ['boss'], ['boss', 'fe', 'be'])).toEqual({
+      ids: ['fe'],
+      intent: 'build',
+    });
+    expect(decideSmartRoute(input, 'build', [])).toEqual({ ids: ['fe'], intent: 'build' });
+  });
+
+  it('build 没有写能力成员时交给群主并标记 noWriter', () => {
+    const readonly = buildSmartRouteInput(
+      chat,
+      members.map((m) => ({ ...m, tools: 'readonly' as const })),
+      [],
+      human(1, 'hi')
+    );
+    expect(decideSmartRoute(readonly, 'build', ['fe'])).toEqual({
+      ids: [],
+      intent: 'build',
+      noWriter: true,
+    });
   });
 });

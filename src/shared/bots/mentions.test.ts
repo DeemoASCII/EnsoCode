@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { mentionCandidates, parseMentions } from './mentions';
+import { mentionCandidates, namedMentions, parseMentions } from './mentions';
 
 const members = [
   { id: 'a', name: '阿后' },
@@ -73,6 +73,14 @@ describe('parseMentions', () => {
 
   it('没有成员时 @所有人 也不产生 id', () => {
     expect(parseMentions('@所有人', [])).toEqual({ ids: [], all: true });
+  });
+});
+
+describe('namedMentions', () => {
+  it('只返回点名的成员，@所有人 不展开', () => {
+    expect(namedMentions('@所有人 @Bob @阿后', members)).toEqual(['b', 'a']);
+    expect(namedMentions('@everyone', members)).toEqual([]);
+    expect(namedMentions(null as never, members)).toEqual([]);
   });
 });
 

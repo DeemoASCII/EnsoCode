@@ -188,7 +188,7 @@ function parseWorkspaceInput(value: unknown): ChatWorkspaceInput | null {
 
 function parseRouting(value: unknown): Partial<BotChat['routing']> | null {
   const input = record(value);
-  if (!input || !onlyKeys(input, ['mode', 'maxHops', 'maxTurnsPerBot'])) return null;
+  if (!input || !onlyKeys(input, ['mode', 'maxHops', 'maxTurnsPerBot', 'muted'])) return null;
   const routing: Partial<BotChat['routing']> = {};
   if (input.mode !== undefined) {
     if (!BOT_ROUTING_MODES.includes(input.mode as BotRoutingMode)) return null;
@@ -198,6 +198,11 @@ function parseRouting(value: unknown): Partial<BotChat['routing']> | null {
     if (input[key] === undefined) continue;
     if (!seq(input[key])) return null;
     routing[key] = input[key];
+  }
+  if (input.muted !== undefined) {
+    if (!Array.isArray(input.muted) || input.muted.length > MAX.ids || !input.muted.every(isBotId))
+      return null;
+    routing.muted = [...new Set(input.muted as string[])];
   }
   return routing;
 }

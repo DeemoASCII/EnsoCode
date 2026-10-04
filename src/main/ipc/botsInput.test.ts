@@ -139,6 +139,17 @@ describe('chat inputs', () => {
     expect(parseChatUpdateInput({ chatId: A, routing: { mode: 'auto' } })).toBeNull();
     expect(parseChatUpdateInput({ chatId: A, routing: { mode: 1 } })).toBeNull();
   });
+
+  it('routing.muted 为成员 id 数组（去重）', () => {
+    expect(parseChatUpdateInput({ chatId: A, routing: { muted: [A, A] } })?.routing).toEqual({
+      muted: [A],
+    });
+    expect(parseChatUpdateInput({ chatId: A, routing: { muted: [] } })?.routing).toEqual({
+      muted: [],
+    });
+    expect(parseChatUpdateInput({ chatId: A, routing: { muted: A } })).toBeNull();
+    expect(parseChatUpdateInput({ chatId: A, routing: { muted: [1] } })).toBeNull();
+  });
 });
 
 describe('send / timeline / workspace / history inputs', () => {

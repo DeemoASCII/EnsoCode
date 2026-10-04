@@ -11,7 +11,13 @@ import {
   type RouterState,
   startRound,
 } from '../../../shared/bots/router';
-import { buildSmartRouteInput, type SmartRouteInput } from '../../../shared/bots/smartRoute';
+import {
+  buildSmartRouteInput,
+  SMART_ROUTE_BUILD_NOTE,
+  type SmartRouteDecision,
+  type SmartRouteInput,
+  type SmartRouteIntent,
+} from '../../../shared/bots/smartRoute';
 import { buildGroupDelta, buildGroupStateBlock } from '../../../shared/bots/transcript';
 import type {
   BotChat,
@@ -47,6 +53,10 @@ interface Round {
   routing?: { entry: HumanEntry; abort: AbortController };
   /** 本轮由智能选人选出、尚未发言的成员；其发言标 routedBy */
   smartPicked?: string[];
+  /** 智能选人判定的意图，写进 routedBy */
+  smartIntent?: SmartRouteIntent;
+  /** build 被选中的成员：其下一次投递附「先动手」指令 */
+  buildNote?: BotId;
 }
 interface AutonomousReply {
   botId: string;
@@ -55,10 +65,10 @@ interface AutonomousReply {
   options: BotDeliverOptions;
   resolve: (result: BotSendResult) => void;
 }
-/** 智能选人：返回有序成员 id 名单（1–3 位）；空名单交给群主。超时由 GroupChatService 统一兜底 */
+/** 智能选人：返回意图与有序成员 id 名单（1–3 位，build 只 1 位）；空名单交给群主。超时由 GroupChatService 统一兜底 */
 export interface GroupResponderSelector {
   timeoutMs(): number;
-  select(input: SmartRouteInput, signal: AbortSignal): Promise<string[]>;
+  select(input: SmartRouteInput, signal: AbortSignal): Promise<SmartRouteDecision>;
 }
 interface GroupChatDeps {
   bots: BotStore;
@@ -95,6 +105,11 @@ const relayOptions = (options: BotDeliverOptions | undefined): BotDeliverOptions
   return rest;
 };
 const budgetNotice = (name: string) => `${name} 今日预算已用完`;
+const isDecision = (value: unknown): value is SmartRouteDecision =>
+  Boolean(value) &&
+  typeof value === 'object' &&
+  Array.isArray((value as SmartRouteDecision).ids) &&
+  (value as SmartRouteDecision).ids.every((id) => typeof id === 'string');
 
 /** 每群串行归并；router.json 只用于崩溃恢复，不重放未完成的工作。 */
 export class GroupChatService {
@@ -255,7 +270,7 @@ export class GroupChatService {
       round.state = empty();
       round.pending = [];
       this.cancelRouting(round);
-      delete round.smartPicked;
+      this.clearSmart(round);
       for (const job of this.autonomous.get(chatId) ?? [])
         job.resolve({ ok: false, error: 'chat-stopped' });
       this.autonomous.delete(chatId);
@@ -300,7 +315,11 @@ export class GroupChatService {
         text: event.text,
         conversationId: event.conversationId,
         turnId: event.turnId,
-        ...(smart ? { routedBy: 'smart' as const } : {}),
+        ...(smart
+          ? {
+              routedBy: round.smartIntent ? (`smart:${round.smartIntent}` as const) : 'smart',
+            }
+          : {}),
         id: randomUUID(),
         at: Date.now(),
       });
@@ -323,7 +342,7 @@ export class GroupChatService {
   private async begin(chat: BotChat, entry: HumanEntry): Promise<void> {
     const round = this.round(chat.id);
     const members = this.members(chat);
-    delete round.smartPicked;
+    this.clearSmart(round);
     const responder = this.deps.responder;
     if (responder && needsSmartRoute(chat, members, entry)) {
       round.state = empty();
@@ -355,20 +374,20 @@ export class GroupChatService {
     const timeout = new AbortController();
     const timer = setTimeout(() => timeout.abort(), responder.timeoutMs());
     const signal = AbortSignal.any([abort.signal, timeout.signal]);
-    let picked: string[] = [];
+    let decision: SmartRouteDecision = { ids: [] };
     try {
-      const cut = new Promise<string[]>((resolve) => {
-        if (signal.aborted) resolve([]);
-        signal.addEventListener('abort', () => resolve([]), { once: true });
+      const cut = new Promise<SmartRouteDecision>((resolve) => {
+        if (signal.aborted) resolve({ ids: [] });
+        signal.addEventListener('abort', () => resolve({ ids: [] }), { once: true });
       });
       const selecting = Promise.resolve()
         .then(() => responder.select(input, signal))
-        .catch((error) => {
+        .catch((error): SmartRouteDecision => {
           if (!signal.aborted) console.warn('[bots] smart routing failed', error);
-          return [];
+          return { ids: [] };
         });
       const result = await Promise.race([selecting, cut]);
-      picked = Array.isArray(result) ? result : [];
+      if (isDecision(result)) decision = result;
       if (timeout.signal.aborted && !abort.signal.aborted)
         console.warn('[bots] smart routing timed out');
     } finally {
@@ -385,12 +404,19 @@ export class GroupChatService {
         this.persist(chatId);
         return;
       }
+      const picked = decision.ids;
       round.state = startRound(chat, this.members(chat), routing.entry, picked);
       const order = [round.state.current, ...round.state.queue];
       const smart = [...new Set(picked)].filter((botId) => order.includes(botId));
       // 只剩群主一人时等同兜底，不标
-      if (smart.length > 1 || (smart.length === 1 && smart[0] !== chat.bossBotId))
+      if (smart.length > 1 || (smart.length === 1 && smart[0] !== chat.bossBotId)) {
         round.smartPicked = smart;
+        if (decision.intent) round.smartIntent = decision.intent;
+      }
+      if (decision.intent === 'build' && picked.length === 1 && round.state.current === picked[0])
+        round.buildNote = picked[0];
+      if (decision.noWriter && round.state.current)
+        this.system(chatId, '没有能改代码或执行命令的成员，交给群主处理');
       if (!round.state.current) this.system(chatId, '请先指定群主');
       await this.dispatch(chatId);
       this.persist(chatId);
@@ -400,6 +426,12 @@ export class GroupChatService {
   private cancelRouting(round: Round): void {
     round.routing?.abort.abort();
     delete round.routing;
+  }
+
+  private clearSmart(round: Round): void {
+    delete round.smartPicked;
+    delete round.smartIntent;
+    delete round.buildNote;
   }
 
   private advance(chat: BotChat, text: string, delegated?: readonly string[]): void {
@@ -432,7 +464,7 @@ export class GroupChatService {
           return this.dispatch(chatId);
         }
         if (job.title !== undefined) this.system(chatId, `例行任务：${job.title}`);
-        delete round.smartPicked;
+        this.clearSmart(round);
         round.state = { ...empty(), current: job.botId, turnsByBot: { [job.botId]: 1 } };
         round.options = { ...job.options, queueIfBusy: true };
         round.generation++;
@@ -467,7 +499,9 @@ export class GroupChatService {
       }
       round.generation++;
       this.persist(chatId);
-      const sent = await this.deliver(chat, botId, round.options);
+      const note = round.buildNote === botId ? SMART_ROUTE_BUILD_NOTE : undefined;
+      delete round.buildNote;
+      const sent = await this.deliver(chat, botId, round.options, note);
       round.options = relayOptions(round.options);
       if (sent.ok && !sent.duplicate) return;
       this.system(
@@ -512,7 +546,7 @@ export class GroupChatService {
     });
   }
 
-  private async deliver(chat: BotChat, botId: string, options?: BotDeliverOptions) {
+  private async deliver(chat: BotChat, botId: string, options?: BotDeliverOptions, note?: string) {
     const cursor = chat.sessions[botId]?.cursor ?? 0;
     const delta = buildGroupDelta({
       entries: this.deps.chats.readAfter(chat.id, cursor),
@@ -523,9 +557,13 @@ export class GroupChatService {
     });
     const sessionId = chat.sessions[botId]?.conversationId;
     const compacted = sessionId !== undefined && this.compacted.has(sessionId);
-    const text = compacted
-      ? [this.stateBlock(chat, botId), delta.text].filter(Boolean).join('\n')
-      : delta.text;
+    const text = [
+      compacted ? this.stateBlock(chat, botId) : '',
+      delta.text,
+      note ? `<routing-note>${note}</routing-note>` : '',
+    ]
+      .filter(Boolean)
+      .join('\n');
     let result: BotDeliverResult;
     const deliveryId = options?.deliveryId ?? randomUUID();
     this.cursors.set(deliveryId, { chatId: chat.id, botId, cursor: delta.cursor });

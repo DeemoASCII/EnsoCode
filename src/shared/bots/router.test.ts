@@ -149,6 +149,42 @@ describe('needsSmartRoute', () => {
   it('可选成员不足两位时不选人', () => {
     expect(needsSmartRoute(smart, members.slice(0, 1), human('hi'))).toBe(false);
   });
+
+  it('静音成员不计入可选成员', () => {
+    expect(needsSmartRoute(chat({ muted: ['fe', 'be'] }, 'smart'), members, human('hi'))).toBe(
+      false
+    );
+    expect(needsSmartRoute(chat({ muted: ['fe'] }, 'smart'), members, human('hi'))).toBe(true);
+  });
+});
+
+describe('静音成员', () => {
+  const muted = chat({ muted: ['fe'] }, 'smart');
+
+  it('被点名 @ 时照常回复', () => {
+    expect(startRound(muted, members, human('@前端 看下')).current).toBe('fe');
+    expect(startRound(muted, members, human('看下', ['fe'])).current).toBe('fe');
+  });
+
+  it('@所有人 不含静音成员，同时点名则包含', () => {
+    const all = startRound(muted, members, human('@所有人', ['boss', 'fe', 'be']));
+    expect([all.current, ...all.queue]).toEqual(['boss', 'be']);
+    const named = startRound(muted, members, human('@所有人 @前端'));
+    expect([named.current, ...named.queue]).toEqual(['boss', 'fe', 'be']);
+  });
+
+  it('智能名单跳过静音成员，只剩静音成员时退回群主', () => {
+    const state = startRound(muted, members, human('hi'), ['fe', 'be']);
+    expect([state.current, ...state.queue]).toEqual(['be']);
+    expect(startRound(muted, members, human('hi'), ['fe']).current).toBe('boss');
+  });
+
+  it('成员回复里点名静音成员照常接力，@所有人 不接力给静音成员', () => {
+    const begin = startRound(muted, members, human('@老板'));
+    expect(onReply(begin, muted, members, { botId: 'boss', text: '@前端 看下' }).next).toBe('fe');
+    const all = onReply(begin, muted, members, { botId: 'boss', text: '@所有人 看下' });
+    expect([all.next, ...all.state.queue]).toEqual(['be']);
+  });
 });
 
 describe('onReply', () => {

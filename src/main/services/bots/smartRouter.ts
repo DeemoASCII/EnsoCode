@@ -1,7 +1,13 @@
 import {
+  decideSmartRoute,
+  guessSmartRouteIntent,
+  parseSmartRouteIntent,
   parseSmartRouteReply,
   pickSmartRouteChoice,
+  pickSmartRouteIntent,
+  rankSmartRouteChoice,
   type SmartRouteInput,
+  smartRouteIntentQuestion,
   smartRouteJudgePrompt,
   smartRouteQuestion,
 } from '../../../shared/bots/smartRoute';
@@ -28,12 +34,15 @@ interface SmartRouterDeps {
   /** pi 分类器 choice 问题；分类器不可用返回 null */
   classify: (
     config: VirtualClassifierConfig,
-    question: ReturnType<typeof smartRouteQuestion>,
+    question: ReturnType<typeof smartRouteQuestion> | ReturnType<typeof smartRouteIntentQuestion>,
     signal: AbortSignal
   ) => Promise<Record<string, number> | null>;
 }
 
-/** 全局「群聊选人模型」：未设置走 judge + 标题模型回退链；judge 指定快模型；pi-classifier 走 worker 分类 */
+/**
+ * 全局「群聊选人模型」：未设置走 judge + 标题模型回退链；judge 指定快模型；pi-classifier 走 worker 分类
+ * （成员与意图各问一次）。判不出意图时用关键词兜底。
+ */
 export function createSmartRouter(deps: SmartRouterDeps): GroupResponderSelector {
   const config = () => parseVirtualClassifier(deps.settings()?.botRouteClassifier);
   return {
@@ -41,9 +50,22 @@ export function createSmartRouter(deps: SmartRouterDeps): GroupResponderSelector
     async select(input: SmartRouteInput, signal: AbortSignal) {
       const current = config();
       if (current?.source === 'pi-classifier') {
-        const probabilities = await deps.classify(current, smartRouteQuestion(input), signal);
-        if (!probabilities) console.warn('[bots] smart routing: classifier unavailable');
-        return probabilities ? pickSmartRouteChoice(probabilities, input) : [];
+        const [probabilities, intents] = await Promise.all([
+          deps.classify(current, smartRouteQuestion(input), signal),
+          Promise.resolve()
+            .then(() => deps.classify(current, smartRouteIntentQuestion(input), signal))
+            .catch(() => null),
+        ]);
+        if (!probabilities) {
+          console.warn('[bots] smart routing: classifier unavailable');
+          return { ids: [] };
+        }
+        return decideSmartRoute(
+          input,
+          pickSmartRouteIntent(intents) ?? guessSmartRouteIntent(input.message),
+          pickSmartRouteChoice(probabilities, input),
+          rankSmartRouteChoice(probabilities, input)
+        );
       }
       const text = await deps.judge(
         {
@@ -55,12 +77,16 @@ export function createSmartRouter(deps: SmartRouterDeps): GroupResponderSelector
       );
       if (text === null) {
         console.warn('[bots] smart routing: no model available');
-        return [];
+        return { ids: [] };
       }
       const picked = parseSmartRouteReply(text, input);
       if (picked.length === 0)
         console.warn('[bots] smart routing reply not understood:', text.slice(0, 80));
-      return picked;
+      return decideSmartRoute(
+        input,
+        parseSmartRouteIntent(text) ?? guessSmartRouteIntent(input.message),
+        picked
+      );
     },
   };
 }

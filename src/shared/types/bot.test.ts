@@ -216,6 +216,15 @@ describe('parseBotChat', () => {
     expect(parseBotChat({ ...group, routing: undefined })?.routing.mode).toBe('boss');
   });
 
+  it('routing.muted 只保留在群的非群主成员并去重，为空时省略', () => {
+    const parse = (muted: unknown) =>
+      parseBotChat({ ...group, routing: { ...group.routing, muted } });
+    expect(parse([BOT_B, BOT_B, BOT_A, 'ghost', 3])?.routing.muted).toEqual([BOT_B]);
+    expect(parse([BOT_A])?.routing).not.toHaveProperty('muted');
+    expect(parse('x')?.routing).not.toHaveProperty('muted');
+    expect(parseBotChat(group)?.routing).not.toHaveProperty('muted');
+  });
+
   it('preserves valid distillation watermarks and drops malformed ones', () => {
     for (const distilledTo of ['entry-7', '', 42, null]) {
       const parsed = parseBotChat({
@@ -302,5 +311,8 @@ describe('parseGroupEntry', () => {
     };
     expect(parseGroupEntry({ ...base, routedBy: 'smart' })).toEqual({ ...base, routedBy: 'smart' });
     expect(parseGroupEntry({ ...base, routedBy: 'other' })).toEqual(base);
+    for (const routedBy of ['smart:build', 'smart:answer', 'smart:discuss'])
+      expect(parseGroupEntry({ ...base, routedBy })).toEqual({ ...base, routedBy });
+    expect(parseGroupEntry({ ...base, routedBy: 'smart:x' })).toEqual(base);
   });
 });

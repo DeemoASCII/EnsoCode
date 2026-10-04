@@ -27,9 +27,7 @@ function validMembers(members: unknown): MentionMember[] {
   );
 }
 
-/** 识别 `@名字`：已知名字最长匹配，ASCII 结尾的名字要求后面不再接 ASCII 单词字符 */
-export function parseMentions(text: string, members: readonly MentionMember[]): ParsedMentions {
-  const list = validMembers(members);
+function scanMentions(text: string, list: MentionMember[]): ParsedMentions {
   if (typeof text !== 'string') return { ids: [], all: false };
   const source = text.normalize('NFC').replace(CODE_RE, (code) => ' '.repeat(code.length));
   const candidates = [
@@ -50,8 +48,20 @@ export function parseMentions(text: string, members: readonly MentionMember[]): 
     if (hit.id === null) all = true;
     else if (!ids.includes(hit.id)) ids.push(hit.id);
   }
+  return { ids, all };
+}
+
+/** 识别 `@名字`：已知名字最长匹配，ASCII 结尾的名字要求后面不再接 ASCII 单词字符 */
+export function parseMentions(text: string, members: readonly MentionMember[]): ParsedMentions {
+  const list = validMembers(members);
+  const { ids, all } = scanMentions(text, list);
   if (all) return { ids: [...new Set(list.map((m) => m.id))], all };
   return { ids, all };
+}
+
+/** 只取点名的成员（@所有人 不展开） */
+export function namedMentions(text: string, members: readonly MentionMember[]): BotId[] {
+  return scanMentions(text, validMembers(members)).ids;
 }
 
 /** 输入框 @ 补全：前缀（可带 @）不分大小写过滤，保持成员顺序 */

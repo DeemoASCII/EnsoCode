@@ -53,6 +53,8 @@ export interface BotChatRouting {
   mode: BotRoutingMode;
   maxHops: number;
   maxTurnsPerBot: number;
+  /** 静音成员：只在被点名 @ 时发言（@所有人、智能选人、群主兜底都跳过）；群主不可静音 */
+  muted?: BotId[];
 }
 
 export interface BotChatSession {
@@ -192,8 +194,8 @@ export type GroupEntry =
       text: string;
       conversationId: string;
       turnId: string;
-      /** 该轮回复人由智能选人选出（群主兜底不标） */
-      routedBy?: 'smart';
+      /** 该轮回复人由智能选人选出（群主兜底不标）；带意图时为 smart:<intent> */
+      routedBy?: BotRoutedBy;
     })
   | (GroupEntryBase & {
       kind: 'delegation';
@@ -212,6 +214,8 @@ export type GroupEntryInput = GroupEntry extends infer E
   : never;
 
 export const BOT_ROUTING_DEFAULTS: BotChatRouting = { mode: 'boss', maxHops: 4, maxTurnsPerBot: 2 };
+export const BOT_ROUTED_BY = ['smart', 'smart:build', 'smart:answer', 'smart:discuss'] as const;
+export type BotRoutedBy = (typeof BOT_ROUTED_BY)[number];
 const ROUTING_LIMITS = { maxHops: 20, maxTurnsPerBot: 10 } as const;
 
 export const BOT_NAME_MAX = 24;
@@ -373,6 +377,9 @@ export function parseBotChat(value: unknown): BotChat | undefined {
     return undefined;
   }
   const routing = isObject(value.routing) ? value.routing : {};
+  const muted = [...new Set(strings(routing.muted))].filter(
+    (id) => members.includes(id) && id !== bossBotId
+  );
   const sessions: Record<BotId, BotChatSession> = {};
   if (isObject(value.sessions)) {
     for (const [botId, session] of Object.entries(value.sessions)) {
@@ -403,6 +410,7 @@ export function parseBotChat(value: unknown): BotChat | undefined {
         ROUTING_LIMITS.maxTurnsPerBot,
         BOT_ROUTING_DEFAULTS.maxTurnsPerBot
       ),
+      ...(muted.length > 0 ? { muted } : {}),
     },
     pinned: value.pinned === true,
     sessions,
@@ -435,7 +443,9 @@ export function parseGroupEntry(value: unknown): GroupEntry | undefined {
             text: value.text,
             conversationId: value.conversationId,
             turnId: value.turnId,
-            ...(value.routedBy === 'smart' ? { routedBy: 'smart' as const } : {}),
+            ...(BOT_ROUTED_BY.includes(value.routedBy as BotRoutedBy)
+              ? { routedBy: value.routedBy as BotRoutedBy }
+              : {}),
           }
         : undefined;
     case 'delegation': {

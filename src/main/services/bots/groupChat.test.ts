@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { SmartRouteInput } from '../../../shared/bots/smartRoute';
+import type { SmartRouteDecision, SmartRouteInput } from '../../../shared/bots/smartRoute';
 import type { BotTurnFinished } from './botSessionHost';
 import { BotStore } from './botStore';
 import { BotChatStore } from './chatStore';
@@ -303,13 +303,14 @@ it('refuses a new round until a failed stop is successfully retried', async () =
 
 describe('smart routing', () => {
   const deferred = () => {
-    let resolve!: (value: string[]) => void;
-    const promise = new Promise<string[]>((r) => {
+    let resolve!: (value: SmartRouteDecision) => void;
+    const promise = new Promise<SmartRouteDecision>((r) => {
       resolve = r;
     });
     return { promise, resolve };
   };
-  const select = vi.fn<(input: SmartRouteInput, signal: AbortSignal) => Promise<string[]>>();
+  const select =
+    vi.fn<(input: SmartRouteInput, signal: AbortSignal) => Promise<SmartRouteDecision>>();
   let timeoutMs = 1000;
   const useResponder = () => {
     group.dispose();
@@ -328,7 +329,7 @@ describe('smart routing', () => {
   });
 
   it('新群缺省智能选人：选中成员回复，并在其发言上标 routedBy', async () => {
-    select.mockResolvedValueOnce([b]);
+    select.mockResolvedValueOnce({ ids: [b] });
     await group.send(id, '帮忙改个接口');
     await vi.waitFor(() => expect(deliver).toHaveBeenCalledTimes(1));
     expect(deliver.mock.calls[0][1]).toBe(b);
@@ -337,7 +338,7 @@ describe('smart routing', () => {
     expect(input.candidates.map((c) => c.id)).toEqual([a, b]);
     await done(b, 'ok');
     expect(entries().at(-1)).toMatchObject({ kind: 'bot', botId: b, routedBy: 'smart' });
-    select.mockResolvedValueOnce([a]);
+    select.mockResolvedValueOnce({ ids: [a] });
     await group.send(id, '大家觉得呢');
     await vi.waitFor(() => expect(deliver).toHaveBeenCalledTimes(2));
     await done(a, 'fine');
@@ -368,7 +369,7 @@ describe('smart routing', () => {
     await vi.waitFor(() => expect(deliver).toHaveBeenCalledTimes(1));
     expect(deliver.mock.calls[0][1]).toBe(a);
     await done(a, 'ok');
-    select.mockResolvedValueOnce(['ghost']);
+    select.mockResolvedValueOnce({ ids: ['ghost'] });
     await group.send(id, 'two');
     await vi.waitFor(() => expect(deliver).toHaveBeenCalledTimes(2));
     expect(deliver.mock.calls[1][1]).toBe(a);
@@ -385,10 +386,10 @@ describe('smart routing', () => {
     expect(select.mock.calls[0][1].aborted).toBe(true);
     expect(select.mock.calls[1][0].message).toBe('second');
     expect(select.mock.calls[1][0].recent.at(-1)).toEqual({ speaker: 'Human', text: 'first' });
-    first.resolve([a]);
+    first.resolve({ ids: [a] });
     await group.settled(id);
     expect(deliver).not.toHaveBeenCalled();
-    second.resolve([b]);
+    second.resolve({ ids: [b] });
     await vi.waitFor(() => expect(deliver).toHaveBeenCalledTimes(1));
     expect(deliver.mock.calls[0][1]).toBe(b);
     expect(deliver.mock.calls[0][3]).toMatchObject({ deliveryId: 'd2' });
@@ -420,7 +421,7 @@ describe('smart routing', () => {
     await group.send(id, '@Alice start');
     await group.send(id, 'follow up');
     expect(select).not.toHaveBeenCalled();
-    select.mockResolvedValueOnce([b]);
+    select.mockResolvedValueOnce({ ids: [b] });
     await done(a, 'done');
     expect(select).toHaveBeenCalledTimes(1);
     await vi.waitFor(() => expect(deliver).toHaveBeenCalledTimes(2));
@@ -434,7 +435,7 @@ describe('smart routing', () => {
     const routine = group.runAs(id, b, 'routine', undefined);
     await group.settled(id);
     expect(deliver).not.toHaveBeenCalled();
-    pick.resolve([b]);
+    pick.resolve({ ids: [b] });
     await vi.waitFor(() => expect(deliver).toHaveBeenCalledTimes(1));
     expect(deliver.mock.calls[0][1]).toBe(b);
     await done(b, 'reply');
@@ -448,7 +449,7 @@ describe('smart routing', () => {
     expect(await group.stop(id)).toEqual({ ok: true });
     expect(select.mock.calls[0][1].aborted).toBe(true);
     expect(group.state(id)).toMatchObject({ routing: false });
-    pick.resolve([b]);
+    pick.resolve({ ids: [b] });
     await group.settled(id);
     expect(deliver).not.toHaveBeenCalled();
 
@@ -465,7 +466,7 @@ describe('smart routing', () => {
   });
 
   it('选中多人时依次回复，后一位的增量上下文含前一位刚发的回复，均标 routedBy', async () => {
-    select.mockResolvedValueOnce([b, a]);
+    select.mockResolvedValueOnce({ ids: [b, a] });
     await group.send(id, '这个需求怎么做');
     await vi.waitFor(() => expect(deliver).toHaveBeenCalledTimes(1));
     expect(deliver.mock.calls[0][1]).toBe(b);
@@ -484,7 +485,7 @@ describe('smart routing', () => {
   });
 
   it('多人队列中第二位 [skip]：不写条目、不报错并结束本轮', async () => {
-    select.mockResolvedValueOnce([b, a]);
+    select.mockResolvedValueOnce({ ids: [b, a] });
     await group.send(id, 'q');
     await vi.waitFor(() => expect(deliver).toHaveBeenCalledTimes(1));
     await done(b, 'answer');
@@ -496,17 +497,81 @@ describe('smart routing', () => {
   });
 
   it('多人队列中人类插话：当前说完后丢弃剩余名单，按新消息重新选人', async () => {
-    select.mockResolvedValueOnce([b, a]);
+    select.mockResolvedValueOnce({ ids: [b, a] });
     await group.send(id, 'q');
     await vi.waitFor(() => expect(deliver).toHaveBeenCalledTimes(1));
     await group.send(id, '换个问题');
     expect(group.state(id)).toMatchObject({ current: b, pendingHuman: true });
-    select.mockResolvedValueOnce([b]);
+    select.mockResolvedValueOnce({ ids: [b] });
     await done(b, 'answer');
     await vi.waitFor(() => expect(deliver).toHaveBeenCalledTimes(2));
     expect(select.mock.calls[1][0].message).toBe('换个问题');
     expect(deliver.mock.calls.map((c) => c[1])).toEqual([b, b]);
     expect(group.state(id)).toMatchObject({ current: b, queue: [] });
+  });
+
+  it('build：投递附「先动手」指令（只附一次），发言标 smart:build', async () => {
+    select.mockResolvedValueOnce({ ids: [b], intent: 'build' });
+    await group.send(id, '把 README 标题改成 X');
+    await vi.waitFor(() => expect(deliver).toHaveBeenCalledTimes(1));
+    expect(deliver.mock.calls[0][1]).toBe(b);
+    expect(deliver.mock.calls[0][2]).toContain('这是执行类请求：先动手完成，再简要汇报');
+    await done(b, '@Alice 改好了');
+    expect(entries().at(-1)).toMatchObject({ kind: 'bot', botId: b, routedBy: 'smart:build' });
+    expect(deliver.mock.calls[1][1]).toBe(a);
+    expect(deliver.mock.calls[1][2]).not.toContain('先动手完成');
+  });
+
+  it('discuss 多人发言均标 smart:discuss', async () => {
+    select.mockResolvedValueOnce({ ids: [b, a], intent: 'discuss' });
+    await group.send(id, '大家讨论下方案');
+    await vi.waitFor(() => expect(deliver).toHaveBeenCalledTimes(1));
+    expect(deliver.mock.calls[0][2]).not.toContain('先动手完成');
+    await done(b, 'x');
+    await done(a, 'y');
+    expect(entries().filter((e) => e.kind === 'bot')).toMatchObject([
+      { botId: b, routedBy: 'smart:discuss' },
+      { botId: a, routedBy: 'smart:discuss' },
+    ]);
+  });
+
+  it('build 无写能力成员：交给群主并写系统说明，不附指令', async () => {
+    select.mockResolvedValueOnce({ ids: [], intent: 'build', noWriter: true });
+    await group.send(id, '改一下配置');
+    await vi.waitFor(() => expect(deliver).toHaveBeenCalledTimes(1));
+    expect(deliver.mock.calls[0][1]).toBe(a);
+    expect(deliver.mock.calls[0][2]).not.toContain('先动手完成');
+    expect(entries().find((e) => e.kind === 'system')).toMatchObject({
+      text: expect.stringContaining('没有能改代码或执行命令的成员'),
+    });
+  });
+
+  it('静音成员：不进候选、智能名单与群主兜底都跳过，只在点名 @ 时回复', async () => {
+    const carol = bots.create({ name: 'Carol' }, []);
+    if (!carol.ok) throw new Error('fixture');
+    const c = carol.bot.id;
+    chats.update(id, (chat) => ({
+      ...chat,
+      members: [a, b, c],
+      routing: { ...chat.routing, muted: [b] },
+    }));
+    select.mockResolvedValueOnce({ ids: [b] });
+    await group.send(id, 'hello');
+    await vi.waitFor(() => expect(deliver).toHaveBeenCalledTimes(1));
+    expect(select.mock.calls[0][0].candidates.map((m) => m.id)).toEqual([a, c]);
+    expect(deliver.mock.calls[0][1]).toBe(a);
+    await done(a, 'ok');
+    await group.send(id, '@所有人 报个到');
+    expect(group.state(id)).toMatchObject({ current: a, queue: [c] });
+    await done(a, 'a');
+    await done(c, 'c');
+    await group.send(id, '@Bob 你来');
+    expect(deliver.mock.calls.at(-1)?.[1]).toBe(b);
+    await done(b, 'b');
+    chats.update(id, (chat) => ({ ...chat, routing: { ...chat.routing, muted: [b, c] } }));
+    await group.send(id, 'anyone');
+    expect(select).toHaveBeenCalledTimes(1);
+    expect(deliver.mock.calls.at(-1)?.[1]).toBe(a);
   });
 });
 

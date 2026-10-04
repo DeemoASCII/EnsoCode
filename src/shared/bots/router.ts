@@ -1,5 +1,5 @@
 import type { BotChat, BotId, BotProfile, GroupEntry } from '../types/bot';
-import { parseMentions } from './mentions';
+import { namedMentions, parseMentions } from './mentions';
 
 export type RouterMember = Pick<BotProfile, 'id' | 'name'> & { archivedAt?: number };
 export type HumanEntry = Extract<GroupEntry, { kind: 'human' }>;
@@ -32,13 +32,43 @@ export type HumanDecision =
   | { action: 'steer' }
   | { action: 'restart-after-current' };
 
-/** 群内且未归档的成员，按群成员顺序 */
-function activeMembers(chat: RouterChat, members: readonly RouterMember[]): RouterMember[] {
+/** 群内且未归档的成员，按群成员顺序；speaking 时再去掉静音成员 */
+function activeMembers(
+  chat: RouterChat,
+  members: readonly RouterMember[],
+  speaking = false
+): RouterMember[] {
   const list = Array.isArray(members) ? members.filter((m) => m && typeof m.id === 'string') : [];
+  const muted = speaking ? mutedOf(chat) : [];
   return chat.members.flatMap((id) => {
     const member = list.find((m) => m.id === id);
-    return member && member.archivedAt === undefined ? [member] : [];
+    return member && member.archivedAt === undefined && !muted.includes(id) ? [member] : [];
   });
+}
+
+const mutedOf = (chat: RouterChat): BotId[] =>
+  Array.isArray(chat.routing.muted) ? chat.routing.muted : [];
+
+function inChatMembers(chat: RouterChat, members: readonly RouterMember[]): RouterMember[] {
+  const inChat = (Array.isArray(members) ? members : []).filter(
+    (m) => m && chat.members.includes(m.id)
+  );
+  return chat.members.flatMap((id) => inChat.filter((m) => m.id === id));
+}
+
+/** 正文含 @所有人 时，静音成员只有被点名 @ 才保留 */
+function dropMuted(
+  chat: RouterChat,
+  members: readonly RouterMember[],
+  text: string,
+  ids: BotId[]
+): BotId[] {
+  const muted = mutedOf(chat);
+  if (!ids.some((id) => muted.includes(id))) return ids;
+  const inChat = inChatMembers(chat, members);
+  if (!parseMentions(text, inChat).all) return ids;
+  const named = namedMentions(text, inChat);
+  return ids.filter((id) => !muted.includes(id) || named.includes(id));
 }
 
 /** 群成员（含已归档）都参与名字匹配，避免 @归档者 被误配到更短的名字 */
@@ -52,11 +82,8 @@ function mentionedActive(
 }
 
 function parseActive(chat: RouterChat, members: readonly RouterMember[], text: string): BotId[] {
-  const inChat = (Array.isArray(members) ? members : []).filter(
-    (m) => m && chat.members.includes(m.id)
-  );
-  const ordered = chat.members.flatMap((id) => inChat.filter((m) => m.id === id));
-  return mentionedActive(chat, members, parseMentions(text, ordered).ids);
+  const ids = parseMentions(text, inChatMembers(chat, members)).ids;
+  return dropMuted(chat, members, text, mentionedActive(chat, members, ids));
 }
 
 /** entry.mentions 为权威（Main 写入时计算）；为空时回退解析正文 */
@@ -67,7 +94,7 @@ function humanTargets(
 ): BotId[] {
   const stored = Array.isArray(entry.mentions) ? entry.mentions : [];
   return stored.length > 0
-    ? mentionedActive(chat, members, stored)
+    ? dropMuted(chat, members, entry.text, mentionedActive(chat, members, stored))
     : parseActive(chat, members, entry.text);
 }
 
@@ -86,12 +113,14 @@ export function startRound(
   chat: RouterChat,
   members: readonly RouterMember[],
   humanEntry: HumanEntry,
-  /** 智能选人名单（顺序即回复顺序）；去重并滤掉不在群或已归档的，为空时退回群主 */
+  /** 智能选人名单（顺序即回复顺序）；去重并滤掉不在群、已归档或静音的，为空时退回群主 */
   picked: readonly BotId[] = []
 ): RouterState {
   let targets = humanTargets(chat, members, humanEntry);
-  if (targets.length === 0 && Array.isArray(picked))
-    targets = mentionedActive(chat, members, picked);
+  if (targets.length === 0 && Array.isArray(picked)) {
+    const speaking = new Set(activeMembers(chat, members, true).map((m) => m.id));
+    targets = [...new Set(picked)].filter((id) => speaking.has(id));
+  }
   if (targets.length === 0 && chat.bossBotId)
     targets = mentionedActive(chat, members, [chat.bossBotId]);
   return advance({
@@ -104,7 +133,7 @@ export function startRound(
   });
 }
 
-/** 智能选人只接管：smart 模式、人类消息没有任何 @（含 @所有人、@已归档成员），且至少两位可选成员 */
+/** 智能选人只接管：smart 模式、人类消息没有任何 @（含 @所有人、@已归档成员），且至少两位未静音成员 */
 export function needsSmartRoute(
   chat: RouterChat,
   members: readonly RouterMember[],
@@ -117,7 +146,7 @@ export function needsSmartRoute(
   );
   const parsed = parseMentions(humanEntry.text, inChat);
   if (parsed.all || parsed.ids.length > 0) return false;
-  return activeMembers(chat, members).length >= 2;
+  return activeMembers(chat, members, true).length >= 2;
 }
 
 export const isSkipReply = (text: string): boolean =>

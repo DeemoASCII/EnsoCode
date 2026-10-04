@@ -2310,6 +2310,13 @@ export const zhTranslations: Record<string, string> = {
   'The file is too large to preview': '文件过大，无法预览',
   'Choosing who replies…': '正在选择回复人…',
   'Picked automatically because nobody was @-mentioned': '没人被 @，由智能选人选出',
+  'Smart pick · build': '智能选人 · 执行',
+  'Smart pick · answer': '智能选人 · 解答',
+  'Smart pick · discuss': '智能选人 · 讨论',
+  Mute: '静音',
+  Unmute: '取消静音',
+  Muted: '静音',
+  'Replies only when @-mentioned by name': '只有被点名 @ 时才回复',
   'Without @, the best-fit member is picked to reply': '不 @ 时智能选出最合适的成员回复',
   'Adds a Code | Bot switch to the sidebar. Create members with their own persona, model and tools, and chat with them alone or in groups.':
     '在侧栏顶部加入 Code | Bot 切换。创建拥有各自人设、模型和工具的成员，与他们私聊或拉群协作。',

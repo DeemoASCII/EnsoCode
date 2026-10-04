@@ -1,5 +1,5 @@
 import type { ProjectedMessage } from '@shared/types/agent';
-import type { BotChat, BotProfile, Delegation, GroupEntry } from '@shared/types/bot';
+import type { BotChat, BotProfile, BotRoutedBy, Delegation, GroupEntry } from '@shared/types/bot';
 import { ChevronDown, ChevronRight, Loader2 } from 'lucide-react';
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Markdown } from '@/components/chat/Markdown';
@@ -22,6 +22,13 @@ import { DelegationCard } from './DelegationCard';
 
 const timeOf = (at: number) =>
   new Date(at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+const ROUTED_BY_LABELS: Record<BotRoutedBy, string> = {
+  smart: 'Smart pick',
+  'smart:build': 'Smart pick · build',
+  'smart:answer': 'Smart pick · answer',
+  'smart:discuss': 'Smart pick · discuss',
+};
 
 interface GroupTimelineProps {
   chat: BotChat;
@@ -324,12 +331,12 @@ function EntryRow({
                 </span>
                 {bot?.title ? `${bot.title} · ` : ''}
                 {timeOf(entry.at)}
-                {entry.routedBy === 'smart' && (
+                {entry.routedBy && (
                   <span
                     title={t('Picked automatically because nobody was @-mentioned')}
                     className="ml-1.5 rounded border px-1 py-px text-[10px]"
                   >
-                    {t('Smart pick')}
+                    {t(ROUTED_BY_LABELS[entry.routedBy])}
                   </span>
                 )}
               </div>

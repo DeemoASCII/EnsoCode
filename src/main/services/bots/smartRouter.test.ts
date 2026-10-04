@@ -10,7 +10,7 @@ const input: SmartRouteInput = {
   ],
   bossBotId: 'a',
   recent: [],
-  message: 'fix the api',
+  message: 'who owns the api',
 };
 const signal = new AbortController().signal;
 const judgeModel = { providerId: 'p', modelId: 'fast' };
@@ -32,9 +32,9 @@ describe('createSmartRouter', () => {
   it('未设置时走 judge（标题模型回退链），默认超时 3000ms', async () => {
     judge.mockResolvedValueOnce('Bob');
     expect(router().timeoutMs()).toBe(3000);
-    expect(await router().select(input, signal)).toEqual(['b']);
+    expect(await router().select(input, signal)).toEqual({ ids: ['b'], intent: 'answer' });
     expect(judge.mock.calls[0][0]).toMatchObject({ preferred: undefined, timeoutMs: 3000 });
-    expect(judge.mock.calls[0][0].userText).toContain('fix the api');
+    expect(judge.mock.calls[0][0].userText).toContain('who owns the api');
     expect(classify).not.toHaveBeenCalled();
   });
 
@@ -42,20 +42,30 @@ describe('createSmartRouter', () => {
     settings = { botRouteClassifier: { source: 'judge', model: judgeModel, timeoutMs: 5000 } };
     judge.mockResolvedValueOnce('BOSS');
     expect(router().timeoutMs()).toBe(5000);
-    expect(await router().select(input, signal)).toEqual(['a']);
+    expect((await router().select(input, signal)).ids).toEqual(['a']);
     expect(judge.mock.calls[0][0]).toMatchObject({ preferred: judgeModel, timeoutMs: 5000 });
   });
 
   it('judge 回复多名时按顺序返回名单', async () => {
-    judge.mockResolvedValueOnce('Carol\nBob');
-    expect(await router().select(input, signal)).toEqual(['c', 'b']);
+    judge.mockResolvedValueOnce('INTENT: discuss\nCarol\nBob');
+    expect(await router().select(input, signal)).toEqual({ ids: ['c', 'b'], intent: 'discuss' });
+  });
+
+  it('judge 判定 build 时只留一位能动手的成员；缺 INTENT 行按关键词兜底', async () => {
+    judge.mockResolvedValueOnce('INTENT: build\nAlice\nCarol\nBob');
+    expect(await router().select(input, signal)).toEqual({ ids: ['c'], intent: 'build' });
+    judge.mockResolvedValueOnce('Alice, Bob');
+    expect(await router().select({ ...input, message: '把 README 标题改成 X' }, signal)).toEqual({
+      ids: ['b'],
+      intent: 'build',
+    });
   });
 
   it('judge 回复不认识或没有可用模型时返回空名单', async () => {
     judge.mockResolvedValueOnce('maybe Dave');
-    expect(await router().select(input, signal)).toEqual([]);
+    expect((await router().select(input, signal)).ids).toEqual([]);
     judge.mockResolvedValueOnce(null);
-    expect(await router().select(input, signal)).toEqual([]);
+    expect(await router().select(input, signal)).toEqual({ ids: [] });
   });
 
   it('pi-classifier 取达到 0.4 的候选（降序），都不达标或不可用时返回空名单', async () => {
@@ -67,16 +77,42 @@ describe('createSmartRouter', () => {
       },
     };
     classify.mockResolvedValueOnce({ a: 0.3, b: 0.7 });
-    expect(await router().select(input, signal)).toEqual(['b']);
+    expect((await router().select(input, signal)).ids).toEqual(['b']);
     const [config, question] = classify.mock.calls[0];
     expect(config).toMatchObject({ source: 'pi-classifier', model: { modelId: 'cls' } });
     expect(Object.keys(question.criteria)).toEqual(['a', 'b', 'c']);
-    classify.mockResolvedValueOnce({ a: 0.1, b: 0.42, c: 0.48 });
-    expect(await router().select(input, signal)).toEqual(['c', 'b']);
-    classify.mockResolvedValueOnce({ a: 0.35, b: 0.3, c: 0.35 });
-    expect(await router().select(input, signal)).toEqual([]);
+    classify.mockResolvedValueOnce({ a: 0.1, b: 0.42, c: 0.48 }).mockResolvedValueOnce(null);
+    expect((await router().select(input, signal)).ids).toEqual(['c', 'b']);
+    classify.mockResolvedValueOnce({ a: 0.35, b: 0.3, c: 0.35 }).mockResolvedValueOnce(null);
+    expect((await router().select(input, signal)).ids).toEqual([]);
     classify.mockResolvedValueOnce(null);
-    expect(await router().select(input, signal)).toEqual([]);
+    expect(await router().select(input, signal)).toEqual({ ids: [] });
     expect(judge).not.toHaveBeenCalled();
+  });
+
+  it('pi-classifier 另问意图；build 按概率取第一位能动手的成员，意图不确定时用关键词', async () => {
+    settings = {
+      botRouteClassifier: {
+        source: 'pi-classifier',
+        model: { providerId: 'or', modelId: 'cls' },
+        timeoutMs: 3000,
+      },
+    };
+    classify.mockImplementation(async (_config, question) =>
+      'build' in question.criteria
+        ? { build: 0.8, answer: 0.1, discuss: 0.1 }
+        : { a: 0.6, b: 0.1, c: 0.3 }
+    );
+    expect(await router().select(input, signal)).toEqual({ ids: ['c'], intent: 'build' });
+    classify.mockImplementation(async (_config, question) =>
+      'build' in question.criteria
+        ? { build: 0.4, answer: 0.3, discuss: 0.3 }
+        : { a: 0.5, b: 0.45, c: 0.05 }
+    );
+    expect(await router().select(input, signal)).toEqual({ ids: ['a', 'b'], intent: 'answer' });
+    expect(await router().select({ ...input, message: 'please fix the api' }, signal)).toEqual({
+      ids: ['b'],
+      intent: 'build',
+    });
   });
 });

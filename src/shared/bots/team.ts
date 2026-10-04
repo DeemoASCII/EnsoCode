@@ -315,7 +315,11 @@ export function buildTeamFile(
       title: chat.title,
       bossKey: keyOf.get(chat.bossBotId ?? '') ?? 'm1',
       workspace: chat.workspace.kind === 'project' ? 'project' : 'chat-home',
-      routing: { ...chat.routing },
+      routing: {
+        mode: chat.routing.mode,
+        maxHops: chat.routing.maxHops,
+        maxTurnsPerBot: chat.routing.maxTurnsPerBot,
+      },
       members: members.map((botId) => {
         const bot = byId.get(botId) as BotProfile;
         return {

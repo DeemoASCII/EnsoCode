@@ -258,4 +258,15 @@ describe('buildTeamFile', () => {
     expect(file.team.members[1]).toMatchObject({ tools: 'readonly', memory: { enabled: false } });
     expect(parseTeamFile(text)).toEqual({ ok: true, team: file.team });
   });
+
+  it('静音名单是群内设置，不随团队导出', () => {
+    const file = buildTeamFile(
+      { ...chat, routing: { ...chat.routing, muted: [id(2)] } },
+      [bot(1, 'Lin'), bot(2, 'Max')],
+      {},
+      'now'
+    );
+    expect(file.team.routing).toEqual({ mode: 'smart', maxHops: 5, maxTurnsPerBot: 3 });
+    expect(parseTeamFile(JSON.stringify(file)).ok).toBe(true);
+  });
 });
