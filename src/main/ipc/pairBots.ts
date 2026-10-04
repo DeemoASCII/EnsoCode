@@ -252,6 +252,7 @@ export function registerPairBotHandlers(): void {
       event.kind === 'tasks' ||
       event.kind === 'notes' ||
       event.kind === 'budget' ||
+      event.kind === 'silence' ||
       event.kind === 'open'
     )
       return;

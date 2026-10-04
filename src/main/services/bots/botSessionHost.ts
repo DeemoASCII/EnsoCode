@@ -7,7 +7,12 @@ import type {
   ProjectAuthority,
 } from '../../../shared/types/agent';
 import type { BotChat, BotProfile } from '../../../shared/types/bot';
-import type { BotEvent, BotQueueItem, BotSessionRecord } from '../../../shared/types/botIpc';
+import type {
+  BotEvent,
+  BotQueueItem,
+  BotSessionRecord,
+  BotSilence,
+} from '../../../shared/types/botIpc';
 import { BOT_BUDGET_ERROR, type BotBudgetVerdict } from '../../../shared/usage/botUsage';
 import type { BotNotesSnapshot } from './botNotes';
 import { buildBotModeInstruction, buildBotSystemPrompt } from './botPrompt';
@@ -17,6 +22,8 @@ import { StartedDeliveryIndex } from './startedDeliveries';
 
 /** bot 会话同时在跑的轮次上限（私聊、群聊、委派、例行合计，Code 会话不计） */
 export const BOT_MAX_RUNNING_TURNS = 4;
+/** 运行中的轮次超过该时长没有任何输出（流式、工具进度、子代理）即视为静默 */
+export const BOT_SILENCE_MS = 90_000;
 
 type ActionResult = { ok: boolean; error?: string };
 type Fail = { ok: false; error: string };
@@ -85,6 +92,9 @@ export interface BotSessionHostDeps {
   budget?: { exceeded(botId: string): Promise<BotBudgetVerdict | null> };
   /** 核心笔记：成员 memory 关闭时返回 undefined */
   notes?: { snapshot(botId: string, chatId: string | null): BotNotesSnapshot | undefined };
+  /** 静默看门狗阈值，缺省 BOT_SILENCE_MS */
+  silenceMs?: number;
+  now?: () => number;
 }
 
 export interface BotDeliverOptions {
@@ -165,6 +175,12 @@ export class BotSessionHost {
   private readonly startedListeners = new Set<
     (event: { conversationId: string; deliveryId: string }) => void
   >();
+  /** 运行中轮次的最后输出时间；silent = 已判静默（值为最后输出时间） */
+  private readonly lastOutput = new Map<string, number>();
+  private readonly silent = new Map<string, number>();
+  /** 等待人类答复的审批 / 提问：期间不算静默 */
+  private readonly waiting = new Map<string, Set<string>>();
+  private watchdog: ReturnType<typeof setInterval> | undefined;
 
   onDeliveryStarted(
     listener: (event: { conversationId: string; deliveryId: string }) => void
@@ -528,11 +544,15 @@ export class BotSessionHost {
       this.running.clear();
       this.slots.clear();
       this.lastAssistant.clear();
+      this.waiting.clear();
+      for (const id of [...this.lastOutput.keys()]) this.quiet(id);
       for (const id of interrupted) this.finish(id, undefined, false, 'worker-exited');
       this.pump();
       return;
     }
-    if (!('identity' in event) || !event.identity || 'parent' in event.identity) return;
+    if (!('identity' in event) || !event.identity) return;
+    this.noteOutput(event);
+    if ('parent' in event.identity) return;
     const id = event.identity.sessionId;
     if (!this.isBotConversation(id)) return;
     switch (event.type) {
@@ -628,6 +648,89 @@ export class BotSessionHost {
     return this.slots.has(conversationId) || this.running.has(conversationId);
   }
 
+  /** 当前处于静默的运行中轮次 */
+  silences(): BotSilence[] {
+    return [...this.silent].flatMap(([conversationId, since]) => {
+      const binding = this.binding(conversationId);
+      return binding
+        ? [
+            {
+              conversationId,
+              chatId: binding.chatId,
+              botId: binding.botId,
+              ...(binding.delegationId ? { delegationId: binding.delegationId } : {}),
+              since,
+            },
+          ]
+        : [];
+    });
+  }
+
+  /** 看门狗巡检：由定时器驱动，测试可直接调用 */
+  checkSilence(): void {
+    const now = this.now();
+    const limit = this.deps.silenceMs ?? BOT_SILENCE_MS;
+    for (const [id, at] of this.lastOutput) {
+      if (!this.turnActive(id)) this.quiet(id);
+      else if (!this.waiting.get(id)?.size && !this.silent.has(id) && now - at >= limit) {
+        this.silent.set(id, at);
+        this.emitSilence(id);
+      }
+    }
+    if (this.lastOutput.size === 0) this.stopWatchdog();
+  }
+
+  private now(): number {
+    return this.deps.now?.() ?? Date.now();
+  }
+
+  /** 任何流式事件、工具进度或子代理事件都算本会话的输出 */
+  private noteOutput(event: AgentWorkerEvent): void {
+    if (!('identity' in event) || !event.identity) return;
+    const identity = event.identity;
+    const raw = 'parent' in identity ? identity.parent.sessionId : identity.sessionId;
+    const sep = raw.indexOf('::');
+    const id = sep === -1 ? raw : raw.slice(0, sep);
+    if (!this.turnActive(id)) return;
+    if (event.type === 'approval-request' || event.type === 'ask-request') {
+      const requestId =
+        event.type === 'approval-request' ? event.request.requestId : event.ask.requestId;
+      const set = this.waiting.get(id) ?? new Set();
+      set.add(requestId);
+      this.waiting.set(id, set);
+    } else if (event.type === 'approval-resolved' || event.type === 'ask-resolved') {
+      this.waiting.get(id)?.delete(event.requestId);
+    }
+    this.touch(id);
+  }
+
+  private touch(id: string): void {
+    this.lastOutput.set(id, this.now());
+    if (this.silent.delete(id)) this.emitSilence(id);
+    if (!this.watchdog && !this.disposed) {
+      const limit = this.deps.silenceMs ?? BOT_SILENCE_MS;
+      this.watchdog = setInterval(() => this.checkSilence(), Math.min(5_000, limit / 6));
+      this.watchdog.unref?.();
+    }
+  }
+
+  /** 轮次结束：不再巡检，已静默的撤销 */
+  private quiet(id: string): void {
+    this.lastOutput.delete(id);
+    this.waiting.delete(id);
+    if (this.silent.delete(id)) this.emitSilence(id);
+  }
+
+  private emitSilence(id: string): void {
+    const chatId = this.binding(id)?.chatId;
+    this.deps.emit({ kind: 'silence', ...(chatId ? { chatId } : {}), conversationId: id });
+  }
+
+  private stopWatchdog(): void {
+    clearInterval(this.watchdog);
+    this.watchdog = undefined;
+  }
+
   private notesFor(conversationId: string, botId: string): BotNotesSnapshot | undefined {
     if (!this.deps.notes) return undefined;
     const chatId = this.deps.authority.conversation(conversationId)?.bot?.chatId;
@@ -683,10 +786,12 @@ export class BotSessionHost {
     this.slots.set(conversationId, { sawRunning: false });
     this.turnKeys.set(conversationId, randomUUID());
     this.lastAssistant.delete(conversationId);
+    this.touch(conversationId);
     if (delivery.deliveryId) this.activeDeliveries.set(conversationId, delivery.deliveryId);
     else this.activeDeliveries.delete(conversationId);
     const fail = (error: string): Fail => {
       this.slots.delete(conversationId);
+      this.quiet(conversationId);
       return { ok: false, error };
     };
     let notes: { text: string; seen?: string } = { text: delivery.text };
@@ -784,6 +889,7 @@ export class BotSessionHost {
   private release(conversationId: string): void {
     this.cancelSettle(conversationId);
     this.turnKeys.delete(conversationId);
+    this.quiet(conversationId);
     if (!this.slots.delete(conversationId)) return;
     this.pump();
   }
@@ -909,6 +1015,7 @@ export class BotSessionHost {
 
   freeze(): void {
     this.disposed = true;
+    this.stopWatchdog();
   }
 
   dispose(): void {
@@ -946,6 +1053,7 @@ export class BotSessionHost {
     this.running.delete(id);
     this.slots.delete(id);
     this.lastAssistant.delete(id);
+    this.quiet(id);
   }
 
   private clearSession(id: string): void {
@@ -953,6 +1061,7 @@ export class BotSessionHost {
     this.running.delete(id);
     this.slots.delete(id);
     this.lastAssistant.delete(id);
+    this.quiet(id);
     this.activeDeliveries.delete(id);
     this.bindings.delete(id);
     this.independentSpecs.delete(id);

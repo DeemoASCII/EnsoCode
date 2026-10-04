@@ -155,6 +155,8 @@ describe('botPendingCount', () => {
     };
     expect(botPendingCount({ ...state, usage, dismissedBudgets: [] })).toBe(4);
     expect(botPendingCount({ ...state, usage, dismissedBudgets: ['ops:2026-10-04'] })).toBe(3);
+    const quiet = { conversationId: 'p1', chatId: 'c1', botId: 'boss', since: 1 };
+    expect(botPendingCount({ ...state, silences: [quiet] })).toBe(4);
   });
 });
 

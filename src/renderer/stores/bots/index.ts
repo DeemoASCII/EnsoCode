@@ -7,7 +7,13 @@ import type {
   GroupEntry,
   GroupTask,
 } from '@shared/types/bot';
-import type { BotEvent, BotQueueItem, BotSearchHit, BotSendResult } from '@shared/types/botIpc';
+import type {
+  BotEvent,
+  BotQueueItem,
+  BotSearchHit,
+  BotSendResult,
+  BotSilence,
+} from '@shared/types/botIpc';
 import { create } from 'zustand';
 import { usePendingMemoryWrites } from '@/stores/memoryReview';
 import { applyHistoryPage, emptyProjection } from '@/stores/sessions/reducer';
@@ -91,6 +97,8 @@ interface BotsState {
   bots: BotProfile[];
   chats: BotChat[];
   queue: BotQueueItem[];
+  /** 运行中却超过静默阈值没有输出的成员会话（Main 看门狗） */
+  silences: BotSilence[];
   delegations: Delegation[];
   /** 收件箱里被忽略的中断委派 */
   dismissedDelegations: string[];
@@ -210,8 +218,9 @@ export const useBotsStore = create<BotsState>()((set, get) => {
         break;
       case 'chat':
       case 'queue':
+      case 'silence':
         void get().refreshChats();
-        if (event.chatId) void get().refreshRuntime(event.chatId);
+        if (event.chatId && event.kind !== 'silence') void get().refreshRuntime(event.chatId);
         break;
       case 'routine':
         void get().refreshChats();
@@ -285,6 +294,7 @@ export const useBotsStore = create<BotsState>()((set, get) => {
     bots: [],
     chats: [],
     queue: [],
+    silences: [],
     delegations: [],
     dismissedDelegations: loadDismissed(),
     usage: null,
@@ -325,7 +335,12 @@ export const useBotsStore = create<BotsState>()((set, get) => {
     refreshChats: async () => {
       const result = await window.electronAPI.bots.chats();
       if (!result.ok) return;
-      set({ chats: result.chats, queue: result.queue, enabled: result.enabled });
+      set({
+        chats: result.chats,
+        queue: result.queue,
+        silences: result.silences ?? [],
+        enabled: result.enabled,
+      });
       void trackChats(result.chats);
       for (const chat of result.chats) {
         if (chat.kind === 'group' && !get().runtime[chat.id]) void get().refreshRuntime(chat.id);

@@ -108,6 +108,8 @@ export type BotEventKind =
   | 'notes'
   /** 某成员今日预算耗尽（投递被拒或回合被停）；renderer 刷新用量概览与收件箱 */
   | 'budget'
+  /** 运行中的成员会话进入 / 退出静默（BotSilence）；renderer 刷新聊天运行态 */
+  | 'silence'
   /** 点击系统通知：切到 Bot 模式并打开 chatId 或 conversationId 所属聊天；只发给主窗口 */
   | 'open';
 
@@ -121,6 +123,16 @@ export interface BotEvent {
 }
 
 export type BotIpcError = { ok: false; error: string; reason?: string; chatIds?: string[] };
+
+/** 运行中的成员轮次超过静默阈值没有任何输出；since = 最后一次输出时间 */
+export interface BotSilence {
+  conversationId: string;
+  /** 委派会话为 null */
+  chatId: string | null;
+  botId: string;
+  delegationId?: string;
+  since: number;
+}
 
 /** 「自动设置能力」入参：只传成员描述；候选技能 / MCP / 成员由 Main 从权威记录取 */
 export interface BotAbilitySuggestRequest {
@@ -178,7 +190,13 @@ export type BotsListResult = { ok: true; bots: BotProfile[]; enabled: boolean } 
 export type BotGetResult = { ok: true; bot: BotProfile; persona: string } | BotIpcError;
 export type BotWriteIpcResult = { ok: true; bot: BotProfile } | BotIpcError;
 export type BotChatsListResult =
-  | { ok: true; chats: BotChat[]; queue: BotQueueItem[]; enabled: boolean }
+  | {
+      ok: true;
+      chats: BotChat[];
+      queue: BotQueueItem[];
+      enabled: boolean;
+      silences?: BotSilence[];
+    }
   | BotIpcError;
 export type BotChatWriteResult = { ok: true; chat: BotChat } | BotIpcError;
 export type BotTimelineResult = { ok: true; entries: GroupEntry[]; lastSeq: number } | BotIpcError;

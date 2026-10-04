@@ -1051,6 +1051,7 @@ export function registerBotHandlers(): void {
       ok: true,
       chats: chats.list(),
       queue: host.queueState(),
+      silences: host.silences(),
       enabled: true,
     }),
     { ok: true, chats: [], queue: [], enabled: false } satisfies BotChatsListResult

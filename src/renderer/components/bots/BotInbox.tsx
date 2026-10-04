@@ -1,4 +1,5 @@
 import type { BotProfile, Delegation } from '@shared/types/bot';
+import type { BotSilence } from '@shared/types/botIpc';
 import { Inbox } from 'lucide-react';
 import { useMemo, useState } from 'react';
 import { Button } from '@/components/ui/button';
@@ -11,6 +12,7 @@ import { type BudgetAlert, budgetAlerts } from '@/stores/bots/budget';
 import { interruptedDelegations, pendingOwners } from '@/stores/bots/delegations';
 import { routineAlerts } from '@/stores/bots/routines';
 import { type PendingItem, pendingItems } from '@/stores/bots/selectors';
+import { silenceAlerts } from '@/stores/bots/silence';
 import { usePendingMemoryWrites } from '@/stores/memoryReview';
 import { BotAvatar } from './BotAvatar';
 import { chatTitle } from './botText';
@@ -18,6 +20,7 @@ import { DelegationBadge, failureText, retryDelegation } from './DelegationCard'
 import { MemoryWriteCard } from './MemoryWriteCard';
 import { RoutineAlertCard } from './RoutineCards';
 import { SessionHistoryDialog } from './SessionHistoryDialog';
+import { QuietFor } from './SilenceNote';
 
 /** 收件箱：成员会话与委派会话里待你处理的审批、提问，以及重启中断的委派 */
 export function BotInbox() {
@@ -30,6 +33,7 @@ export function BotInbox() {
   const usage = useBotsStore((s) => s.usage);
   const dismissedBudgets = useBotsStore((s) => s.dismissedBudgets);
   const routines = useBotsStore((s) => s.routines);
+  const silences = useBotsStore((s) => s.silences);
   const [history, setHistory] = useState<{ id: string; title: string; bot?: BotProfile } | null>(
     null
   );
@@ -43,6 +47,7 @@ export function BotInbox() {
   );
   const budgets = useMemo(() => budgetAlerts(usage, dismissedBudgets), [usage, dismissedBudgets]);
   const routineItems = useMemo(() => routineAlerts(routines), [routines]);
+  const quiet = useMemo(() => silenceAlerts(silences, delegations), [silences, delegations]);
   const memoryWrites = usePendingMemoryWrites();
   const byId = useMemo(() => new Map(bots.map((bot) => [bot.id, bot])), [bots]);
   const chatName = (chatId: string | null) => {
@@ -64,6 +69,7 @@ export function BotInbox() {
             interrupted.length === 0 &&
             budgets.length === 0 &&
             routineItems.length === 0 &&
+            quiet.length === 0 &&
             memoryWrites.length === 0 && (
               <div className="flex flex-col items-center gap-2 py-16 text-muted-foreground">
                 <Inbox className="h-6 w-6" />
@@ -92,6 +98,14 @@ export function BotInbox() {
           ))}
           {routineItems.map((alert) => (
             <RoutineAlertCard key={alert.routine.id} alert={alert} />
+          ))}
+          {quiet.map((item) => (
+            <SilenceCard
+              key={item.conversationId}
+              item={item}
+              bot={byId.get(item.botId)}
+              chatName={chatName(item.chatId)}
+            />
           ))}
           {interrupted.length > 0 && (
             <div className="pt-3 font-medium text-muted-foreground text-xs">
@@ -123,6 +137,48 @@ export function BotInbox() {
         }
         onClose={() => setHistory(null)}
       />
+    </div>
+  );
+}
+
+/** 静默看门狗：只提示不中断，成员恢复输出后自动消失 */
+function SilenceCard({
+  item,
+  bot,
+  chatName,
+}: {
+  item: BotSilence;
+  bot: BotProfile | undefined;
+  chatName: string;
+}) {
+  const { t } = useI18n();
+  const setView = useBotsStore((s) => s.setView);
+  const name = bot?.name ?? t('Deleted member');
+  return (
+    <div className="rounded-xl border bg-card p-3">
+      <div className="flex items-center gap-2 text-muted-foreground text-xs">
+        <BotAvatar bot={bot} size="sm" busy />
+        <span className="text-foreground">{name}</span>
+        {chatName && <span>· {chatName}</span>}
+        {item.delegationId && <span>· {t('Delegation')}</span>}
+        <span className="rounded bg-warning/20 px-1.5 text-[11px] text-warning">
+          <QuietFor since={item.since} />
+        </span>
+      </div>
+      <div className="mt-2 text-sm">
+        {t('{{name}} is still running but has produced no output for a while', { name })}
+      </div>
+      {item.chatId && (
+        <div className="mt-2.5 flex flex-wrap items-center justify-end gap-1.5">
+          <Button
+            size="xs"
+            variant="outline"
+            onClick={() => item.chatId && setView({ kind: 'chat', chatId: item.chatId })}
+          >
+            {t('Go to chat')}
+          </Button>
+        </div>
+      )}
     </div>
   );
 }

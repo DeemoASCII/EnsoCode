@@ -1,4 +1,5 @@
 import type { BotChat, BotRoutine, Delegation, DelegationState } from '@shared/types/bot';
+import type { BotSilence } from '@shared/types/botIpc';
 import { type BotUsageSnapshot, budgetAlerts } from './budget';
 import type { BotSessions } from './projection';
 import { routineAlerts } from './routines';
@@ -88,12 +89,14 @@ export function botPendingCount(state: {
   usage?: BotUsageSnapshot | null;
   dismissedBudgets?: readonly string[];
   routines?: readonly BotRoutine[];
+  silences?: readonly BotSilence[];
 }): number {
   return (
     pendingItems(state.sessions, pendingOwners(state.chats, state.delegations)).length +
     interruptedDelegations(state.delegations, state.dismissedDelegations).length +
     budgetAlerts(state.usage ?? null, state.dismissedBudgets ?? []).length +
-    routineAlerts(state.routines ?? []).length
+    routineAlerts(state.routines ?? []).length +
+    (state.silences?.length ?? 0)
   );
 }
 

@@ -840,3 +840,101 @@ describe('BotSessionHost budget gate', () => {
     expect(host.isBusy(sent.conversationId)).toBe(false);
   });
 });
+
+describe('BotSessionHost silence watchdog', () => {
+  let clock: number;
+  const make = () => {
+    clock = 1_000;
+    host = new BotSessionHost({
+      bots,
+      chats,
+      authority: registry,
+      runtime,
+      emit: (event) => events.push(event),
+      silenceMs: 90_000,
+      now: () => clock,
+    });
+  };
+  const silenceEvents = () => events.filter((event) => event.kind === 'silence');
+
+  it('flags a running turn after 90s without output and clears it when output resumes', async () => {
+    make();
+    const alice = bot('Alice');
+    const chat = direct(alice.id);
+    const sent = await host.deliver(chat.id, alice.id, 'sleep');
+    if (!sent.ok) throw new Error(sent.error);
+    host.observe(ev({ type: 'status', status: 'running' }, sent.conversationId));
+    clock += 89_000;
+    host.checkSilence();
+    expect(host.silences()).toEqual([]);
+    clock += 2_000;
+    host.checkSilence();
+    host.checkSilence();
+    expect(host.silences()).toEqual([
+      { conversationId: sent.conversationId, chatId: chat.id, botId: alice.id, since: 1_000 },
+    ]);
+    expect(silenceEvents()).toEqual([
+      { kind: 'silence', chatId: chat.id, conversationId: sent.conversationId },
+    ]);
+    // 子代理进度也算输出
+    host.observe({
+      type: 'tool-output',
+      seq: 2,
+      toolCallId: 'x',
+      output: '.',
+      identity: {
+        sessionId: `${sent.conversationId}::c1`,
+        generation: 'g',
+        parent: { sessionId: sent.conversationId, generation: 'g' },
+        instanceId: 'c1',
+        instanceName: 'c1',
+        typeKey: 'general',
+      },
+    } as unknown as AgentWorkerEvent);
+    expect(host.silences()).toEqual([]);
+    expect(silenceEvents()).toHaveLength(2);
+    clock += 90_000;
+    host.checkSilence();
+    expect(host.silences()).toHaveLength(1);
+    host.observe(ev({ type: 'turn-completed', turnId: 't' }, sent.conversationId));
+    expect(host.silences()).toEqual([]);
+    expect(silenceEvents()).toHaveLength(4);
+  });
+
+  it('does not flag a turn that is waiting for approval and restarts the clock when answered', async () => {
+    make();
+    const alice = bot('Alice');
+    const chat = direct(alice.id);
+    const sent = await host.deliver(chat.id, alice.id, 'go');
+    if (!sent.ok) throw new Error(sent.error);
+    host.observe(
+      ev({ type: 'approval-request', request: { requestId: 'r1' } }, sent.conversationId)
+    );
+    clock += 200_000;
+    host.checkSilence();
+    expect(host.silences()).toEqual([]);
+    host.observe(ev({ type: 'approval-resolved', requestId: 'r1' }, sent.conversationId));
+    clock += 60_000;
+    host.checkSilence();
+    expect(host.silences()).toEqual([]);
+    clock += 31_000;
+    host.checkSilence();
+    expect(host.silences()).toHaveLength(1);
+  });
+
+  it('ignores idle sessions and forgets silence when the session stops', async () => {
+    make();
+    const alice = bot('Alice');
+    const chat = direct(alice.id);
+    const sent = await host.deliver(chat.id, alice.id, 'go');
+    if (!sent.ok) throw new Error(sent.error);
+    clock += 100_000;
+    host.checkSilence();
+    expect(host.silences()).toHaveLength(1);
+    await host.stopTurn(chat.id, alice.id);
+    expect(host.silences()).toEqual([]);
+    clock += 100_000;
+    host.checkSilence();
+    expect(host.silences()).toEqual([]);
+  });
+});

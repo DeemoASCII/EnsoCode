@@ -2417,6 +2417,9 @@ export const zhTranslations: Record<string, string> = {
   'Mondays at 9:00': '每周一 9:00',
   Hourly: '每小时',
   'Interrupted delegations': '中断的委派',
+  'Quiet for {{n}}s': '已安静 {{n}} 秒',
+  '{{name}} is still running but has produced no output for a while':
+    '{{name}} 仍在运行，但已有一段时间没有任何输出',
   'View conversation': '查看会话',
   '{{name}} on behalf of {{owner}}': '{{name}} 替 {{owner}} 执行',
   'Delegations in progress · {{n}}': '进行中的委派 · {{n}}',

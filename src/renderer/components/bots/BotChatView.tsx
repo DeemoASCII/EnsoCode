@@ -31,6 +31,7 @@ import { GroupInfoPanel } from './GroupInfoPanel';
 import { GroupTimeline } from './GroupTimeline';
 import { LiveSessionDialog, LiveSessionTimeline, type MessageFocus } from './LiveSessionTimeline';
 import { SessionHistoryDialog } from './SessionHistoryDialog';
+import { SilenceNote } from './SilenceNote';
 import { WorkspaceMenu } from './WorkspaceMenu';
 
 export function useModelLabel(bot: BotProfile | undefined): string {
@@ -205,7 +206,12 @@ export function BotChatView({ chat }: { chat: BotChat }) {
             <div className="truncate font-semibold text-sm">{chatTitle(chat, bots, t)}</div>
             <div className="truncate text-muted-foreground text-xs">
               {direct ? (
-                <DirectSubtitle bot={direct} running={summary.running} queued={summary.queued} />
+                <DirectSubtitle
+                  bot={direct}
+                  running={summary.running}
+                  queued={summary.queued}
+                  conversationId={chat.sessions[direct.id]?.conversationId}
+                />
               ) : (
                 t('{{n}} members · Owner {{name}}', {
                   n: members.length,
@@ -385,15 +391,22 @@ function DirectSubtitle({
   bot,
   running,
   queued,
+  conversationId,
 }: {
   bot: BotProfile;
   running: boolean;
   queued: boolean;
+  conversationId: string | undefined;
 }) {
   const { t } = useI18n();
   const model = useModelLabel(bot);
   const status = running ? t('Working') : queued ? t('Queued') : t('Idle');
-  return <>{[bot.title, model, status].filter(Boolean).join(' · ')}</>;
+  return (
+    <>
+      {[bot.title, model, status].filter(Boolean).join(' · ')}
+      {running && <SilenceNote conversationId={conversationId} className="ml-1.5 text-warning" />}
+    </>
+  );
 }
 
 function DirectChips({ bot }: { bot: BotProfile }) {

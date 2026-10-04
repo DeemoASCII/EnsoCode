@@ -20,6 +20,7 @@ import { ArtifactCards } from './ArtifactCards';
 import { BotAvatar } from './BotAvatar';
 import { DelegationCard } from './DelegationCard';
 import { RoutineProposalCard } from './RoutineCards';
+import { SilenceNote } from './SilenceNote';
 
 const timeOf = (at: number) =>
   new Date(at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
@@ -239,6 +240,7 @@ export function GroupTimeline({
               <div className="flex items-center gap-2 text-muted-foreground text-xs">
                 <TypingDots />
                 {activity && <span className="truncate">{toolLabel(activity, t)}…</span>}
+                <SilenceNote conversationId={replyingId} />
                 {replyingId && (
                   <span className="shrink-0 underline-offset-2 hover:underline">
                     {t('View live')}
