@@ -118,7 +118,7 @@ const empty = (): RouterState => ({
 const relayOptions = (options: BotDeliverOptions | undefined): BotDeliverOptions | undefined => {
   if (!options) return options;
   const { deliveryId: _deliveryId, onlyIfIdle: _onlyIfIdle, ...rest } = options;
-  return rest;
+  return { ...rest, source: 'bot' };
 };
 const budgetNotice = (name: string) => `${name} 今日预算已用完`;
 const isDecision = (value: unknown): value is SmartRouteDecision =>

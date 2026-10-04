@@ -356,6 +356,7 @@ export function getBotServices(): BotServices | null {
     emit: emitBotEvent,
     notes,
     budget: usage,
+    language: () => (String(readSettingsState()?.language ?? 'zh').startsWith('zh') ? 'zh' : 'en'),
   });
   const delegationStore = new DelegationStore(
     path.join(userData, 'bot-chats', 'delegations.jsonl')
@@ -463,7 +464,8 @@ export function getBotServices(): BotServices | null {
     chats,
     bots,
     emit: emitBotEvent,
-    send: (chatId, text) => groups.send(chatId, text, { deliveryId: randomUUID() }),
+    send: (chatId, text) =>
+      groups.send(chatId, text, { deliveryId: randomUUID(), source: 'human' }),
     cancelDelegation: (id) => {
       delegationsRef?.cancel(id);
     },
@@ -488,6 +490,7 @@ export function getBotServices(): BotServices | null {
         return { ok: false, error: 'parent-session-changed' };
       return groups.runAs(record.chatId, record.parentBotId, text, undefined, {
         onlyIfIdle: true,
+        source: 'bot',
         deliveryId,
       });
     },
@@ -745,6 +748,7 @@ export async function sendBotMessage(
   wakeChat(chats, chat.id);
   const options = {
     deliveryId: input.deliveryId,
+    source: 'human' as const,
     ...(input.images ? { images: input.images } : {}),
   };
   if (chat.kind === 'group') {

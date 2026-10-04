@@ -247,7 +247,11 @@ export class DelegationService {
     this.timers.set(id, timer);
     const text = `<delegation-task id="${id}" from="${escapeXml(parent.name)}">\n${escapeXml(record.task)}\n<context>${escapeXml(record.context)}</context>\n</delegation-task>`;
     void this.deps.host
-      .deliverConversation(child.conversationId, text, { deliveryId: id, queueIfBusy: true })
+      .deliverConversation(child.conversationId, text, {
+        deliveryId: id,
+        queueIfBusy: true,
+        source: 'bot',
+      })
       .then((sent) => {
         const current = this.deps.store.get(id);
         if (!current || !active(current)) return;
@@ -411,6 +415,7 @@ export class DelegationService {
             ? await this.deps.deliverGroupResult(head, text, deliveryId)
             : await this.deps.host.deliverConversation(head.parentConversationId, text, {
                 onlyIfIdle: true,
+                source: 'bot',
                 deliveryId,
               });
         if (sent.ok && this.deps.host.hasStartedDelivery(head.parentConversationId, deliveryId))

@@ -54,7 +54,7 @@ export class RoutineRunner {
     const text = dryRun
       ? `<routine title="${attr(routine.title)}" dry-run="true">${DRY_RUN_NOTE}\n\n${routine.prompt}</routine>`
       : `<routine title="${attr(routine.title)}">${routine.prompt}</routine>`;
-    const options = { deliveryId, queueIfBusy: true };
+    const options = { deliveryId, queueIfBusy: true, source: 'background' as const };
     return new Promise((resolve) => {
       this.pending.set(deliveryId, resolve);
       const sent =

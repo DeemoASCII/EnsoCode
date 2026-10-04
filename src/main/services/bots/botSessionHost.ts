@@ -1,6 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import { realpathSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { wrapInterjection } from '../../../shared/bots/interject';
+import type { BotDeliverySource } from '../../../shared/bots/lane';
 import type {
   AgentWorkerEvent,
   AttachedImage,
@@ -116,6 +118,8 @@ export interface BotSessionHostDeps {
   /** 静默看门狗阈值，缺省 BOT_SILENCE_MS */
   silenceMs?: number;
   now?: () => number;
+  /** 界面语言：人类插话补充说明用，缺省中文 */
+  language?: () => 'zh' | 'en';
 }
 
 /** 委派会话的来源：工作区写锁沿委派链共用，等待提示落到发起委派的群 */
@@ -128,6 +132,8 @@ export interface BotDeliverOptions {
   images?: AttachedImage[];
   deliveryId?: string;
   queueIfBusy?: boolean;
+  /** 缺省 bot：人类插话才加补充说明 */
+  source?: BotDeliverySource;
   onlyIfIdle?: boolean;
 }
 
@@ -237,6 +243,8 @@ export class BotSessionHost {
   /** 会话工作区的真实路径（工作区写锁的键） */
   private readonly workspaceKeys = new Map<string, string | null>();
   private readonly origins = new Map<string, BotDelegationOrigin>();
+  /** 处于自动重试倒计时的会话：插话改排下一轮 */
+  private readonly retrying = new Set<string>();
   private watchdog: ReturnType<typeof setInterval> | undefined;
 
   onDeliveryStarted(
@@ -614,7 +622,11 @@ export class BotSessionHost {
       await this.prepareBudget(botId);
       if (this.budgetExceeded(botId, binding.chatId, conversationId))
         return { ok: false, error: BOT_BUDGET_ERROR };
-      if (this.turnActive(conversationId) && !options.queueIfBusy) return this.steer(delivery);
+      if (this.turnActive(conversationId) && !options.queueIfBusy) {
+        if (!this.retrying.has(conversationId)) return this.steer(delivery);
+        // 自动重试倒计时里没有活轮可插：排到下一轮，不打断重试
+        delivery.queueIfBusy = true;
+      }
       const holder = this.turnActive(conversationId)
         ? undefined
         : this.workspaceHolder(conversationId);
@@ -698,6 +710,7 @@ export class BotSessionHost {
       this.slots.clear();
       this.lastAssistant.clear();
       this.waiting.clear();
+      this.retrying.clear();
       for (const id of [...this.lastOutput.keys()]) this.quiet(id);
       for (const id of interrupted)
         this.finish(id, undefined, false, 'worker-exited', '', undefined, true);
@@ -712,6 +725,7 @@ export class BotSessionHost {
     switch (event.type) {
       case 'status': {
         const slot = this.slots.get(id);
+        this.retrying.delete(id);
         if (event.status === 'running') {
           this.cancelSettle(id);
           if (!this.running.has(id) && !slot?.sawRunning) this.lastAssistant.delete(id);
@@ -760,6 +774,9 @@ export class BotSessionHost {
         if (event.occupancy) this.contextTokens.set(id, event.occupancy.used);
         return;
       }
+      case 'turn-retry':
+        if (this.turnActive(id)) this.retrying.add(id);
+        return;
       case 'turn-completed': {
         if (!this.turnActive(id)) return;
         this.deliveryStarted(id);
@@ -791,6 +808,7 @@ export class BotSessionHost {
         const hadSlot = this.slots.has(id);
         this.live.delete(id);
         this.running.delete(id);
+        this.retrying.delete(id);
         this.lastAssistant.delete(id);
         if (hadSlot) {
           this.finish(id, undefined, false, event.reason);
@@ -906,18 +924,26 @@ export class BotSessionHost {
   }
 
   /** 运行中会话的笔记变了：在本次投递前追加一次 <notes-updated> */
-  private withNotesUpdate(delivery: Delivery): { text: string; seen?: string } {
+  private withNotesUpdate(
+    delivery: Delivery,
+    text = delivery.text
+  ): { text: string; seen?: string } {
     const snap = this.notesFor(delivery.conversationId, delivery.botId);
     if (!snap || snap.version === (this.notesSeen.get(delivery.conversationId) ?? ''))
-      return { text: delivery.text };
+      return { text };
     return {
-      text: snap.update ? `${snap.update}\n\n${delivery.text}` : delivery.text,
+      text: snap.update ? `${snap.update}\n\n${text}` : text,
       seen: snap.version,
     };
   }
 
   private steer(delivery: Delivery): BotDeliverResult {
-    const notes = this.withNotesUpdate(delivery);
+    const notes = this.withNotesUpdate(
+      delivery,
+      delivery.source === 'human'
+        ? wrapInterjection(delivery.text, this.deps.language?.() ?? 'zh')
+        : delivery.text
+    );
     const sent = this.deps.runtime.steer(
       delivery.conversationId,
       notes.text,
@@ -1135,6 +1161,7 @@ export class BotSessionHost {
 
   private release(conversationId: string): void {
     this.cancelSettle(conversationId);
+    this.retrying.delete(conversationId);
     this.turnKeys.delete(conversationId);
     this.quiet(conversationId);
     if (!this.slots.delete(conversationId)) return;
@@ -1223,9 +1250,12 @@ export class BotSessionHost {
     for (const chatId of touched) this.deps.emit({ kind: 'queue', chatId });
   }
 
-  /** 活轮里可 steer 的插话，或工作区没被别的写成员占着的新轮 */
+  /** 活轮里可 steer 的插话（重试倒计时中改排下一轮），或工作区没被别的写成员占着的新轮 */
   private dequeueable(item: Delivery): boolean {
-    if (this.turnActive(item.conversationId)) return !item.queueIfBusy;
+    if (this.turnActive(item.conversationId)) {
+      if (this.retrying.has(item.conversationId)) item.queueIfBusy = true;
+      return !item.queueIfBusy;
+    }
     const holder = this.workspaceHolder(item.conversationId);
     if (holder) this.noteWorkspaceWait(item, holder);
     return !holder;
@@ -1377,6 +1407,7 @@ export class BotSessionHost {
 
   private cancelActive(id: string, reason = 'canceled', estimated = false): void {
     this.cancelSettle(id);
+    this.retrying.delete(id);
     if (this.turnActive(id))
       this.finish(
         id,
@@ -1396,6 +1427,7 @@ export class BotSessionHost {
 
   private clearSession(id: string): void {
     this.cancelSettle(id);
+    this.retrying.delete(id);
     this.turnUsage.delete(id);
     this.contextTokens.delete(id);
     this.running.delete(id);

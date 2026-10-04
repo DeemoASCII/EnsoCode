@@ -138,7 +138,7 @@ it('以执行成员身份、用派生的 deliveryId 投递；试运行在提示�
     'c',
     'e',
     '<routine title="run &quot;x&quot;">work</routine>',
-    { deliveryId: OPTIONS.deliveryId, queueIfBusy: true }
+    { deliveryId: OPTIONS.deliveryId, queueIfBusy: true, source: 'background' }
   );
   chats.kind = 'group';
   expect(await runner.run(ROUTINE, { ...OPTIONS, dryRun: true })).toEqual({
