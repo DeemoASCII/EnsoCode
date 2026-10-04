@@ -40,6 +40,7 @@ export const DEFAULT_ABILITIES: AbilityForm = {
   budgetCost: '',
   budgetTokens: '',
   delegationTimeout: '',
+  maxTurnTokens: '',
 };
 
 export interface AbilityProfile {
@@ -136,6 +137,24 @@ export function BotAbilityFields({
         <p className="mt-1 text-muted-foreground text-xs">
           {t(
             'Resets at local midnight. Once reached, new messages to this member are refused and a running reply is stopped.'
+          )}
+        </p>
+      </div>
+      <div>
+        <FieldLabel>{t('Per-turn token limit')}</FieldLabel>
+        <Input
+          type="number"
+          min={1}
+          step="1"
+          inputMode="numeric"
+          value={value.maxTurnTokens}
+          placeholder={t('Tokens, empty = unlimited')}
+          aria-label={t('Per-turn token limit')}
+          onChange={(event) => onChange({ maxTurnTokens: event.target.value })}
+        />
+        <p className="mt-1 text-muted-foreground text-xs">
+          {t(
+            'A single reply that uses more tokens than this (counted while streaming) is stopped.'
           )}
         </p>
       </div>

@@ -863,7 +863,13 @@ export const zhTranslations: Record<string, string> = {
   'Empty = 240': '留空 = 240',
   'When other members delegate to this one, the task fails with a timeout after this long. A delegator can ask for less, not more.':
     '其他成员委派给该成员时，超过这个时长未完成即判超时失败。发起方只能要求更短，不能更长。',
-  'Delegation time limit must be 1–1440 whole minutes': '委派时限须为 1–1440 的整数分钟',
+  'Check the per-turn token limit and delegation time limit':
+    '请检查单回合 Token 上限（正整数）与委派时限（1–1440 的整数分钟）',
+  'Per-turn token limit': '单回合 Token 上限',
+  'A single reply that uses more tokens than this (counted while streaming) is stopped.':
+    '单次回复（流式累计）用量超过该值即被停止。',
+  "Stopped: the member's per-turn token limit was exceeded.":
+    '已停止：超出成员的单回合 Token 上限。',
   "This member's daily budget is used up. Try again tomorrow or raise the budget.":
     '该成员今日预算已用完，请明天再试或调高预算。',
   'Over budget': '超出预算',

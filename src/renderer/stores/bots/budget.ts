@@ -1,4 +1,9 @@
-import { type BotBudget, type BotProfile, isDelegationTimeoutMinutes } from '@shared/types/bot';
+import {
+  type BotBudget,
+  type BotProfile,
+  isDelegationTimeoutMinutes,
+  isTokenCap,
+} from '@shared/types/bot';
 import type { BotBudgetVerdict, BotUsageOverview } from '@shared/usage/botUsage';
 
 /** 表单里以字符串编辑，留空 = 不限 */
@@ -10,6 +15,7 @@ export interface BudgetForm {
 /** 成员级上限：留空 = 默认 */
 export interface LimitsForm {
   delegationTimeout: string;
+  maxTurnTokens: string;
 }
 
 export interface BotUsageSnapshot {
@@ -52,23 +58,30 @@ export function budgetDraft(
   return { ok: true, budget: Object.keys(budget).length > 0 ? budget : null };
 }
 
-export function limitsFormOf(bot: Pick<BotProfile, 'delegationTimeoutMinutes'>): LimitsForm {
+export function limitsFormOf(
+  bot: Pick<BotProfile, 'delegationTimeoutMinutes' | 'maxTokensPerTurn'>
+): LimitsForm {
   return {
     delegationTimeout:
       bot.delegationTimeoutMinutes !== undefined ? String(bot.delegationTimeoutMinutes) : '',
+    maxTurnTokens: bot.maxTokensPerTurn !== undefined ? String(bot.maxTokensPerTurn) : '',
   };
 }
 
 /** null = 默认；ok:false = 有非法输入 */
 export function limitsDraft(
   form: LimitsForm
-): { ok: true; delegationTimeoutMinutes: number | null } | { ok: false } {
-  const timeout = form.delegationTimeout.trim();
-  if (!timeout) return { ok: true, delegationTimeoutMinutes: null };
-  const value = Number(timeout);
-  return isDelegationTimeoutMinutes(value)
-    ? { ok: true, delegationTimeoutMinutes: value }
-    : { ok: false };
+):
+  | { ok: true; delegationTimeoutMinutes: number | null; maxTokensPerTurn: number | null }
+  | { ok: false } {
+  const timeout = form.delegationTimeout.trim() ? Number(form.delegationTimeout) : null;
+  const cap = form.maxTurnTokens.trim() ? Number(form.maxTurnTokens) : null;
+  if (
+    (timeout !== null && !isDelegationTimeoutMinutes(timeout)) ||
+    (cap !== null && !isTokenCap(cap))
+  )
+    return { ok: false };
+  return { ok: true, delegationTimeoutMinutes: timeout, maxTokensPerTurn: cap };
 }
 
 export function budgetAlerts(

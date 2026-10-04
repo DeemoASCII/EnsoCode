@@ -36,6 +36,8 @@ export interface BotProfile {
   budget?: BotBudget;
   /** 作为被委派方时单次委派的时限（分钟），缺省 DELEGATION_TIMEOUT_MINUTES */
   delegationTimeoutMinutes?: number;
+  /** 单回合 token 上限（流式用量超过即停止该回合）；缺省不限 */
+  maxTokensPerTurn?: number;
   archivedAt?: number;
   createdAt: number;
   updatedAt: number;
@@ -92,6 +94,10 @@ export function isDelegationTimeoutMinutes(value: unknown): value is number {
     (value as number) >= 1 &&
     (value as number) <= DELEGATION_TIMEOUT_MAX_MINUTES
   );
+}
+
+export function isTokenCap(value: unknown): value is number {
+  return Number.isSafeInteger(value) && (value as number) > 0;
 }
 export type DelegationState = (typeof DELEGATION_STATES)[number];
 export type BotPermissions = Pick<
@@ -361,6 +367,7 @@ export function parseBotProfile(value: unknown): BotProfile | undefined {
   if (budget) profile.budget = budget;
   if (isDelegationTimeoutMinutes(value.delegationTimeoutMinutes))
     profile.delegationTimeoutMinutes = value.delegationTimeoutMinutes;
+  if (isTokenCap(value.maxTokensPerTurn)) profile.maxTokensPerTurn = value.maxTokensPerTurn;
   if (isTime(value.archivedAt)) profile.archivedAt = value.archivedAt;
   return profile;
 }

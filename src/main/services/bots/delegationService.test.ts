@@ -39,7 +39,7 @@ function fixture(autoStart = true, over = new Set<string>()) {
     chats,
     authority,
     emit: () => {},
-    budget: { exceeded: async (botId) => (over.has(botId) ? 'tokens' : null) },
+    budget: { prepare: async () => {}, verdict: (botId) => (over.has(botId) ? 'tokens' : null) },
     runtime: {
       spawn: async () => ({ ok: true }),
       prompt: (id, text, _images, deliveryId) => {

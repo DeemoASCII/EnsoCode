@@ -14,6 +14,7 @@ import {
   type BotRoutingMode,
   isBotId,
   isDelegationTimeoutMinutes,
+  isTokenCap,
   parseBotBudget,
 } from '@shared/types/bot';
 import type { BotChatUpdateInput, BotChatWorkspaceInput } from '@shared/types/botIpc';
@@ -63,6 +64,7 @@ const DRAFT_KEYS = [
   'persona',
   'budget',
   'delegationTimeoutMinutes',
+  'maxTokensPerTurn',
 ] as const;
 
 export function parseBotDraftInput(value: unknown): BotDraft | null {
@@ -157,6 +159,11 @@ export function parseBotDraftInput(value: unknown): BotDraft | null {
     if (input.delegationTimeoutMinutes === null) draft.delegationTimeoutMinutes = undefined;
     else if (isDelegationTimeoutMinutes(input.delegationTimeoutMinutes))
       draft.delegationTimeoutMinutes = input.delegationTimeoutMinutes;
+    else return null;
+  }
+  if (input.maxTokensPerTurn !== undefined) {
+    if (input.maxTokensPerTurn === null) draft.maxTokensPerTurn = undefined;
+    else if (isTokenCap(input.maxTokensPerTurn)) draft.maxTokensPerTurn = input.maxTokensPerTurn;
     else return null;
   }
   return draft;

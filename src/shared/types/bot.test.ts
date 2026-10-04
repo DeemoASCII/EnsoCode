@@ -65,6 +65,16 @@ describe('parseBotProfile', () => {
       );
   });
 
+  it('keeps a positive integer per-turn token cap and drops the rest', () => {
+    expect(parseBotProfile({ ...profile, maxTokensPerTurn: 50_000 })).toMatchObject({
+      maxTokensPerTurn: 50_000,
+    });
+    for (const bad of [0, -1, 1.5, '100', null, Number.MAX_VALUE])
+      expect(parseBotProfile({ ...profile, maxTokensPerTurn: bad })).not.toHaveProperty(
+        'maxTokensPerTurn'
+      );
+  });
+
   it('keeps a positive daily budget and drops invalid caps', () => {
     expect(
       parseBotProfile({ ...profile, budget: { dailyCostUsd: 0.5, dailyTokens: 2000 } })?.budget

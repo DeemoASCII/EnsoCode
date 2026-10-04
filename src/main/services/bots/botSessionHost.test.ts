@@ -735,10 +735,10 @@ describe('BotSessionHost budget gate', () => {
       runtime,
       emit: (event) => events.push(event),
       budget: {
-        exceeded: async (botId) => {
+        prepare: async (botId) => {
           checked.push(botId);
-          return over.has(botId) ? 'tokens' : null;
         },
+        verdict: (botId) => (over.has(botId) ? 'tokens' : null),
       },
     });
     return checked;
@@ -838,6 +838,162 @@ describe('BotSessionHost budget gate', () => {
     expect(results).toMatchObject([{ deliveryId: 'w', ok: false, error: 'budget-exceeded' }]);
     expect(events).toContainEqual({ kind: 'budget', chatId: chat.id });
     expect(host.isBusy(sent.conversationId)).toBe(false);
+  });
+});
+
+describe('BotSessionHost budget reservation and per-turn cap', () => {
+  function reserving(limit: number) {
+    const asked: number[] = [];
+    const recorded: Array<[string, string, number]> = [];
+    let used = 0;
+    host = new BotSessionHost({
+      bots,
+      chats,
+      authority: registry,
+      runtime,
+      emit: (event) => events.push(event),
+      budget: {
+        prepare: async () => {},
+        verdict: (_botId, reserved) => {
+          asked.push(reserved);
+          return used + reserved >= limit ? 'tokens' : null;
+        },
+        record: (botId, conversationId, index, message) => {
+          recorded.push([botId, conversationId, index]);
+          const u = message.usage!;
+          used += u.input + u.output + u.cacheRead + u.cacheWrite;
+        },
+      },
+    });
+    return { asked, recorded };
+  }
+  const usage = (id: string, index: number, input: number, stopReason?: string) =>
+    host.observe(
+      ev(
+        {
+          type: 'message-upsert',
+          index,
+          message: {
+            role: 'assistant',
+            content: [],
+            timestamp: index,
+            ...(stopReason ? { stopReason } : {}),
+            usage: { input, output: 0, cacheRead: 0, cacheWrite: 0 },
+          },
+        },
+        id
+      )
+    );
+  async function twoChats() {
+    const alice = bot('Alice');
+    const one = direct(alice.id);
+    const two = direct(alice.id);
+    return { alice, one, two };
+  }
+
+  it('holds 32k per running turn of the member so concurrent turns cannot all pass the cap', async () => {
+    const { asked } = reserving(50_000);
+    const { alice, one, two } = await twoChats();
+    const first = await host.deliver(one.id, alice.id, 'a');
+    if (!first.ok) throw new Error(first.error);
+    expect(asked).toEqual([0]);
+    host.observe(ev({ type: 'status', status: 'running' }, first.conversationId));
+    // 本回合已用的部分从预留里扣掉
+    usage(first.conversationId, 1, 20_000, 'toolUse');
+    await flush();
+    expect(asked.at(-1)).toBe(0);
+    const second = await host.deliver(two.id, alice.id, 'b');
+    expect(second.ok).toBe(true);
+    expect(asked.at(-1)).toBe(12_000);
+    host.observe(ev({ type: 'turn-completed', turnId: 't' }, first.conversationId));
+    await flush();
+    // 回合结束即释放；另一回合的预留仍在
+    usage(second.ok ? second.conversationId : '', 1, 5_000, 'toolUse');
+    await flush();
+    expect(asked.at(-1)).toBe(0);
+  });
+
+  it('lets only one of two simultaneous turns start when both together would pass the cap', async () => {
+    reserving(30_000);
+    const { alice, one, two } = await twoChats();
+    const results = await Promise.all([
+      host.deliver(one.id, alice.id, 'a'),
+      host.deliver(two.id, alice.id, 'b'),
+    ]);
+    expect(results.map((result) => result.ok)).toEqual([true, false]);
+    expect(results[1]).toMatchObject({ error: 'budget-exceeded' });
+    expect(runtime.prompts).toHaveLength(1);
+  });
+
+  it('caps the reservation by maxTokensPerTurn', async () => {
+    const { asked } = reserving(1_000_000);
+    const { alice, one, two } = await twoChats();
+    bots.update(alice.id, { maxTokensPerTurn: 10_000 }, []);
+    const first = await host.deliver(one.id, alice.id, 'a');
+    if (!first.ok) throw new Error(first.error);
+    usage(first.conversationId, 1, 4_000, 'toolUse');
+    await host.deliver(two.id, alice.id, 'b');
+    expect(asked.at(-1)).toBe(6_000);
+  });
+
+  it('records each finished assistant message once into the ledger, streaming parts not', async () => {
+    const { recorded } = reserving(1_000_000);
+    const { alice, one } = await twoChats();
+    const sent = await host.deliver(one.id, alice.id, 'a');
+    if (!sent.ok) throw new Error(sent.error);
+    usage(sent.conversationId, 1, 10);
+    usage(sent.conversationId, 1, 20, 'stop');
+    expect(recorded).toEqual([[alice.id, sent.conversationId, 1]]);
+  });
+
+  it('stops a turn whose streamed usage passes maxTokensPerTurn, and resets for the next turn', async () => {
+    host = new BotSessionHost({
+      bots,
+      chats,
+      authority: registry,
+      runtime,
+      emit: (event) => events.push(event),
+    });
+    const alice = bot('Alice');
+    bots.update(alice.id, { maxTokensPerTurn: 1_000 }, []);
+    const chat = direct(alice.id);
+    const results: BotTurnFinished[] = [];
+    host.onTurnFinished((event) => results.push(event));
+    const sent = await host.deliver(chat.id, alice.id, 'a', { deliveryId: 'a' });
+    if (!sent.ok) throw new Error(sent.error);
+    host.observe(ev({ type: 'status', status: 'running' }, sent.conversationId));
+    usage(sent.conversationId, 1, 600, 'toolUse');
+    usage(sent.conversationId, 3, 300);
+    usage(sent.conversationId, 3, 400);
+    await flush();
+    expect(runtime.aborted).toEqual([]);
+    usage(sent.conversationId, 3, 401);
+    await flush();
+    await flush();
+    expect(runtime.aborted).toEqual([sent.conversationId]);
+    expect(results).toEqual([
+      expect.objectContaining({ deliveryId: 'a', ok: false, error: 'turn-token-limit' }),
+    ]);
+    expect(results[0]).not.toHaveProperty('stopped');
+    const next = await host.deliver(chat.id, alice.id, 'b');
+    if (!next.ok) throw new Error(next.error);
+    usage(next.conversationId, 5, 900, 'toolUse');
+    await flush();
+    expect(runtime.aborted).toHaveLength(1);
+  });
+
+  it('flags user stops but not budget stops as stopped', async () => {
+    reserving(100);
+    const { alice, one } = await twoChats();
+    const results: BotTurnFinished[] = [];
+    host.onTurnFinished((event) => results.push(event));
+    const sent = await host.deliver(one.id, alice.id, 'a');
+    if (!sent.ok) throw new Error(sent.error);
+    usage(sent.conversationId, 1, 200, 'toolUse');
+    await flush();
+    await flush();
+    expect(results.at(-1)).toMatchObject({ ok: false, error: 'budget-exceeded' });
+    expect(results.at(-1)).not.toHaveProperty('stopped');
   });
 });
 

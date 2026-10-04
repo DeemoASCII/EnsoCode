@@ -6,6 +6,8 @@ import type { UsageRecord } from './types';
 
 /** 成员超出日预算时投递 / 回合的统一错误码 */
 export const BOT_BUDGET_ERROR = 'budget-exceeded';
+/** 回合内用量超过成员单回合上限而被停止 */
+export const BOT_TURN_LIMIT_ERROR = 'turn-token-limit';
 
 export interface BotUsageTotals {
   tokens: number;

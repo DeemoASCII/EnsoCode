@@ -32,19 +32,28 @@ describe('budget form', () => {
 });
 
 describe('limits form', () => {
-  it('round-trips the delegation time limit; blank = default (null)', () => {
-    expect(limitsFormOf({})).toEqual({ delegationTimeout: '' });
-    expect(limitsFormOf({ delegationTimeoutMinutes: 30 })).toEqual({ delegationTimeout: '30' });
-    expect(limitsDraft({ delegationTimeout: ' ' })).toEqual({
+  it('round-trips the delegation time limit and per-turn cap; blank = default (null)', () => {
+    expect(limitsFormOf({})).toEqual({ delegationTimeout: '', maxTurnTokens: '' });
+    expect(limitsFormOf({ delegationTimeoutMinutes: 30, maxTokensPerTurn: 8000 })).toEqual({
+      delegationTimeout: '30',
+      maxTurnTokens: '8000',
+    });
+    expect(limitsDraft({ delegationTimeout: ' ', maxTurnTokens: '' })).toEqual({
       ok: true,
       delegationTimeoutMinutes: null,
+      maxTokensPerTurn: null,
     });
-    expect(limitsDraft({ delegationTimeout: '90' })).toEqual({
+    expect(limitsDraft({ delegationTimeout: '90', maxTurnTokens: '5000' })).toEqual({
       ok: true,
       delegationTimeoutMinutes: 90,
+      maxTokensPerTurn: 5000,
     });
     for (const delegationTimeout of ['0', '1.5', '1441', 'x'])
-      expect(limitsDraft({ delegationTimeout }).ok, delegationTimeout).toBe(false);
+      expect(limitsDraft({ delegationTimeout, maxTurnTokens: '' }).ok, delegationTimeout).toBe(
+        false
+      );
+    for (const maxTurnTokens of ['0', '1.5', '-1', 'x'])
+      expect(limitsDraft({ delegationTimeout: '', maxTurnTokens }).ok, maxTurnTokens).toBe(false);
   });
 });
 

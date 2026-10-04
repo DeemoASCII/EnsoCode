@@ -67,6 +67,8 @@ export type BotDraftInput = Partial<
   budget?: BotProfile['budget'] | null;
   /** null = 默认时限 */
   delegationTimeoutMinutes?: number | null;
+  /** null = 不限 */
+  maxTokensPerTurn?: number | null;
 };
 
 /** renderer 选工作区：chat-home 的项目由 Main 建，不收 projectId */

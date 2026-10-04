@@ -5,6 +5,7 @@ import type {
   ConversationAuthority,
   ConversationBotBinding,
   ProjectAuthority,
+  ProjectedMessage,
 } from '../../../shared/types/agent';
 import type { BotChat, BotProfile } from '../../../shared/types/bot';
 import type {
@@ -13,7 +14,11 @@ import type {
   BotSessionRecord,
   BotSilence,
 } from '../../../shared/types/botIpc';
-import { BOT_BUDGET_ERROR, type BotBudgetVerdict } from '../../../shared/usage/botUsage';
+import {
+  BOT_BUDGET_ERROR,
+  BOT_TURN_LIMIT_ERROR,
+  type BotBudgetVerdict,
+} from '../../../shared/usage/botUsage';
 import type { BotNotesSnapshot } from './botNotes';
 import { buildBotModeInstruction, buildBotSystemPrompt } from './botPrompt';
 import type { BotStore } from './botStore';
@@ -24,6 +29,8 @@ import { StartedDeliveryIndex } from './startedDeliveries';
 export const BOT_MAX_RUNNING_TURNS = 4;
 /** 运行中的轮次超过该时长没有任何输出（流式、工具进度、子代理）即视为静默 */
 export const BOT_SILENCE_MS = 90_000;
+/** 进行中的回合为成员日预算预留的估算 token：本回合已用部分抵扣，回合结束即释放 */
+export const BOT_TURN_RESERVE_TOKENS = 32_000;
 
 type ActionResult = { ok: boolean; error?: string };
 type Fail = { ok: false; error: string };
@@ -89,7 +96,14 @@ export interface BotSessionHostDeps {
   /** 轮次只收到 idle/failed 状态而迟迟没有 turn-completed/turn-failed 时的兜底结算延迟 */
   settleGraceMs?: number;
   /** 成员日预算：投递前与每条带用量的 assistant 消息结束后检查，超额拒绝 / 停止当前回合 */
-  budget?: { exceeded(botId: string): Promise<BotBudgetVerdict | null> };
+  budget?: {
+    /** 备好该成员的今日账本（首次读 jsonl，之后内存累计） */
+    prepare(botId: string): Promise<void>;
+    /** prepare 之后同步判定：今日已用 + reservedTokens 触达上限即超额 */
+    verdict(botId: string, reservedTokens: number): BotBudgetVerdict | null;
+    /** 一条 assistant 消息结束：计入今日账本 */
+    record?(botId: string, conversationId: string, index: number, message: ProjectedMessage): void;
+  };
   /** 核心笔记：成员 memory 关闭时返回 undefined */
   notes?: { snapshot(botId: string, chatId: string | null): BotNotesSnapshot | undefined };
   /** 静默看门狗阈值，缺省 BOT_SILENCE_MS */
@@ -169,6 +183,8 @@ export class BotSessionHost {
   private readonly turnKeys = new Map<string, string>();
   private disposed = false;
   private readonly budgetChecks = new Set<string>();
+  /** 本宿主发起的回合内每条 assistant 消息的用量（含流式中的），按 turnKey 隔离各回合 */
+  private readonly turnUsage = new Map<string, { turnKey: string; byIndex: Map<number, number> }>();
   /** 会话已看到的笔记版本（spawn 时进系统提示词，之后变化在投递前追加一次） */
   private readonly notesSeen = new Map<string, string>();
   private readonly deliveries = new Map<string, Map<string, 'sent' | 'started'>>();
@@ -332,24 +348,82 @@ export class BotSessionHost {
     });
   }
 
-  private async overBudget(botId: string, chatId: string | null): Promise<boolean> {
-    if (!this.deps.budget) return false;
-    const verdict = await this.deps.budget.exceeded(botId).catch((error) => {
+  private async overBudget(
+    botId: string,
+    chatId: string | null,
+    conversationId?: string
+  ): Promise<boolean> {
+    await this.prepareBudget(botId);
+    return this.budgetExceeded(botId, chatId, conversationId);
+  }
+
+  private async prepareBudget(botId: string): Promise<void> {
+    await this.deps.budget?.prepare(botId).catch((error) => {
       console.warn('[bots] budget check failed', error);
-      return null;
     });
+  }
+
+  /** 同步判定，计入该成员其他进行中回合的预留；开始回合的调用方须在同一同步段里占住 slot */
+  private budgetExceeded(botId: string, chatId: string | null, conversationId?: string): boolean {
+    if (!this.deps.budget) return false;
+    let verdict: BotBudgetVerdict | null = null;
+    try {
+      verdict = this.deps.budget.verdict(botId, this.reservedTokens(botId, conversationId));
+    } catch (error) {
+      console.warn('[bots] budget check failed', error);
+    }
     if (verdict) this.deps.emit({ kind: 'budget', ...(chatId ? { chatId } : {}) });
     return verdict !== null;
   }
 
-  /** 一条 assistant 消息结束且带用量：超额则停掉该成员这一回合 */
-  private async enforceBudget(id: string): Promise<void> {
+  /** 该成员除 exceptId 外进行中回合尚未用掉的预留（单回合上限更小时按上限） */
+  private reservedTokens(botId: string, exceptId?: string): number {
+    const hold = Math.min(
+      BOT_TURN_RESERVE_TOKENS,
+      this.deps.bots.get(botId)?.maxTokensPerTurn ?? Number.POSITIVE_INFINITY
+    );
+    let total = 0;
+    for (const id of new Set([...this.slots.keys(), ...this.running])) {
+      if (id !== exceptId && this.binding(id)?.botId === botId)
+        total += Math.max(0, hold - this.turnTokens(id));
+    }
+    return total;
+  }
+
+  private turnTokens(id: string): number {
+    const usage = this.turnUsage.get(id);
+    if (!usage || usage.turnKey !== this.turnKeys.get(id)) return 0;
+    let total = 0;
+    for (const tokens of usage.byIndex.values()) total += tokens;
+    return total;
+  }
+
+  private noteTurnUsage(id: string, index: number, tokens: number): void {
+    const turnKey = this.turnKeys.get(id);
+    if (!turnKey) return;
+    let usage = this.turnUsage.get(id);
+    if (usage?.turnKey !== turnKey) {
+      usage = { turnKey, byIndex: new Map() };
+      this.turnUsage.set(id, usage);
+    }
+    usage.byIndex.set(index, tokens);
+  }
+
+  /** 回合内用量超过成员单回合上限，或一条消息结束后日预算超额：停掉这一回合 */
+  private async enforceBudget(id: string, final: boolean): Promise<void> {
     const binding = this.binding(id);
     if (!binding || this.budgetChecks.has(id)) return;
     this.budgetChecks.add(id);
     try {
-      if (!(await this.overBudget(binding.botId, binding.chatId)) || !this.turnActive(id)) return;
-      await this.stopConversation(id, BOT_BUDGET_ERROR);
+      const cap = this.deps.bots.get(binding.botId)?.maxTokensPerTurn;
+      const reason =
+        cap !== undefined && this.turnTokens(id) > cap
+          ? BOT_TURN_LIMIT_ERROR
+          : final && (await this.overBudget(binding.botId, binding.chatId, id))
+            ? BOT_BUDGET_ERROR
+            : undefined;
+      if (!reason || !this.turnActive(id)) return;
+      await this.stopConversation(id, reason);
       if (binding.chatId) this.deps.emit({ kind: 'queue', chatId: binding.chatId });
       this.pump();
     } finally {
@@ -466,7 +540,8 @@ export class BotSessionHost {
         (this.isBusy(conversationId) || this.runningCount() >= this.maxRunning)
       )
         return { ok: false, error: 'session-busy' };
-      if (await this.overBudget(botId, binding.chatId))
+      await this.prepareBudget(botId);
+      if (this.budgetExceeded(botId, binding.chatId, conversationId))
         return { ok: false, error: BOT_BUDGET_ERROR };
       if (this.turnActive(conversationId) && !options.queueIfBusy) return this.steer(delivery);
       if (
@@ -589,13 +664,23 @@ export class BotSessionHost {
           ...(event.message.stopReason ? { stopReason: event.message.stopReason } : {}),
           ...(event.message.errorMessage ? { errorMessage: event.message.errorMessage } : {}),
         });
+        const usage = event.message.usage;
+        if (!usage) return;
+        const binding = this.binding(id);
+        const final = event.message.stopReason !== undefined;
+        if (final && binding)
+          this.deps.budget?.record?.(binding.botId, id, event.index, event.message);
+        if (!binding || !this.turnActive(id)) return;
+        this.noteTurnUsage(
+          id,
+          event.index,
+          usage.input + usage.output + usage.cacheRead + usage.cacheWrite
+        );
         if (
-          this.deps.budget &&
-          event.message.usage &&
-          event.message.stopReason &&
-          this.turnActive(id)
+          (final && this.deps.budget) ||
+          this.deps.bots.get(binding.botId)?.maxTokensPerTurn !== undefined
         )
-          void this.enforceBudget(id);
+          void this.enforceBudget(id, final);
         return;
       }
       case 'turn-completed': {
@@ -958,7 +1043,12 @@ export class BotSessionHost {
       if (next.deliveryId) this.activeDeliveries.set(next.conversationId, next.deliveryId);
       void this.withLock(next.conversationId, async () => {
         this.slots.delete(next.conversationId);
-        const started: BotDeliverResult = (await this.overBudget(next.botId, next.chatId || null))
+        await this.prepareBudget(next.botId);
+        const started: BotDeliverResult = this.budgetExceeded(
+          next.botId,
+          next.chatId || null,
+          next.conversationId
+        )
           ? { ok: false, error: BOT_BUDGET_ERROR }
           : await this.start(next);
         if (!started.ok) {
@@ -1065,7 +1155,15 @@ export class BotSessionHost {
   private cancelActive(id: string, reason = 'canceled'): void {
     this.cancelSettle(id);
     if (this.turnActive(id))
-      this.finish(id, undefined, false, reason, '', undefined, reason !== BOT_BUDGET_ERROR);
+      this.finish(
+        id,
+        undefined,
+        false,
+        reason,
+        '',
+        undefined,
+        reason !== BOT_BUDGET_ERROR && reason !== BOT_TURN_LIMIT_ERROR
+      );
     this.running.delete(id);
     this.slots.delete(id);
     this.lastAssistant.delete(id);
@@ -1074,6 +1172,7 @@ export class BotSessionHost {
 
   private clearSession(id: string): void {
     this.cancelSettle(id);
+    this.turnUsage.delete(id);
     this.running.delete(id);
     this.slots.delete(id);
     this.lastAssistant.delete(id);

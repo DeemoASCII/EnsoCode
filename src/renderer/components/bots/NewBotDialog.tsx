@@ -123,7 +123,7 @@ export function NewBotDialog({
     }
     const limits = limitsDraft(draft);
     if (!limits.ok) {
-      setError(t('Delegation time limit must be 1–1440 whole minutes'));
+      setError(t('Check the per-turn token limit and delegation time limit'));
       return;
     }
     setBusy(true);
@@ -135,6 +135,7 @@ export function NewBotDialog({
         ...(limits.delegationTimeoutMinutes
           ? { delegationTimeoutMinutes: limits.delegationTimeoutMinutes }
           : {}),
+        ...(limits.maxTokensPerTurn ? { maxTokensPerTurn: limits.maxTokensPerTurn } : {}),
         persona: draft.persona,
         avatar: { color: draft.color },
         engine: draft.engine,

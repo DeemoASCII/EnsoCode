@@ -81,6 +81,15 @@ describe('parseBotDraftInput', () => {
       expect(parseBotDraftInput({ delegationTimeoutMinutes: bad })).toBeNull();
   });
 
+  it('单回合 token 上限：正整数，null = 不限，脏值拒绝', () => {
+    expect(parseBotDraftInput({ maxTokensPerTurn: 20_000 })).toEqual({ maxTokensPerTurn: 20_000 });
+    expect(parseBotDraftInput({ maxTokensPerTurn: null })).toEqual({
+      maxTokensPerTurn: undefined,
+    });
+    for (const bad of [0, -3, 2.5, '100', {}])
+      expect(parseBotDraftInput({ maxTokensPerTurn: bad })).toBeNull();
+  });
+
   it('更新请求带 botId 与可选 expectedVersion', () => {
     expect(parseBotUpdateInput({ botId: A, expectedVersion: 2, draft: { title: 't' } })).toEqual({
       botId: A,

@@ -42,7 +42,9 @@ export function failureText(record: Delegation, t: TFunction): string | undefine
     default:
       return record.error === 'budget-exceeded'
         ? t("The member's daily budget is used up.")
-        : record.error;
+        : record.error === 'turn-token-limit'
+          ? t("Stopped: the member's per-turn token limit was exceeded.")
+          : record.error;
   }
 }
 

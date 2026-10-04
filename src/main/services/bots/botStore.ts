@@ -21,6 +21,7 @@ export type BotDraft = Partial<
     | 'memory'
     | 'budget'
     | 'delegationTimeoutMinutes'
+    | 'maxTokensPerTurn'
   >
 > & { persona?: string };
 

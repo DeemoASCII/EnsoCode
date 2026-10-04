@@ -137,6 +137,23 @@ it('a turn stopped by the budget writes the same note and relays onwards', async
   expect(entries().at(-1)).toMatchObject({ kind: 'system', text: 'Bob 今日预算已用完' });
   expect(deliver.mock.calls.map((call) => call[1])).toEqual([b, a]);
 });
+it('a turn stopped by the per-turn token cap says so and relays onwards', async () => {
+  await group.send(id, '@Bob @Alice hello');
+  finish({
+    chatId: id,
+    botId: b,
+    conversationId: b,
+    text: '',
+    ok: false,
+    error: 'turn-token-limit',
+  });
+  await group.settled(id);
+  expect(entries().at(-1)).toMatchObject({
+    kind: 'system',
+    text: 'Bob 本回合用量超过单回合上限，已停止',
+  });
+  expect(deliver.mock.calls.map((call) => call[1])).toEqual([b, a]);
+});
 it('a routine run over budget resolves with the budget error and notes it', async () => {
   deliver.mockResolvedValueOnce({ ok: false, error: 'budget-exceeded' });
   expect(await group.runAs(id, b, 'routine', 'check')).toEqual({

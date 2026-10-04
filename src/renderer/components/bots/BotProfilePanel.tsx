@@ -69,6 +69,7 @@ function draftOf(form: FormState): BotDraftInput | null {
     memory: { enabled: form.memoryEnabled },
     budget: budget.budget,
     delegationTimeoutMinutes: limits.delegationTimeoutMinutes,
+    maxTokensPerTurn: limits.maxTokensPerTurn,
   };
 }
 
@@ -164,7 +165,7 @@ export function BotProfilePanel({ botId, chat, onOpenHistory }: BotProfilePanelP
         type: 'error',
         title: limitsDraft(form).ok
           ? t('Budget must be a positive number')
-          : t('Delegation time limit must be 1–1440 whole minutes'),
+          : t('Check the per-turn token limit and delegation time limit'),
       });
       return;
     }

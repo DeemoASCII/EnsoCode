@@ -32,7 +32,7 @@ import type {
   BotEvent,
   BotSendResult,
 } from '../../../shared/types/botIpc';
-import { BOT_BUDGET_ERROR } from '../../../shared/usage/botUsage';
+import { BOT_BUDGET_ERROR, BOT_TURN_LIMIT_ERROR } from '../../../shared/usage/botUsage';
 import type {
   BotDeliverOptions,
   BotDeliverResult,
@@ -322,7 +322,9 @@ export class GroupChatService {
         chat.id,
         event.error === BOT_BUDGET_ERROR
           ? budgetNotice(name)
-          : `${name} 回复失败：${event.error ?? '未知错误'}`
+          : event.error === BOT_TURN_LIMIT_ERROR
+            ? `${name} 本回合用量超过单回合上限，已停止`
+            : `${name} 回复失败：${event.error ?? '未知错误'}`
       );
     } else if (!isSkipReply(event.text) && event.turnId) {
       const smart = round.smartPicked?.includes(event.botId) ?? false;
