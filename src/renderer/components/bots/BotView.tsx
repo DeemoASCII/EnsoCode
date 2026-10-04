@@ -1,4 +1,4 @@
-import { Bot, Inbox, PanelLeft, Settings, UserPlus, Users } from 'lucide-react';
+import { Bot, Inbox, LayoutTemplate, PanelLeft, Settings, UserPlus, Users } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { ResizeHandle } from '@/components/chat/ResizeHandle';
 import { Button } from '@/components/ui/button';
@@ -11,6 +11,7 @@ import { BotSearchButton, BotSearchDialog } from './BotSearchDialog';
 import { BotSidebar, CountBadge } from './BotSidebar';
 import { NewBotDialog } from './NewBotDialog';
 import { NewGroupDialog } from './NewGroupDialog';
+import { NewTeamDialog } from './NewTeamDialog';
 
 const RAIL_BUTTON =
   'relative flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground';
@@ -32,6 +33,7 @@ export function BotView({ sidebarWidth, collapsed, onToggleCollapse, onResize }:
   const setView = useBotsStore((s) => s.setView);
   const [newMember, setNewMember] = useState(false);
   const [newGroup, setNewGroup] = useState(false);
+  const [newTeam, setNewTeam] = useState(false);
   const inboxCount = useBotPendingCount();
 
   const chat = view?.kind === 'chat' ? chats.find((item) => item.id === view.chatId) : undefined;
@@ -61,6 +63,14 @@ export function BotView({ sidebarWidth, collapsed, onToggleCollapse, onResize }:
             title={t('New group chat')}
           >
             <Users className="h-4 w-4" />
+          </button>
+          <button
+            type="button"
+            className={RAIL_BUTTON}
+            onClick={() => setNewTeam(true)}
+            title={t('Create team from template')}
+          >
+            <LayoutTemplate className="h-4 w-4" />
           </button>
           {(inboxCount > 0 || view?.kind === 'inbox') && (
             <button
@@ -100,6 +110,7 @@ export function BotView({ sidebarWidth, collapsed, onToggleCollapse, onResize }:
             onCollapse={onToggleCollapse}
             onNewMember={() => setNewMember(true)}
             onNewGroup={() => setNewGroup(true)}
+            onNewTeam={() => setNewTeam(true)}
           />
           <ResizeHandle onResize={onResize} />
         </>
@@ -131,6 +142,10 @@ export function BotView({ sidebarWidth, collapsed, onToggleCollapse, onResize }:
                 {t('New group chat')}
               </Button>
             )}
+            <Button size="sm" variant="outline" onClick={() => setNewTeam(true)}>
+              <LayoutTemplate />
+              {t('Create team from template')}
+            </Button>
           </div>
         </div>
       )}
@@ -138,6 +153,7 @@ export function BotView({ sidebarWidth, collapsed, onToggleCollapse, onResize }:
       <NewBotDialog open={newMember} onOpenChange={setNewMember} />
       <NewGroupDialog open={newGroup} onOpenChange={setNewGroup} />
       <BotSearchDialog />
+      <NewTeamDialog open={newTeam} onOpenChange={setNewTeam} />
     </>
   );
 }

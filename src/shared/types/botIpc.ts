@@ -1,5 +1,6 @@
 import type { AbilitySuggestion } from '../bots/abilitySuggest';
 import type { PersonaSuggestion } from '../bots/personaSuggest';
+import type { TeamFileError, TeamRename, TeamSpec } from '../bots/team';
 import type { AttachedImage, ConversationAuthority } from './agent';
 import type { BotChat, BotProfile, BotRoutine, Delegation, GroupEntry, GroupTask } from './bot';
 
@@ -243,3 +244,16 @@ export type BotArtifactReadResult =
 
 /** reveal：在访达中显示；open：默认应用打开（可执行文件拒绝）；preview：PDF 独立预览窗口 */
 export type BotArtifactOpenAction = 'reveal' | 'open' | 'preview';
+
+/** 团队预览：模板传 team，导入传文件原文 text；Main 严格校验并按现有成员/保留名自动改名 */
+export type BotTeamPreviewRequest = { team: TeamSpec } | { text: string };
+export type BotTeamPreviewResult =
+  | { ok: true; team: TeamSpec; renamed: TeamRename[] }
+  | (BotIpcError & { error: TeamFileError | 'disabled' | 'unavailable' });
+
+export interface BotTeamCreateRequest {
+  team: TeamSpec;
+  workspace: { kind: 'chat-home' } | { kind: 'project'; projectId: string };
+}
+/** 成员与群一次性创建，任一步失败全部回滚 */
+export type BotTeamCreateResult = { ok: true; chat: BotChat; bots: BotProfile[] } | BotIpcError;

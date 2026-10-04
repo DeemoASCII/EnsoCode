@@ -1,6 +1,7 @@
+import { buildTeamFile } from '@shared/bots/team';
 import type { BotChat, BotProfile, BotRoutingMode } from '@shared/types/bot';
 import type { BotChatUpdateInput } from '@shared/types/botIpc';
-import { Crown, MoreHorizontal, Plus, UserMinus } from 'lucide-react';
+import { Crown, Download, MoreHorizontal, Plus, UserMinus } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -44,6 +45,26 @@ export function KeyValue({ label, value }: { label: string; value: React.ReactNo
       <span className="min-w-0 truncate text-right">{value}</span>
     </div>
   );
+}
+
+/** 导出团队文件：人设逐个从 Main 取，其余剥离由 buildTeamFile 完成 */
+async function exportTeam(chat: BotChat, bots: readonly BotProfile[]): Promise<boolean> {
+  const personas: Record<string, string> = {};
+  for (const botId of chat.members) {
+    const result = await window.electronAPI.bots.get(botId);
+    if (!result.ok) return false;
+    personas[botId] = result.persona;
+  }
+  const file = buildTeamFile(chat, bots, personas, new Date().toISOString());
+  const url = URL.createObjectURL(
+    new Blob([JSON.stringify(file, null, 2)], { type: 'application/json' })
+  );
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = `${chat.title || 'team'}.team.json`;
+  link.click();
+  URL.revokeObjectURL(url);
+  return true;
 }
 
 export function GroupInfoPanel({
@@ -312,6 +333,26 @@ export function GroupInfoPanel({
 
           <PanelSection title={t('Group memory')}>
             <MemorySpaceList spaceId={`chat:${chat.id}`} emptyText={t('No group memories yet')} />
+          </PanelSection>
+
+          <PanelSection title={t('Team')}>
+            <Button
+              size="xs"
+              variant="outline"
+              onClick={() =>
+                void exportTeam(chat, bots).then(
+                  (ok) => ok || addToast({ type: 'error', title: t('Export failed') })
+                )
+              }
+            >
+              <Download />
+              {t('Export team')}
+            </Button>
+            <p className="mt-1.5 text-muted-foreground text-xs">
+              {t(
+                'Group settings and member personas only. Memory, sessions, timeline, tasks, routines, models, skills and MCP are not included.'
+              )}
+            </p>
           </PanelSection>
         </TabsPanel>
       </div>

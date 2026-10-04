@@ -303,6 +303,18 @@ Main 在 `spawnSession` 里根据 `ConversationAuthority.bot` 组装提示词，
 - **各入口表现**：群聊写 system「X 今日预算已用完」并跳过该成员继续队列（投递被拒与回合被停都一样；例行任务在群里同样写这条）；例行任务 `lastResult = 'budget'`；委派以 `failed / error` 结束，`error = 'budget-exceeded'`，卡片显示预算用完。拒绝或停止时推 `BOT_EVENT {kind:'budget'}`（不转发到手机），renderer 刷新概览，收件箱按「成员 + 自然日」出现一条可忽略的预算提示（忽略记录在 localStorage）。
 - **不做**：成员会话里 subagent 子代理的用量（pi child jsonl 不带父会话标识，无法可靠归属）；私聊没有时间线，不写 system 条目，只有发送提示与收件箱；预算只看今日，不做周 / 月上限。
 
+### 团队模板与导入导出
+
+团队 = 群配置 + 成员档案与人设，统一用 `TeamSpec`（`shared/bots/team.ts`）描述，成员之间的委派关系用团队内 `key` 引用，不含任何本机 id。
+
+- **内置模板**（`renderer/stores/bots/teamTemplates.ts`）：软件开发小队（项目经理 / 前端 / 后端 / 测试审查，默认绑 Code 项目）、内容创作组（主编 / 写手 / 文字编辑 / 排版配图）、调研小组（组长 / 资料搜集 / 分析 / 报告撰写），后两者默认群独立目录。中英双语按界面语言取；群主只读工具、只派不写，其余成员职责互斥；委派是「群主 → 执行者 → 审查者」的单向链，群主不接受委派。人设只按角色称呼队友（名字可能被改）。统一 smart 路由（接力上限 6、每人 2 次）、开启记忆、`auto-edits`；不带模型（跟随默认模型）、技能、MCP。
+- **入口与预览**：侧栏 / 窄栏 / 空态「从模板创建团队」→ 选模板或导入 JSON → `BOT_TEAM_PREVIEW`（模板传 `team`，导入传文件原文 `text`，Main 严格校验并按现有成员 + 保留名预先改名）→ 同一预览：改群名、取消勾选成员（群主不可取消，至少 2 人，委派引用随之剪掉）、改成员名（本地即时校验重名）、选工作区（群独立目录 / 绑定本机 Code 项目；导入文件只记录工作区类型）。被自动改名的成员显示「X 已被占用，已改名为 X2」。
+- **原子创建**：`BOT_TEAM_CREATE(team, workspace)` 在 Main 里重新校验并再跑一次改名，按序创建成员（key → 预分配 UUID，委派引用换成 id）→ 解析工作区 → 建群（群主 = bossKey）。任一步失败：删除已建成员、撤销新建的群独立目录与 bot-home 项目，返回错误；成功后推 `catalog` + `chat` 事件。
+- **重名**：与现有成员（含归档）或保留名（内置 agent 类型、非 bot 来源的 agent 类型）冲突时追加 2、3…，按名称上限截断原名；团队内部也互相避让。
+- **导出**：群信息面板「导出团队」。renderer 逐个 `bots.get` 取人设后用 `buildTeamFile` 生成 `{format:'enso-bot-team', version:1, exportedAt, team}`，浏览器下载为 `<群名>.team.json`。只保留群名、群主、工作区类型、路由、成员名 / 头衔 / 职责 / 人设 / 头像颜色 / 工具档 / 审批档 / 委派（群外成员的引用丢弃）/ 记忆开关；剥离记忆内容、会话、时间线、看板、例行任务、预算、模型与 provider、技能与 MCP id、项目 id 与路径。
+- **导入校验**：文件 ≤ 256k 字符；`format` / `version` 不符分别报「不是团队文件」/「版本不受支持」；任何层级的未知字段、越界值、非法枚举、非法名字、重复 key、悬空引用、群主不在成员中、成员 < 2 或 > 12 都整体拒绝，不做部分导入。
+- **不做**：导出不经 Main 文件对话框（与人物卡导出一致走浏览器下载）；不跨版本迁移；模板不预设技能 / MCP / 模型。
+
 ## UI
 
 - **模式切换**：侧栏顶部 NodeSwitcher 旁边放 `Code | Bot` 分段控件，存到 `localStorage['enso-mode']`。只在本机生效：切到远程节点时隐藏切换并回到 Code 视图。快捷键、标题栏按钮、SidePanel 照远程节点的做法按模式屏蔽。
@@ -331,6 +343,7 @@ Main 在 `spawnSession` 里根据 `ConversationAuthority.bot` 组装提示词，
 - `BOT_TASKS_LIST(chatId) / BOT_TASK_SAVE(chatId, id?, title, detail?) / BOT_TASK_ASSIGN(chatId, id, botId) / BOT_TASK_COMPLETE(chatId, id, result?) / BOT_TASK_CANCEL(chatId, id) / BOT_TASK_DELETE(chatId, id)`：群任务看板，只接受 group 聊天
 - `BOT_SUGGEST_ABILITIES(name, title, scope, persona, language, botId?)`：「自动设置能力」。候选技能 / MCP / 成员由 Main 从设置与成员库取；模型链为设置里的「Bot 助理模型」→ 默认模型（不走标题模型），20s 超时；回复严格解析（未知 id 丢弃、枚举校验，没有其他成员时不给委派建议），只返回建议，renderer 逐项确认后写入表单，仍需保存 / 创建。
 - `BOT_SUGGEST_PERSONA(name, title, scope?, persona?, language)`：「AI 生成人设」。名称和头衔必填；模型链同上（Bot 助理模型 → 默认模型），30s 超时；输出第二人称人设，职责为空时顺带给出一句职责，已有人设则在其基础上改进。结果直接填进表单，toast 可撤销，仍需保存 / 创建。
+- `BOT_TEAM_PREVIEW({team} | {text}) / BOT_TEAM_CREATE(team, workspace)`：团队模板与导入的校验预览、原子创建（见「团队模板与导入导出」）。
 - 推送 `BOT_EVENT`：`{kind:'catalog'|'chat'|'timeline'|'delegation'|'routine'|'tasks', chatId?, seq}`，按 chatId 去重，过期 seq 丢弃；`tasks` 不转发到手机。
 
 所有入参都按 `unknown` 收窄。

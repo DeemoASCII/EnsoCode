@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { mkdirSync, rmSync } from 'node:fs';
 import path from 'node:path';
 import { BOT_NOTES_MAX_CHARS } from '@shared/bots/notes';
+import { assignTeamNames } from '@shared/bots/team';
 import type { SessionIdentity } from '@shared/builtinAgents';
 import { BUILTIN_AGENT_TYPES, IPC_CHANNELS } from '@shared/types';
 import type { AttachedImage } from '@shared/types/agent';
@@ -25,6 +26,8 @@ import type {
   BotPersonaSuggestResult,
   BotSendResult,
   BotsListResult,
+  BotTeamCreateResult,
+  BotTeamPreviewResult,
   BotTimelineResult,
   BotWriteIpcResult,
 } from '@shared/types/botIpc';
@@ -74,6 +77,7 @@ import { RoutineRunner } from '../services/bots/routineRunner';
 import { RoutineScheduler } from '../services/bots/routineScheduler';
 import { BotRoutineStore } from '../services/bots/routineStore';
 import { createSmartRouter } from '../services/bots/smartRouter';
+import { createTeam } from '../services/bots/teamCreate';
 import { resolveGlobalInstruction } from '../services/instructionStore';
 import { listMemories } from '../services/memory/store';
 import { readStoredOauthCredentialKeys } from '../services/oauthProviders';
@@ -104,6 +108,7 @@ import {
   parseSessionHistoryInput,
   parseTimelineInput,
 } from './botsInput';
+import { parseTeamCreateInput, parseTeamPreviewInput } from './botsTeamInput';
 import { agentSessionIndex } from './capabilities';
 
 interface BotServices {
@@ -903,6 +908,41 @@ export function registerBotHandlers(): void {
     emitBotEvent(notesEvent(input.target));
     return { ok: true, notes: { ...saved.notes, maxChars: BOT_NOTES_MAX_CHARS } };
   });
+
+  handle(
+    IPC_CHANNELS.BOT_TEAM_PREVIEW,
+    'read',
+    (_sender, request, { bots }): BotTeamPreviewResult => {
+      const parsed = parseTeamPreviewInput(request);
+      if (!parsed.ok) return parsed;
+      return { ok: true, ...assignTeamNames(parsed.team, bots.list(), reservedNames()) };
+    }
+  );
+
+  handle(
+    IPC_CHANNELS.BOT_TEAM_CREATE,
+    'write',
+    (_sender, request, services): BotTeamCreateResult => {
+      const input = parseTeamCreateInput(request);
+      if (!input) return INVALID;
+      const result = createTeam(services, input.team, {
+        reserved: reservedNames(),
+        resolveWorkspace: (chatId) => resolveWorkspaceInput(services, chatId, input.workspace),
+        releaseWorkspace: (chatId, workspace) => {
+          if (workspace.kind !== 'chat-home') return;
+          getSourceAuthorityRegistry()?.removeBotHomeProject(workspace.projectId);
+          rmSync(path.dirname(services.chats.workspaceDir(chatId)), {
+            recursive: true,
+            force: true,
+          });
+        },
+      });
+      if (!result.ok) return result;
+      emitBotEvent({ kind: 'catalog' });
+      emitBotEvent({ kind: 'chat', chatId: result.chat.id });
+      return result;
+    }
+  );
 
   handle(IPC_CHANNELS.BOT_UPDATE, 'write', (_sender, request, { bots }): BotWriteIpcResult => {
     const parsed = parseBotUpdateInput(request);

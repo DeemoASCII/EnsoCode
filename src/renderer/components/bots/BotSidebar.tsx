@@ -3,6 +3,7 @@ import {
   Archive,
   ArchiveRestore,
   Inbox,
+  LayoutTemplate,
   PanelLeftClose,
   Pin,
   PinOff,
@@ -42,9 +43,16 @@ interface BotSidebarProps {
   onCollapse: () => void;
   onNewMember: () => void;
   onNewGroup: () => void;
+  onNewTeam: () => void;
 }
 
-export function BotSidebar({ width, onCollapse, onNewMember, onNewGroup }: BotSidebarProps) {
+export function BotSidebar({
+  width,
+  onCollapse,
+  onNewMember,
+  onNewGroup,
+  onNewTeam,
+}: BotSidebarProps) {
   const { t, locale } = useI18n();
   const bots = useBotsStore((s) => s.bots);
   const chats = useBotsStore((s) => s.chats);
@@ -252,6 +260,14 @@ export function BotSidebar({ width, onCollapse, onNewMember, onNewGroup }: BotSi
             title={t('New group chat')}
           >
             <Users className="h-4 w-4" />
+          </button>
+          <button
+            type="button"
+            className={ICON_BUTTON_CLASS}
+            onClick={onNewTeam}
+            title={t('Create team from template')}
+          >
+            <LayoutTemplate className="h-4 w-4" />
           </button>
           {(inboxCount > 0 || view?.kind === 'inbox') && (
             <button

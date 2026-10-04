@@ -2383,6 +2383,26 @@ export const zhTranslations: Record<string, string> = {
   'No delegations in this group yet': '本群还没有委派',
   'Failed · interrupted · canceled': '失败 · 中断 · 取消',
   'Choose a member.': '请选择成员。',
+  'Create team from template': '从模板创建团队',
+  'Creates the members and their group chat in one go. Members follow the default model; skills and MCP are not preset.':
+    '一次性创建成员和群聊。成员跟随默认模型，不预设技能和 MCP。',
+  'Import team (JSON)': '导入团队（JSON）',
+  'This team file is too large.': '团队文件过大。',
+  'This team file comes from an unsupported version.': '团队文件版本不受支持。',
+  'This file is not a valid EnsoCode team file.': '该文件不是有效的 EnsoCode 团队文件。',
+  'Uncheck members you do not need; the owner stays': '可取消不需要的成员，群主保留',
+  'Delegates to {{names}}': '可委派给 {{names}}',
+  '"{{from}}" is taken, renamed to "{{to}}"': '「{{from}}」已被占用，已改名为「{{to}}」',
+  'Keep the owner and at least one other member.': '至少保留群主和另一名成员。',
+  'Without @, the best-fit member replies; @ relay limit {{n}}.':
+    '不 @ 时由最合适的成员回复；@ 接力上限 {{n}} 次。',
+  'Without @, the owner replies; @ relay limit {{n}}.': '不 @ 时由群主回复；@ 接力上限 {{n}} 次。',
+  'Create team': '创建团队',
+  Team: '团队',
+  'Export team': '导出团队',
+  'Export failed': '导出失败',
+  'Group settings and member personas only. Memory, sessions, timeline, tasks, routines, models, skills and MCP are not included.':
+    '只含群配置和成员人设，不含记忆、会话、时间线、看板、例行任务、模型、技能和 MCP。',
 };
 
 export function normalizeLocale(input?: string): Locale {
