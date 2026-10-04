@@ -2119,7 +2119,6 @@ export const zhTranslations: Record<string, string> = {
     '{{name}}正在工作，新消息会插入当前这一轮',
   'Message not sent': '消息未发送',
   '{{n}} members · Owner {{name}}': '{{n}} 名成员 · 群主 {{name}}',
-  'Relay limit {{n}}': '接力上限 {{n}}',
   'Group info': '群信息',
   'Member profile': '成员资料',
   'Message {{name}}…': '给 {{name}} 发消息…',

@@ -267,11 +267,6 @@ export function BotChatView({ chat }: { chat: BotChat }) {
           </div>
           <div className="flex-1" />
           <WorkspaceMenu chat={chat} />
-          {chat.kind === 'group' && (
-            <span className="hidden h-7 items-center rounded-md border px-2 text-muted-foreground text-xs md:flex">
-              {t('Relay limit {{n}}', { n: chat.routing.maxHops })}
-            </span>
-          )}
           {direct && (
             <button
               type="button"
