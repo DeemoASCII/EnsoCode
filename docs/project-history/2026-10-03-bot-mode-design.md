@@ -635,3 +635,22 @@ Main 在 `spawnSession` 里根据 `ConversationAuthority.bot` 组装提示词，
 **测试**：判定纯函数（起点、按 toolCallId 取最终、错误覆盖 PASS、协作工具与正文不算）、解析与归一化、工具参数归一化与 schema、委派通过 / 未通过 / 读失败 / 起点前输出 / 继承任务 check / 回合失败不校验 / 重试沿用、看板 complete 拒绝与通过、创建者才能改 check、人类直接完成与清除、指派记认领时间、委派联动状态机、gate 带出 check、`BOT_TASK_SAVE` 入参收窄。
 
 **真机**（隔离 userData，Max claude-sonnet-4-6 + hei qwen3.8-max-0902）：Claude 成员委派 qwen 成员运行 `echo XYZ_PASS`、check=XYZ_PASS → completed、通过；qwen 成员委派 Claude 成员运行 `echo HELLO_ONLY`、check=NEVER_SEEN_42 → failed/check，父会话收到 `status="failed"` 且正文以「验收未通过：未在工具输出中看到「NEVER_SEEN_42」」开头，qwen 如实转述。看板：人类建任务 #1（check=BOARD_OK_7）指派 qwen，qwen 先直接 complete 被拒（list 输出里虽有 BOARD_OK_7 但不算证据），跑 `echo BOARD_OK_7` 后 complete 通过；任务 #2（check=FAIL_MARK_9）由 Claude 带 taskId 委派 qwen 跑 `echo OTHER_TEXT`，委派继承 check 并以验收未通过结束，#2 退回待办、result 记原因、卡片显示「未通过」。
+
+## 工作区写锁、插话补充与排队优先级（2026-10 补充）
+
+都在 `BotSessionHost` 的投递 / 出队路径上，并发上限与预算检查不变。
+
+**工作区写锁**：同一工作区真实路径上，`tools = 'all'` 的成员会话同一时间只有一个在跑轮。键由 Main 从会话权威记录推导（`conversation.projectId → project.canonicalPath` 再 `realpath`，按会话缓存），不收 renderer 路径；写权限看会话实际生效的档案（委派会话为收紧后的档案）。不另存锁表：持锁者就是「有活轮（slot / running）的写会话」，轮次进入终态（完成、失败、停止、中断兜底、会话退休、worker 退出）锁自然释放，进程重启全部清空。
+- 投递时工作区被别的写会话占着：进队列等待（`queued`），委派与例行任务照常排队不算失败，委派时限照常计时；`onlyIfIdle`（委派结果回传）按 `session-busy` 拒绝、下一次回合结束再投；私聊重试同样按忙拒绝。出队时跳过仍被占的等待者，锁释放后只放行队首一个（它一占位，后面同目录的继续等）。
+- 不受锁影响：只读成员（不占也不等）、同一会话自身的多次投递、steer 进当前活轮。
+- 群聊（或发起委派的群）里第一次因工作区等待时写一条 system「等待 X 释放工作目录」，同一条投递只写一次。
+- **委派不死锁**：委派会话在父工作区干活，父轮可能在委派后继续跑（甚至轮询 `check_delegation`）。`registerDelegation` 记下来源（父会话、群），同一条委派链上的祖先 / 后代共用锁：子委派借用祖先持有的锁照常开跑，父会话之后的新轮也不被自己的子委派挡住；兄弟委派之间、与链外会话之间仍互斥。重启后委派全部中断，重新登记的委派父会话是只读，不涉及锁。
+- 顺带：出队时 slot 占位保留到预算账本备好之后才让出，避免 await 期间别的投递抢走并发位与写锁。
+
+**插话补充说明**（`shared/bots/interject.ts`）：来源为 human 的投递 steer 进运行中的轮次时，正文前加「这是同一件事的补充，保留原目标，把它并进这一轮的结果；不要单独回一句『收到』。只有明确说换掉或取消才改目标。\n补充内容：\n」（界面语言非中文用英文版，Main 读 `settings.language`）；笔记更新块仍在最前。群接力、委派任务与结果、例行任务原样 steer。`stripBotNotesUpdate` 顺带剥掉这段说明，气泡、草稿回填、聊天引用摘录都不显示。会话收到 `turn-retry`（自动重试倒计时）后到下一个 status / 回合终态之前，插话不 steer（worker 的 steer 会打断重试改起新轮），改排到下一轮作为新 prompt。
+
+**排队优先级**（`shared/bots/lane.ts`）：`BotDeliverOptions.source`：`human`（私聊 / 群里人发、看板直接指派）> `bot`（群接力、委派任务、委派结果回传，缺省值）> `background`（例行任务），入队时按来源插到同级末尾，同级先来先出；`queueState` 的位置即出队顺序。群首个投递沿用触发来源，之后的接力一律记 `bot`。
+
+**测试**：`botSessionHost.lock.test`（同目录只放行一个、唤醒一个、只读 / 不同目录 / 同会话 steer 不受阻、worker 退出清锁、`onlyIfIdle` 按忙、群提示只写一次、父轮仍在跑时子 / 孙委派开跑、兄弟委派互斥且父新轮等子写完、重试按忙），`botSessionHost.delivery.test`（人类插话包装与非人类原样、英文与笔记块顺序、重试倒计时插话排下一轮、重试恢复后 steer、出队优先级），`interject` / `lane` / `notes` 纯函数；委派相关旧用例改为符合写锁的顺序（`groupDelegation` 全员只读，只验证接力与回传）。
+
+**真机**（隔离 userData，Max claude-sonnet-4-6 + hei qwen3.8-max-0902，同一 Code 项目工作区）：阿克私聊跑 `sleep 20` 写日志时，阿Q 私聊投递返回 `queued`，群里 @阿Q 也排队并出现一条「等待 阿克 释放工作目录」；日志顺序为 K start/end → Q start/end → G，全程只一条提示。阿克委派阿Q 后在本轮里 `sleep 5` + `check_delegation` 轮询，子委派在父轮仍在跑时即开跑完成，父轮第一次查询即拿到 completed；反过来阿Q（qwen，用 codemode 轮询）委派阿克同样即时开跑。两人各自 `sleep 15` 写诗时插话「诗里要提到月亮」：jsonl 里该条 user 消息带补充说明前缀，两位都在同一轮结果里写进月亮、没有单独回「收到」；私聊气泡只显示原话。未在真机验证：自动重试倒计时（需要上游瞬态错误）与出队优先级（需要占满并发），由单测覆盖。
