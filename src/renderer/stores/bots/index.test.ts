@@ -3,7 +3,7 @@ import type { BotChat, GroupEntry } from '@shared/types/bot';
 import type { BotEvent } from '@shared/types/botIpc';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { chatSummary } from './selectors';
-import { isUnread } from './unread';
+import { groupReadMark, isUnread } from './unread';
 
 const message = (text: string): ProjectedMessage => ({
   role: 'assistant',
@@ -200,6 +200,115 @@ describe('Bot mode subscription lifecycle', () => {
     f.bot({ kind: 'timeline', chatId: 'g', seq: 5 });
     await new Promise((resolve) => setTimeout(resolve, 80));
     expect(f.timeline).toHaveBeenCalledTimes(1);
+    f.off();
+  });
+});
+
+describe('群时间线历史窗口', () => {
+  const entry = (seq: number): GroupEntry => ({
+    seq,
+    id: `e${seq}`,
+    at: seq,
+    kind: 'system',
+    text: String(seq),
+  });
+  const range = (from: number, to: number) =>
+    Array.from({ length: to - from + 1 }, (_, i) => entry(from + i));
+  const latest = { entries: range(19951, 20000), lastSeq: 20000, hasOlder: true, loading: false };
+  const windowed = {
+    entries: range(83, 163),
+    lastSeq: 20000,
+    hasOlder: true,
+    loading: false,
+    history: { sinceSeq: 20000, tail: entry(20000) },
+  };
+  const group: BotChat = { ...chat, id: 'g', kind: 'group', sessions: {} };
+  const seqs = (f: Awaited<ReturnType<typeof fixture>>) =>
+    f.store.getState().timelines.g.entries.map((item) => item.seq);
+
+  it('跳到很早的 seq：一次加载目标前后一段并替换，进入历史窗口', async () => {
+    const f = await fixture();
+    f.store.setState({ timelines: { g: latest } });
+    f.timeline.mockClear();
+    f.timeline.mockResolvedValue({ ok: true, entries: range(83, 163), lastSeq: 20000 });
+    await f.store.getState().loadAround('g', 123);
+    expect(f.timeline).toHaveBeenCalledTimes(1);
+    expect(f.timeline).toHaveBeenCalledWith({ chatId: 'g', beforeSeq: 164, limit: 81 });
+    const g = f.store.getState().timelines.g;
+    expect(seqs(f)).toEqual(range(83, 163).map((item) => item.seq));
+    expect(g.hasOlder).toBe(true);
+    expect(g.history).toEqual({ sinceSeq: 20000, tail: entry(20000) });
+    f.off();
+  });
+
+  it('目标附近一段已到最新时不进入历史窗口', async () => {
+    const f = await fixture();
+    f.store.setState({ timelines: { g: latest } });
+    f.timeline.mockResolvedValue({ ok: true, entries: range(19920, 20000), lastSeq: 20000 });
+    await f.store.getState().loadAround('g', 19990);
+    expect(f.store.getState().timelines.g.history).toBeUndefined();
+    f.off();
+  });
+
+  it('历史窗口里实时新消息不并入列表，只更新最新一条；已读不越过已加载末尾', async () => {
+    const f = await fixture();
+    f.store.setState({ timelines: { g: windowed } });
+    f.timeline.mockClear();
+    f.timeline.mockResolvedValue({ ok: true, entries: [entry(20001)], lastSeq: 20001 });
+    f.bot({ kind: 'timeline', chatId: 'g', seq: 20001 });
+    await vi.waitFor(() => expect(f.store.getState().timelines.g.lastSeq).toBe(20001));
+    expect(f.timeline).toHaveBeenCalledWith({ chatId: 'g', limit: 1 });
+    const g = f.store.getState().timelines.g;
+    expect(g.entries).toBe(windowed.entries);
+    expect(g.history).toEqual({ sinceSeq: 20000, tail: entry(20001) });
+    const summary = chatSummary(group, { sessions: {}, timeline: g, queue: [], names: {} });
+    expect(summary.preview).toBe('20001');
+    expect(isUnread(summary.marker, groupReadMark(g, 19000))).toBe(true);
+    f.off();
+  });
+
+  it('向下翻页按 beforeSeq 取更新一页，追上最新后退出历史窗口并恢复实时追加', async () => {
+    const f = await fixture();
+    f.store.setState({ timelines: { g: { ...windowed, entries: range(19900, 19960) } } });
+    f.timeline.mockClear();
+    f.timeline.mockResolvedValue({ ok: true, entries: range(19951, 20000), lastSeq: 20000 });
+    await f.store.getState().loadNewer('g');
+    expect(f.timeline).toHaveBeenCalledWith({ chatId: 'g', beforeSeq: 20011, limit: 50 });
+    expect(seqs(f)).toEqual(range(19900, 20000).map((item) => item.seq));
+    expect(f.store.getState().timelines.g.history).toBeUndefined();
+    f.timeline.mockResolvedValue({ ok: true, entries: [entry(20001)], lastSeq: 20001 });
+    f.bot({ kind: 'timeline', chatId: 'g', seq: 20001 });
+    await vi.waitFor(() => expect(seqs(f).at(-1)).toBe(20001));
+    f.off();
+  });
+
+  it('已加载超过上限时从远离视口的一端裁掉', async () => {
+    const f = await fixture();
+    f.store.setState({ timelines: { g: { ...windowed, entries: range(1, 400) } } });
+    f.timeline.mockResolvedValue({ ok: true, entries: range(401, 450), lastSeq: 20000 });
+    await f.store.getState().loadNewer('g');
+    expect(seqs(f)).toEqual(range(51, 450).map((item) => item.seq));
+    expect(f.store.getState().timelines.g.hasOlder).toBe(true);
+
+    f.store.setState({
+      timelines: { g: { entries: range(351, 750), lastSeq: 750, hasOlder: true, loading: false } },
+    });
+    f.timeline.mockResolvedValue({ ok: true, entries: range(301, 350), lastSeq: 750 });
+    await f.store.getState().loadOlder('g');
+    expect(seqs(f)).toEqual(range(301, 700).map((item) => item.seq));
+    expect(f.store.getState().timelines.g.history).toEqual({ sinceSeq: 750, tail: entry(750) });
+    f.off();
+  });
+
+  it('回到最新：替换为最新一页并退出历史窗口', async () => {
+    const f = await fixture();
+    f.store.setState({ timelines: { g: windowed } });
+    f.timeline.mockClear();
+    f.timeline.mockResolvedValue({ ok: true, entries: range(19951, 20000), lastSeq: 20000 });
+    await f.store.getState().jumpLatest('g');
+    expect(f.timeline).toHaveBeenCalledWith({ chatId: 'g', limit: 50 });
+    expect(seqs(f)).toEqual(range(19951, 20000).map((item) => item.seq));
+    expect(f.store.getState().timelines.g.history).toBeUndefined();
     f.off();
   });
 });

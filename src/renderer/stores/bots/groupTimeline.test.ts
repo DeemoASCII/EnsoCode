@@ -6,7 +6,9 @@ import {
   buildRows,
   locateTurn,
   mergeLatest,
+  mergeNewer,
   mergeOlder,
+  trimTimeline,
   turnSteps,
 } from './groupTimeline';
 
@@ -53,6 +55,35 @@ describe('mergeOlder', () => {
     expect(
       mergeOlder([human(3), human(4)], [human(1), human(2), human(3)]).map((e) => e.seq)
     ).toEqual([1, 2, 3, 4]);
+  });
+});
+
+describe('mergeNewer', () => {
+  it('只追加末尾之后的条目，重叠部分按 seq 去重', () => {
+    expect(
+      mergeNewer([human(3), human(4)], [human(2), human(4), human(5), human(6)]).map((e) => e.seq)
+    ).toEqual([3, 4, 5, 6]);
+  });
+
+  it('没有更新的条目时原样返回', () => {
+    const entries = [human(3)];
+    expect(mergeNewer(entries, [human(1), human(3)])).toBe(entries);
+  });
+});
+
+describe('trimTimeline', () => {
+  const seqs = (n: number) => Array.from({ length: n }, (_, i) => human(i + 1));
+
+  it('未超上限不裁剪', () => {
+    const entries = seqs(3);
+    expect(trimTimeline(entries, 3, 'start')).toEqual({ entries, trimmed: false });
+  });
+
+  it('超上限时从远离视口的一端裁掉', () => {
+    const start = trimTimeline(seqs(5), 3, 'start');
+    expect(start.entries.map((e) => e.seq)).toEqual([3, 4, 5]);
+    expect(start.trimmed).toBe(true);
+    expect(trimTimeline(seqs(5), 3, 'end').entries.map((e) => e.seq)).toEqual([1, 2, 3]);
   });
 });
 

@@ -469,7 +469,7 @@ Main 在 `spawnSession` 里根据 `ConversationAuthority.bot` 组装提示词，
 
 - 入口：Bot 模式下 `search-workspace` 绑定（默认 ⌘K，与 Code 模式同一键，按模式分流，Bot 模式打开 `BotSearchDialog`）+ 侧栏 / 折叠栏搜索按钮。
 - `BOT_SEARCH({query, limit?})`：query 去空白后 1–200 字符，limit 缺省 50、上限 100。Main 扫描群 `timeline.jsonl` 的 human / bot 条目，以及私聊当前与历史会话（`sessionsOf` → 会话权威里的 `sessionFile`，必须落在 sessions 目录内）的用户 / 助手 text part；大小写不敏感字面子串，空白折叠后围绕首个命中裁 160 字片段并返回片段内全部命中区间；按时间倒序截断并返回 `truncated`。单个时间线 / 会话读取失败只 `console.warn` 跳过。会话全量投影（`projectParentHistoryAll`，下标与历史分页同一编号）按 mtime+size 缓存 16 份，与产物卡片共用。
-- 命中定位：群为 `{timeline, seq}`；私聊为 `{session, conversationId, messageIndex, current}`。选中后 store 写 `focus`（带 nonce），目标聊天消费：群时间线不够早就 `loadOlder` 直到包含该 seq，滚到 `[data-seq]` 并底色高亮 2.5s；私聊当前会话按需 `loadOlderSession`，用 `messageItemKey`（`${i}` / `${i}-n`）`scrollToKey` 并复用会话内查找的高亮；历史会话或已换新会话则打开只读历史弹窗做同样定位。
+- 命中定位：群为 `{timeline, seq}`；私聊为 `{session, conversationId, messageIndex, current}`。选中后 store 写 `focus`（带 nonce），目标聊天消费：群时间线目标不在已加载范围内就 `loadAround` 一次取目标前后各 40 条（`beforeSeq=seq+41, limit=81`，不加 IPC 参数）替换列表，没到最新则进入「历史窗口」（`timeline.history`：向上 `beforeSeq`、向下 `beforeSeq=末尾+51` 翻页，追上最新自动退出；实时新消息不并入列表，只更新 lastSeq 与侧栏预览用的 tail，显示「回到最新 · N 条新消息」；已读记号只推进到已加载末尾且不回退；已加载超过 400 条从远离视口的一端裁掉，按视口锚点条目保持滚动位置），布局阶段滚到 `[data-seq]` 并底色高亮 2.5s（2 万条群跳到 seq 123 dev 构建约 0.15–0.5s，翻页单页约 30–40ms）；私聊当前会话按需 `loadOlderSession`，用 `messageItemKey`（`${i}` / `${i}-n`）`scrollToKey` 并复用会话内查找的高亮；历史会话或已换新会话则打开只读历史弹窗做同样定位（私聊列表是 Virtuoso 虚拟化，不会渲染爆炸，但仍逐页 60 条前翻、每页 Main 全量解析一次会话 jsonl，超长会话跳很早的消息会慢，未做窗口化）。
 
 **产物卡片**
 

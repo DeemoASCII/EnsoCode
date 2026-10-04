@@ -2,6 +2,8 @@ import type { ProjectedMessage } from '@shared/types/agent';
 import type { Delegation, GroupEntry } from '@shared/types/bot';
 
 const CONTINUE_WINDOW_MS = 5 * 60_000;
+/** 渲染上限：群时间线不虚拟化，已加载条目超过即从远离视口的一端裁掉 */
+export const TIMELINE_MAX = 400;
 
 function uniqueSorted(entries: GroupEntry[]): GroupEntry[] {
   const bySeq = new Map<number, GroupEntry>();
@@ -22,6 +24,25 @@ export function mergeLatest(
 
 export function mergeOlder(existing: GroupEntry[], page: GroupEntry[]): GroupEntry[] {
   return page.length === 0 ? existing : uniqueSorted([...page, ...existing]);
+}
+
+/** 向后翻页并入：只追加已有末尾之后的条目 */
+export function mergeNewer(existing: GroupEntry[], page: GroupEntry[]): GroupEntry[] {
+  const last = existing.at(-1)?.seq ?? Number.NEGATIVE_INFINITY;
+  const fresh = page.filter((entry) => entry.seq > last);
+  return fresh.length === 0 ? existing : uniqueSorted([...existing, ...fresh]);
+}
+
+export function trimTimeline(
+  entries: GroupEntry[],
+  max: number,
+  drop: 'start' | 'end'
+): { entries: GroupEntry[]; trimmed: boolean } {
+  if (entries.length <= max) return { entries, trimmed: false };
+  return {
+    entries: drop === 'start' ? entries.slice(entries.length - max) : entries.slice(0, max),
+    trimmed: true,
+  };
 }
 
 export type TimelineRow =

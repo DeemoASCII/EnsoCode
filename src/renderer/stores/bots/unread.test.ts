@@ -1,7 +1,14 @@
 import type { ProjectedMessage } from '@shared/types/agent';
 import { describe, expect, it } from 'vitest';
 import { emptyProjection } from '@/stores/sessions/reducer';
-import { directMarker, isUnread, readKey, seedReadMarks, unreadMark } from './unread';
+import {
+  directMarker,
+  groupReadMark,
+  isUnread,
+  readKey,
+  seedReadMarks,
+  unreadMark,
+} from './unread';
 
 const msg = (text: string, optimistic = false) =>
   ({ role: 'user', content: [{ type: 'text', text }], optimistic }) as ProjectedMessage;
@@ -11,6 +18,22 @@ describe('readKey', () => {
     expect(readKey({ id: 'c', kind: 'group' })).toBe('c');
     expect(readKey({ id: 'c', kind: 'direct' }, 's1')).toBe('c:s1');
     expect(readKey({ id: 'c', kind: 'direct' })).toBe('c:');
+  });
+});
+
+describe('groupReadMark', () => {
+  const entries = (from: number, to: number) =>
+    Array.from({ length: to - from + 1 }, (_, i) => ({ seq: from + i }));
+
+  it('最新视图按 lastSeq 记已读', () => {
+    expect(groupReadMark({ entries: entries(1, 5), lastSeq: 5 }, 2)).toBe(5);
+  });
+
+  it('历史窗口只推进到已加载的末尾，且不回退已有记号', () => {
+    const history = { sinceSeq: 100 };
+    expect(groupReadMark({ entries: entries(10, 20), lastSeq: 120, history }, 15)).toBe(20);
+    expect(groupReadMark({ entries: entries(10, 20), lastSeq: 120, history }, 100)).toBe(100);
+    expect(groupReadMark({ entries: [], lastSeq: 120, history }, undefined)).toBe(0);
   });
 });
 

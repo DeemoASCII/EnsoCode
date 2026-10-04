@@ -16,6 +16,15 @@ export function isUnread(marker: number, read: number | undefined): boolean {
   return marker > (read ?? 0);
 }
 
+/** 群聊已读记号：历史窗口里只推进到已加载的末尾，不回退已有记号（窗口外的新消息仍算未读） */
+export function groupReadMark(
+  timeline: { entries: readonly { seq: number }[]; lastSeq: number; history?: unknown } | undefined,
+  read: number | undefined
+): number {
+  if (!timeline?.history) return timeline?.lastSeq ?? 0;
+  return Math.max(read ?? 0, timeline.entries.at(-1)?.seq ?? 0);
+}
+
 /** 手动标为未读：已读记号退回一格；还没有任何活动时返回 undefined */
 export function unreadMark(marker: number): number | undefined {
   return marker > 0 ? marker - 1 : undefined;

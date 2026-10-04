@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { focusStep, messageItemKey, snippetParts } from './focus';
+import { focusStep, messageItemKey, snippetParts, windowFocusStep } from './focus';
 
 describe('messageItemKey', () => {
   const items = [{ key: '0' }, { key: '1-0' }, { key: '1-2' }, { key: '3' }, { key: '13-0' }];
@@ -26,6 +26,23 @@ describe('focusStep', () => {
     expect(focusStep({ target: 3, earliest: undefined, hasOlder: false, loading: false })).toBe(
       'wait'
     );
+  });
+});
+
+describe('windowFocusStep', () => {
+  const base = { target: 123, loading: false, jumped: false };
+  it('目标在已加载范围内直接滚动', () => {
+    expect(windowFocusStep({ ...base, range: [100, 150] })).toBe('scroll');
+    expect(windowFocusStep({ ...base, range: [123, 123] })).toBe('scroll');
+  });
+  it('不在范围内直接按窗口加载，不逐页前翻；加载过仍没有则放弃', () => {
+    expect(windowFocusStep({ ...base, range: [19950, 20000] })).toBe('jump');
+    expect(windowFocusStep({ ...base, range: null })).toBe('jump');
+    expect(windowFocusStep({ ...base, range: [19950, 20000], jumped: true })).toBe('give-up');
+  });
+  it('时间线未就绪或加载中时等待', () => {
+    expect(windowFocusStep({ ...base, range: undefined })).toBe('wait');
+    expect(windowFocusStep({ ...base, range: [1, 50], loading: true })).toBe('wait');
   });
 });
 

@@ -17,6 +17,7 @@ import { startDesktopVoiceSession } from '@/lib/voiceSession';
 import { useBotsStore } from '@/stores/bots';
 import { activeDelegations, pendingOwners } from '@/stores/bots/delegations';
 import { chatSummary, type PendingItem, pendingItems } from '@/stores/bots/selectors';
+import { groupReadMark } from '@/stores/bots/unread';
 import { useSettingsStore } from '@/stores/settings';
 import {
   CHAT_MIN_WIDTH,
@@ -122,6 +123,9 @@ export function BotChatView({ chat }: { chat: BotChat }) {
     [chats, chat.id, bots, t]
   );
   const summary = chatSummary(chat, { sessions, timeline, queue, names });
+  const read = useBotsStore((s) => s.reads[summary.key]);
+  // 群聊历史窗口里不把窗口之外的未读标为已读
+  const readMark = chat.kind === 'group' ? groupReadMark(timeline, read) : summary.marker;
   const chatDelegations = useMemo(
     () => delegations.filter((item) => item.chatId === chat.id),
     [delegations, chat.id]
@@ -150,12 +154,16 @@ export function BotChatView({ chat }: { chat: BotChat }) {
   const livePending = live ? pending.filter((item) => item.conversationId === live.id) : [];
 
   useEffect(() => {
-    markRead(summary.key, summary.marker);
-  }, [markRead, summary.key, summary.marker]);
+    markRead(summary.key, readMark);
+  }, [markRead, summary.key, readMark]);
 
   useEffect(() => {
     if (chat.kind === 'group') {
-      void useBotsStore.getState().loadLatest(chat.id);
+      const state = useBotsStore.getState();
+      // 重新进入停在历史窗口的群：回到最新（搜索跳转进来的除外）
+      if (state.timelines[chat.id]?.history && state.focus?.chatId !== chat.id)
+        void state.jumpLatest(chat.id);
+      else void state.loadLatest(chat.id);
       void useBotsStore.getState().refreshRuntime(chat.id);
     }
   }, [chat.id, chat.kind]);
@@ -223,6 +231,9 @@ export function BotChatView({ chat }: { chat: BotChat }) {
       return false;
     }
     if (result.queued) addToast({ type: 'info', title: t('Queued until a session slot frees up') });
+    // 在历史窗口里发言：回到最新，看到自己刚发的消息
+    if (useBotsStore.getState().timelines[chat.id]?.history)
+      void useBotsStore.getState().jumpLatest(chat.id);
     return true;
   };
 
@@ -298,6 +309,9 @@ export function BotChatView({ chat }: { chat: BotChat }) {
             focus={groupFocus}
             onFocusDone={clearFocus}
             onLoadOlder={() => void useBotsStore.getState().loadOlder(chat.id)}
+            onLoadNewer={() => void useBotsStore.getState().loadNewer(chat.id)}
+            onLoadAround={(seq) => useBotsStore.getState().loadAround(chat.id, seq)}
+            onJumpLatest={() => void useBotsStore.getState().jumpLatest(chat.id)}
             onOpenConversation={(id, title) => setHistory({ id, title })}
             onOpenLive={(id, botId) => setLive({ id, botId })}
           />

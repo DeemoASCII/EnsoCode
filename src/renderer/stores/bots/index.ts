@@ -25,7 +25,7 @@ import { resizeSidePanelWidth, SIDE_PANEL_DEFAULT_WIDTH } from '@/stores/sidePan
 import type { BotUsageSnapshot } from './budget';
 import { createCoalescer } from './coalesce';
 import { isActiveDelegation } from './delegations';
-import { mergeLatest, mergeOlder } from './groupTimeline';
+import { mergeLatest, mergeNewer, mergeOlder, TIMELINE_MAX, trimTimeline } from './groupTimeline';
 import { applyBotAgentEvent, type BotSessions, seedHistory } from './projection';
 import { chatSummary } from './selectors';
 import { seedReadMarks, unreadMark } from './unread';
@@ -41,6 +41,12 @@ export interface TimelineState {
   lastSeq: number;
   hasOlder: boolean;
   loading: boolean;
+  /**
+   * 历史窗口：已加载条目没追上最新，实时新消息不并入列表。
+   * sinceSeq = 进入时的 lastSeq（计新消息数），tail = 已知最新一条（预览用）
+   */
+  history?: { sinceSeq: number; tail?: GroupEntry };
+  loadingNewer?: boolean;
 }
 
 export interface ChatRuntime {
@@ -63,6 +69,8 @@ export interface BotFocus {
 }
 
 const TIMELINE_PAGE = 50;
+/** 跳转窗口：目标前后各取这么多条 */
+const TIMELINE_AROUND = 40;
 const READS_KEY = 'enso-bot-reads';
 const PANEL_KEY = 'enso-bot-panel';
 const PANEL_WIDTH_KEY = 'enso-bot-panel-width';
@@ -139,6 +147,12 @@ interface BotsState {
   refreshTasks: (chatId: string) => Promise<void>;
   loadLatest: (chatId: string) => Promise<void>;
   loadOlder: (chatId: string) => Promise<void>;
+  /** 历史窗口向下翻页；追上最新后退出历史窗口 */
+  loadNewer: (chatId: string) => Promise<void>;
+  /** 跳转：直接加载目标 seq 附近一段替换当前条目，未到最新则进入历史窗口 */
+  loadAround: (chatId: string, seq: number) => Promise<void>;
+  /** 回到最新：替换为最新一页并退出历史窗口 */
+  jumpLatest: (chatId: string) => Promise<void>;
   refreshRuntime: (chatId: string) => Promise<void>;
   /** 开始跟踪成员会话；返回首屏历史加载完成的 promise */
   trackSession: (conversationId: string) => Promise<void>;
@@ -176,6 +190,10 @@ export const useBotsStore = create<BotsState>()((set, get) => {
   const seeding = new Map<string, Promise<void>>();
   /** 本窗口发起、尚未收到 rewind-done 草稿的回退：conversationId → chatId */
   const rewinds = new Map<string, string>();
+  /** 整体替换群时间线（跳转 / 回到最新 / 退出历史窗口）时递增，丢弃按旧列表发出的请求结果 */
+  const timelineEpochs = new Map<string, number>();
+  const epochOf = (chatId: string) => timelineEpochs.get(chatId) ?? 0;
+  const bumpEpoch = (chatId: string) => timelineEpochs.set(chatId, epochOf(chatId) + 1);
   let storedReads = loadReads();
   let bindings = 0;
   let unbind: (() => void) | null = null;
@@ -196,6 +214,17 @@ export const useBotsStore = create<BotsState>()((set, get) => {
       return next === current ? state : { sessions: { ...state.sessions, [id]: next } };
     });
   };
+
+  const patchTimeline = (chatId: string, next: Partial<TimelineState>) =>
+    set((state) => {
+      const timeline = state.timelines[chatId];
+      return timeline
+        ? { timelines: { ...state.timelines, [chatId]: { ...timeline, ...next } } }
+        : state;
+    });
+
+  const replaceTimeline = (chatId: string, timeline: TimelineState) =>
+    set((state) => ({ timelines: { ...state.timelines, [chatId]: timeline } }));
 
   const trackChats = (chats: BotChat[]): Promise<unknown> => {
     const loads: Promise<void>[] = [];
@@ -464,15 +493,36 @@ export const useBotsStore = create<BotsState>()((set, get) => {
     loadLatest: (chatId) =>
       coalesce(`timeline:${chatId}`, async () => {
         const known = get().timelines[chatId];
-        // 已有时间线只拉 lastSeq 之后的增量；缺口过大时 Main 退回最新一页，由 mergeLatest 按空洞替换
-        const result = await window.electronAPI.bots.timeline({
-          chatId,
-          ...(known ? { afterSeq: known.lastSeq } : {}),
-          limit: TIMELINE_PAGE,
-        });
+        const windowed = Boolean(known?.history);
+        const epoch = epochOf(chatId);
+        // 历史窗口只取最新一条（记 lastSeq 与预览）；否则只拉 lastSeq 之后的增量，
+        // 缺口过大时 Main 退回最新一页，由 mergeLatest 按空洞替换
+        const result = await window.electronAPI.bots.timeline(
+          windowed
+            ? { chatId, limit: 1 }
+            : { chatId, ...(known ? { afterSeq: known.lastSeq } : {}), limit: TIMELINE_PAGE }
+        );
         if (!result.ok) return;
+        if (epochOf(chatId) !== epoch || Boolean(get().timelines[chatId]?.history) !== windowed) {
+          // 请求期间列表被整体替换或切换了模式：结果按旧列表取的，重拉一次
+          void get().loadLatest(chatId);
+          return;
+        }
         set((state) => {
           const current = state.timelines[chatId];
+          if (current?.history) {
+            const tail = result.entries.at(-1) ?? current.history.tail;
+            return {
+              timelines: {
+                ...state.timelines,
+                [chatId]: {
+                  ...current,
+                  lastSeq: result.lastSeq,
+                  history: { ...current.history, tail },
+                },
+              },
+            };
+          }
           const merged = mergeLatest(current?.entries ?? [], result.entries);
           const hasOlder =
             current && !merged.gap ? current.hasOlder : result.entries.length >= TIMELINE_PAGE;
@@ -494,14 +544,7 @@ export const useBotsStore = create<BotsState>()((set, get) => {
       const current = get().timelines[chatId];
       const first = current?.entries[0];
       if (!current || !first || !current.hasOlder || current.loading) return;
-      const patch = (next: Partial<TimelineState>) =>
-        set((state) => {
-          const timeline = state.timelines[chatId];
-          return timeline
-            ? { timelines: { ...state.timelines, [chatId]: { ...timeline, ...next } } }
-            : state;
-        });
-      patch({ loading: true });
+      patchTimeline(chatId, { loading: true });
       try {
         const result = await window.electronAPI.bots.timeline({
           chatId,
@@ -510,14 +553,96 @@ export const useBotsStore = create<BotsState>()((set, get) => {
         });
         if (!result.ok) return;
         const latest = get().timelines[chatId];
-        if (!latest) return;
-        patch({
-          entries: mergeOlder(latest.entries, result.entries),
+        if (latest?.entries[0]?.seq !== first.seq) return;
+        // 超过渲染上限裁掉底部；最新视图被裁后进入历史窗口
+        const merged = trimTimeline(
+          mergeOlder(latest.entries, result.entries),
+          TIMELINE_MAX,
+          'end'
+        );
+        patchTimeline(chatId, {
+          entries: merged.entries,
           hasOlder: result.entries.length >= TIMELINE_PAGE,
+          ...(merged.trimmed && !latest.history
+            ? { history: { sinceSeq: latest.lastSeq, tail: latest.entries.at(-1) } }
+            : {}),
         });
       } finally {
-        patch({ loading: false });
+        patchTimeline(chatId, { loading: false });
       }
+    },
+
+    loadNewer: async (chatId) => {
+      const current = get().timelines[chatId];
+      const last = current?.entries.at(-1);
+      if (!current?.history || !last || current.loadingNewer) return;
+      patchTimeline(chatId, { loadingNewer: true });
+      try {
+        // seq 连续：取 (last, last + PAGE] 这一页
+        const result = await window.electronAPI.bots.timeline({
+          chatId,
+          beforeSeq: last.seq + TIMELINE_PAGE + 1,
+          limit: TIMELINE_PAGE,
+        });
+        if (!result.ok) return;
+        const latest = get().timelines[chatId];
+        if (!latest?.history || latest.entries.at(-1)?.seq !== last.seq) return;
+        const merged = mergeNewer(latest.entries, result.entries);
+        const caughtUp = (merged.at(-1)?.seq ?? 0) >= result.lastSeq;
+        if (!caughtUp && merged === latest.entries) {
+          // 缺行导致这一页翻不过去：直接回到最新
+          void get().jumpLatest(chatId);
+          return;
+        }
+        const trimmed = trimTimeline(merged, TIMELINE_MAX, 'start');
+        if (caughtUp) bumpEpoch(chatId);
+        patchTimeline(chatId, {
+          entries: trimmed.entries,
+          lastSeq: result.lastSeq,
+          hasOlder: latest.hasOlder || trimmed.trimmed,
+          history: caughtUp ? undefined : latest.history,
+        });
+      } finally {
+        patchTimeline(chatId, { loadingNewer: false });
+      }
+    },
+
+    loadAround: async (chatId, seq) => {
+      bumpEpoch(chatId);
+      const epoch = epochOf(chatId);
+      const limit = TIMELINE_AROUND * 2 + 1;
+      const result = await window.electronAPI.bots.timeline({
+        chatId,
+        beforeSeq: seq + TIMELINE_AROUND + 1,
+        limit,
+      });
+      if (!result.ok || epochOf(chatId) !== epoch) return;
+      const current = get().timelines[chatId];
+      const tail = current?.history ? current.history.tail : current?.entries.at(-1);
+      const caughtUp = (result.entries.at(-1)?.seq ?? 0) >= result.lastSeq;
+      replaceTimeline(chatId, {
+        entries: result.entries,
+        lastSeq: result.lastSeq,
+        hasOlder: result.entries.length >= limit,
+        loading: false,
+        ...(caughtUp
+          ? {}
+          : { history: { sinceSeq: current?.history?.sinceSeq ?? result.lastSeq, tail } }),
+      });
+      if (!caughtUp && (tail?.seq ?? 0) < result.lastSeq) void get().loadLatest(chatId);
+    },
+
+    jumpLatest: async (chatId) => {
+      bumpEpoch(chatId);
+      const epoch = epochOf(chatId);
+      const result = await window.electronAPI.bots.timeline({ chatId, limit: TIMELINE_PAGE });
+      if (!result.ok || epochOf(chatId) !== epoch) return;
+      replaceTimeline(chatId, {
+        entries: result.entries,
+        lastSeq: result.lastSeq,
+        hasOlder: result.entries.length >= TIMELINE_PAGE,
+        loading: false,
+      });
     },
 
     refreshRuntime: (chatId) =>

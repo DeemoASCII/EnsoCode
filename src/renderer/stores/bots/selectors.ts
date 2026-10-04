@@ -49,6 +49,8 @@ export function pendingItems(
 export interface TimelineSlice {
   entries: GroupEntry[];
   lastSeq: number;
+  /** 历史窗口：entries 末尾不是最新，预览用 tail */
+  history?: { tail?: GroupEntry };
 }
 
 export interface ChatSummary {
@@ -112,7 +114,8 @@ export function chatSummary(
   );
   const queued = ctx.queue.some((item) => item.chatId === chat.id);
   if (chat.kind === 'group') {
-    const last = ctx.timeline?.entries.at(-1);
+    const timeline = ctx.timeline;
+    const last = timeline?.history ? timeline.history.tail : timeline?.entries.at(-1);
     return {
       key: readKey(chat),
       marker: ctx.timeline?.lastSeq ?? 0,

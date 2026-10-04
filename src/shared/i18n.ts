@@ -2231,6 +2231,8 @@ export const zhTranslations: Record<string, string> = {
   'No group notes yet. Group conventions and decisions are summarized here automatically after memories are organized.':
     '还没有群笔记。整理记忆后，群里的约定和决定会自动汇总到这里。',
   'Beginning of the chat': '已经到顶了',
+  'Back to latest': '回到最新',
+  'Back to latest · {{n}} new': '回到最新 · {{n}} 条新消息',
   'Say something. Mention a member with @, or the group owner replies.':
     '说点什么吧。@ 某个成员，或由群主来回复。',
   Replying: '正在回复',
