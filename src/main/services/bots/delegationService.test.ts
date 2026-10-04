@@ -458,6 +458,112 @@ it('links a board task: gate rejects before any record, sync sees every save, re
   expect(f.store.get(again.delegationId)).not.toHaveProperty('taskId');
   service.dispose();
 });
+describe('acceptance check', () => {
+  const output = (toolCallId: string, text: string, isError = false) => ({
+    role: 'toolResult',
+    toolCallId,
+    toolName: 'bash',
+    isError,
+    timestamp: Date.now(),
+    content: [{ type: 'text' as const, text }],
+  });
+  function checked(messages: () => ReturnType<typeof output>[]) {
+    const f = fixture();
+    f.service.dispose();
+    const read = vi.fn(async (_conversationId: string) => messages());
+    const service = new DelegationService({ ...f.deps, sessionMessages: read });
+    return { ...f, service, read };
+  }
+  const check = { kind: 'output-contains' as const, text: 'XYZ_PASS' };
+
+  it('passes when a final tool output contains the text and tells the member the condition', async () => {
+    const f = checked(() => [output('a', 'XYZ_PASS\n')]);
+    const sent = f.service.delegate(f.parent, { to: 'Bob', task: 'run it', check });
+    if (!sent.ok) throw new Error(sent.error);
+    await vi.advanceTimersByTimeAsync(0);
+    const record = f.store.get(sent.delegationId)!;
+    expect(f.prompts.find((p) => p.deliveryId === record.id)?.text).toContain('XYZ_PASS');
+    f.finish(record.childConversationId);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(f.read).toHaveBeenCalledWith(record.childConversationId);
+    expect(f.store.get(record.id)).toMatchObject({
+      state: 'completed',
+      check: { ...check, passed: true },
+    });
+    expect(results(f)[0].text).toContain('status="completed"');
+    f.service.dispose();
+  });
+
+  it('fails with a clear reason when the final result for that call is an error, and retry keeps the check', async () => {
+    const f = checked(() => [output('a', 'XYZ_PASS'), output('a', 'XYZ_PASS', true)]);
+    const sent = f.service.delegate(f.parent, { to: 'Bob', task: 'run it', check });
+    if (!sent.ok) throw new Error(sent.error);
+    await vi.advanceTimersByTimeAsync(0);
+    f.finish(f.store.get(sent.delegationId)!.childConversationId);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(f.store.get(sent.delegationId)).toMatchObject({
+      state: 'failed',
+      failure: 'check',
+      check: { ...check, passed: false },
+      error: '验收未通过：未在工具输出中看到「XYZ_PASS」',
+    });
+    expect(results(f)[0].text).toContain('status="failed"');
+    expect(results(f)[0].text).toContain('验收未通过：未在工具输出中看到「XYZ_PASS」');
+    const retried = f.service.retry(sent.delegationId);
+    if (!retried.ok) throw new Error(retried.error);
+    expect(f.store.get(retried.delegationId)?.check).toEqual(check);
+    f.service.dispose();
+  });
+
+  it('ignores outputs from before the delegation started and fails when the log is unreadable', async () => {
+    const old = { ...output('a', 'XYZ_PASS'), timestamp: 0 };
+    const f = checked(() => [old]);
+    vi.setSystemTime(10_000);
+    const sent = f.service.delegate(f.parent, { to: 'Bob', task: 'run it', check });
+    if (!sent.ok) throw new Error(sent.error);
+    await vi.advanceTimersByTimeAsync(0);
+    f.finish(f.store.get(sent.delegationId)!.childConversationId);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(f.store.get(sent.delegationId)).toMatchObject({ state: 'failed', failure: 'check' });
+    f.read.mockRejectedValueOnce(new Error('missing'));
+    const again = f.service.delegate(f.parent, { to: 'Bob', task: 'again', check });
+    if (!again.ok) throw new Error(again.error);
+    await vi.advanceTimersByTimeAsync(0);
+    f.finish(f.store.get(again.delegationId)!.childConversationId);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(f.store.get(again.delegationId)).toMatchObject({ state: 'failed', failure: 'check' });
+    f.service.dispose();
+  });
+
+  it('inherits the linked board task check and skips verification after a failed turn', async () => {
+    const f = fixture();
+    f.service.dispose();
+    const TASK = '55555555-5555-4555-8555-555555555555';
+    const read = vi.fn(async () => [output('a', 'XYZ_PASS')]);
+    const service = new DelegationService({
+      ...f.deps,
+      sessionMessages: read,
+      tasks: { gate: () => ({ ok: true, taskId: TASK, check }), sync: vi.fn() },
+    });
+    const sent = service.delegate(f.parent, { to: 'Bob', task: 'x', taskId: '#1' });
+    if (!sent.ok) throw new Error(sent.error);
+    const record = f.store.get(sent.delegationId)!;
+    expect(record.check).toEqual(check);
+    await vi.advanceTimersByTimeAsync(0);
+    f.host.observe({
+      type: 'turn-failed',
+      identity: { sessionId: record.childConversationId, generation: 'g' },
+      seq: 1,
+      turnId: 'turn',
+      error: 'boom',
+    } as never);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(f.store.get(record.id)).toMatchObject({ state: 'failed', failure: 'error' });
+    expect(read).not.toHaveBeenCalled();
+    service.dispose();
+  });
+});
+
 it('rejects delegating back up the chain to a member who delegated to you', async () => {
   const f = fixture();
   const sent = f.service.delegate(f.parent, { to: 'Bob', task: 'write file' });

@@ -1,4 +1,4 @@
-import type { BotProfile, Delegation, DelegationState } from '@shared/types/bot';
+import type { BotProfile, Delegation, DelegationState, TaskCheck } from '@shared/types/bot';
 import { useEffect, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { addToast } from '@/components/ui/toast';
@@ -31,6 +31,31 @@ export function DelegationBadge({ state, interrupted }: { state: string; interru
   return <span className={cn('rounded px-1.5 text-[11px]', tone)}>{label[state] ?? state}</span>;
 }
 
+/** 验收条件与最近一次校验结果 */
+export function CheckBadge({ check, className }: { check: TaskCheck; className?: string }) {
+  const { t } = useI18n();
+  return (
+    <div
+      className={cn('flex min-w-0 items-center gap-1.5 text-muted-foreground text-xs', className)}
+    >
+      <span className="shrink-0">{t('Acceptance check')}</span>
+      <code className="min-w-0 truncate rounded bg-muted px-1" title={check.text}>
+        {check.text}
+      </code>
+      {check.passed !== undefined && (
+        <span
+          className={cn(
+            'shrink-0 rounded px-1.5 text-[11px]',
+            check.passed ? 'bg-success/15 text-success' : 'bg-destructive/15 text-destructive'
+          )}
+        >
+          {check.passed ? t('Passed') : t('Not passed')}
+        </span>
+      )}
+    </div>
+  );
+}
+
 export function failureText(record: Delegation, t: TFunction): string | undefined {
   switch (record.failure) {
     case 'interrupted':
@@ -39,6 +64,10 @@ export function failureText(record: Delegation, t: TFunction): string | undefine
       return t('Timed out after {{n}} minutes.', { n: record.timeoutMinutes ?? 240 });
     case 'denied':
       return t('Denied.');
+    case 'check':
+      return t('Acceptance check failed: "{{text}}" not found in tool outputs.', {
+        text: record.check?.text ?? '',
+      });
     default:
       return record.error === 'budget-exceeded'
         ? t("The member's daily budget is used up.")
@@ -125,6 +154,7 @@ export function DelegationCard({
         <span>{timeOf(entry?.at ?? record?.createdAt ?? now)}</span>
       </div>
       {record?.task && <div className="mt-1.5 line-clamp-3 text-sm">{record.task}</div>}
+      {record?.check && <CheckBadge check={record.check} className="mt-1.5" />}
       {summary && (
         <div className="mt-1.5 line-clamp-4 whitespace-pre-wrap text-muted-foreground text-xs">
           {summary}

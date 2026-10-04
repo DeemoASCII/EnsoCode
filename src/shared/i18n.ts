@@ -2492,6 +2492,14 @@ export const zhTranslations: Record<string, string> = {
   'Assign to': '指派给',
   'Mark done': '标记完成',
   'Cancel task': '取消任务',
+  'Acceptance check': '验收条件',
+  'Acceptance check (optional)': '验收条件（可选）',
+  "Done only when the member's tool output contains this text, e.g. a command printing ALL_TESTS_PASS.":
+    '成员的工具输出包含这段文字才算完成，例如命令打印 ALL_TESTS_PASS。',
+  Passed: '通过',
+  'Not passed': '未通过',
+  'Acceptance check failed: "{{text}}" not found in tool outputs.':
+    '验收未通过：未在工具输出中看到「{{text}}」',
   Unassigned: '未指派',
   You: '你',
   'Created by {{name}}': '由 {{name}} 创建',

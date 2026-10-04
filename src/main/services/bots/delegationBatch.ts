@@ -33,7 +33,9 @@ export const batchDeliveryId = (batch: readonly Delegation[]) =>
 export const delegationResultBody = (record: Delegation) =>
   record.state === 'completed'
     ? (record.result ?? '')
-    : (record.error ?? record.failure ?? record.state);
+    : record.failure === 'check' && record.result
+      ? `${record.error ?? 'check'}\n\n${record.result}`
+      : (record.error ?? record.failure ?? record.state);
 
 export function batchResultText(batch: readonly Delegation[], nameOf: NameOf): string {
   const items = batch.map(
@@ -58,7 +60,9 @@ const stateLabel = (record: Delegation) =>
         ? '已超时'
         : record.failure === 'interrupted'
           ? '已中断'
-          : '执行失败';
+          : record.failure === 'check'
+            ? '验收未通过'
+            : '执行失败';
 
 /** 批次里还有未到终态的成员时，提示谁结束了、还在等谁 */
 export function batchWaitingNotice(

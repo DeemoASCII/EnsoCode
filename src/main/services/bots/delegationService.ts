@@ -1,5 +1,12 @@
 import { randomUUID } from 'node:crypto';
-import { botNameKey, DELEGATION_TIMEOUT_MINUTES, type Delegation } from '../../../shared/types/bot';
+import { checkFailureText, checkPassed } from '../../../shared/bots/taskCheck';
+import type { ProjectedMessage } from '../../../shared/types/agent';
+import {
+  botNameKey,
+  DELEGATION_TIMEOUT_MINUTES,
+  type Delegation,
+  type TaskCheck,
+} from '../../../shared/types/bot';
 import type { BotEvent, BotSendResult } from '../../../shared/types/botIpc';
 import type { BotAuthorityPort, BotSessionHost } from './botSessionHost';
 import type { BotStore } from './botStore';
@@ -32,9 +39,11 @@ interface Deps {
       chatId: string | null,
       ref: string,
       parentBotId: string
-    ): { ok: true; taskId: string } | { ok: false; error: string };
+    ): { ok: true; taskId: string; check?: TaskCheck } | { ok: false; error: string };
     sync(record: Delegation): void;
   };
+  /** 子会话当前分支消息（验收读最终工具结果） */
+  sessionMessages?: (conversationId: string) => Promise<readonly ProjectedMessage[]>;
   deliverGroupResult?: (
     record: Delegation,
     text: string,
@@ -51,6 +60,8 @@ export interface DelegateInput {
   deadlineMinutes?: number;
   /** 父回合被停止 / 中断后仍继续 */
   keep?: boolean;
+  /** 验收条件；不传时沿用关联看板任务的 */
+  check?: TaskCheck;
 }
 export type DelegateResult =
   | { ok: true; delegationId: string; warning?: string }
@@ -98,13 +109,15 @@ export class DelegationService {
       if (event.delegationId) {
         const record = deps.store.get(event.delegationId);
         if (record && active(record) && record.childConversationId === event.conversationId) {
-          this.finish(
-            record,
-            event.ok ? 'completed' : 'failed',
-            event.ok ? undefined : 'error',
-            event.text,
-            event.error
-          );
+          if (event.ok && record.check) void this.verify(record, record.check, event.text);
+          else
+            this.finish(
+              record,
+              event.ok ? 'completed' : 'failed',
+              event.ok ? undefined : 'error',
+              event.text,
+              event.error
+            );
         }
       }
       queueMicrotask(() => {
@@ -184,6 +197,7 @@ export class DelegationService {
     );
     if (error) return { ok: false, error };
     let taskId: string | undefined;
+    let check = input.check;
     if (input.taskId !== undefined) {
       const gate = this.deps.tasks?.gate(chatId, input.taskId, parent.id) ?? {
         ok: false as const,
@@ -191,6 +205,7 @@ export class DelegationService {
       };
       if (!gate.ok) return gate;
       taskId = gate.taskId;
+      check ??= gate.check;
     }
     const id = randomUUID();
     const batchId = options.standalone ? undefined : this.deps.host.turnKey(parentConversationId);
@@ -230,6 +245,7 @@ export class DelegationService {
       ...(taskId ? { taskId } : {}),
       ...(options.retryOf ? { retryOf: options.retryOf } : {}),
       ...(input.keep ? { keep: true } : {}),
+      ...(check ? { check: { kind: check.kind, text: check.text } } : {}),
       timeoutMinutes,
     };
     this.save(record);
@@ -245,7 +261,10 @@ export class DelegationService {
     );
     timer.unref?.();
     this.timers.set(id, timer);
-    const text = `<delegation-task id="${id}" from="${escapeXml(parent.name)}">\n${escapeXml(record.task)}\n<context>${escapeXml(record.context)}</context>\n</delegation-task>`;
+    const acceptance = record.check
+      ? `\n<acceptance-check>Passes only if one of your final tool outputs (e.g. a command's output) contains: ${escapeXml(record.check.text)}</acceptance-check>`
+      : '';
+    const text = `<delegation-task id="${id}" from="${escapeXml(parent.name)}">\n${escapeXml(record.task)}\n<context>${escapeXml(record.context)}</context>${acceptance}\n</delegation-task>`;
     void this.deps.host
       .deliverConversation(child.conversationId, text, {
         deliveryId: id,
@@ -327,6 +346,7 @@ export class DelegationService {
         context: record.context,
         ...(taskId ? { taskId } : {}),
         ...(record.timeoutMinutes ? { deadlineMinutes: record.timeoutMinutes } : {}),
+        ...(record.check ? { check: { kind: record.check.kind, text: record.check.text } } : {}),
       },
       { standalone: true, retryOf: id }
     );
@@ -465,6 +485,22 @@ export class DelegationService {
     queueMicrotask(() => {
       void this.deliverPending(record.parentConversationId);
     });
+  }
+
+  /** 委派开始后子会话的最终工具结果里找验收文本；读失败按未通过 */
+  private async verify(record: Delegation, check: TaskCheck, text: string): Promise<void> {
+    let passed = false;
+    try {
+      const messages = await this.deps.sessionMessages?.(record.childConversationId);
+      passed = messages ? checkPassed(check, messages, record.createdAt) : false;
+    } catch (cause) {
+      console.warn('[bots] delegation check read failed', cause);
+    }
+    const current = this.deps.store.get(record.id);
+    if (this.disposed || !current || !active(current)) return;
+    const checked = { ...current, check: { ...check, passed } };
+    if (passed) this.finish(checked, 'completed', undefined, text);
+    else this.finish(checked, 'failed', 'check', text, checkFailureText(check));
   }
 
   /** 批次未齐：在群时间线提示谁结束了、还在等谁 */

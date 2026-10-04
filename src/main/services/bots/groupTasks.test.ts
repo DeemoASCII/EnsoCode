@@ -18,6 +18,23 @@ let chatId: string;
 const emit = vi.fn();
 const send = vi.fn(async (_chatId: string, _text: string) => ({ ok: true as const }));
 const cancelDelegation = vi.fn();
+let outputs: Array<{
+  role: string;
+  toolCallId: string;
+  toolName: string;
+  isError?: boolean;
+  timestamp: number;
+  content: Array<{ type: 'text'; text: string }>;
+}> = [];
+const sessionMessages = vi.fn(async (_chatId: string, _botId: string) => outputs);
+const output = (toolCallId: string, text: string, timestamp: number, isError = false) => ({
+  role: 'toolResult',
+  toolCallId,
+  toolName: 'bash',
+  isError,
+  timestamp,
+  content: [{ type: 'text' as const, text }],
+});
 
 const systemTexts = () =>
   chats
@@ -44,6 +61,8 @@ beforeEach(() => {
   emit.mockClear();
   send.mockClear();
   cancelDelegation.mockClear();
+  outputs = [];
+  sessionMessages.mockClear();
   service = new GroupTaskService({
     store: new GroupTaskStore(join(root, 'chats')),
     chats,
@@ -51,6 +70,7 @@ beforeEach(() => {
     emit,
     send,
     cancelDelegation,
+    sessionMessages,
   });
 });
 afterEach(() => rmSync(root, { recursive: true, force: true }));
@@ -148,6 +168,123 @@ describe('成员动作与权限', () => {
     });
     expect(service.tool(chatId, alice, { action: 'add' })).toMatchObject({ ok: false });
     expect(service.tool(chatId, alice, { action: 'nuke' })).toMatchObject({ ok: false });
+  });
+});
+
+describe('验收条件 check', () => {
+  const check = { kind: 'output-contains' as const, text: 'XYZ_PASS' };
+  let now = 1000;
+  beforeEach(() => {
+    now = 1000;
+    service = new GroupTaskService({
+      store: new GroupTaskStore(join(root, 'chats')),
+      chats,
+      bots,
+      emit,
+      send,
+      cancelDelegation,
+      sessionMessages,
+      now: () => now,
+    });
+  });
+
+  it('成员 complete 需在认领之后的最终工具结果里看到文本，否则拒绝', async () => {
+    expect(service.add(chatId, alice, { title: 'Build', check })).toMatchObject({
+      ok: true,
+      task: { check },
+    });
+    outputs = [output('old', 'XYZ_PASS', 500)];
+    now = 2000;
+    expect(service.claim(chatId, bob, '#1')).toMatchObject({ ok: true, task: { claimedAt: 2000 } });
+    outputs.push(output('a', 'XYZ_PASS', 2100), output('a', 'XYZ_PASS', 2200, true));
+    const rejected = await service.tool(chatId, bob, {
+      action: 'complete',
+      id: '#1',
+      result: 'ok',
+    });
+    expect(rejected).toEqual({
+      ok: false,
+      error: expect.stringContaining('Acceptance check failed'),
+    });
+    expect(sessionMessages).toHaveBeenCalledWith(chatId, bob);
+    expect(store().find(chatId, '#1')).toMatchObject({ status: 'doing' });
+    expect(service.complete(chatId, bob, '#1', 'ok')).toMatchObject({ ok: false });
+    outputs.push(output('b', 'built: XYZ_PASS', 2300));
+    expect(
+      await service.tool(chatId, bob, { action: 'complete', id: '#1', result: 'ok' })
+    ).toMatchObject({ ok: true, task: { status: 'done', check: 'XYZ_PASS', checkPassed: true } });
+    expect(store().find(chatId, '#1')?.check).toEqual({ ...check, passed: true });
+  });
+
+  it('人类可直接完成；只有创建者能改验收条件，人类可清除', async () => {
+    service.add(chatId, alice, { title: 'Build', check });
+    expect(service.update(chatId, bob, '#1', { check: { ...check, text: 'X' } })).toMatchObject({
+      ok: false,
+    });
+    expect(
+      service.tool(chatId, alice, {
+        action: 'update',
+        id: '#1',
+        check: { kind: 'output-contains', text: 'NEW' },
+      })
+    ).toMatchObject({ ok: true, task: { check: 'NEW' } });
+    expect(service.update(chatId, 'human', '#1', { check: null })).toMatchObject({ ok: true });
+    expect(store().find(chatId, '#1')).not.toHaveProperty('check');
+    service.update(chatId, 'human', '#1', { check });
+    expect(service.complete(chatId, 'human', '#1')).toMatchObject({
+      ok: true,
+      task: { status: 'done' },
+    });
+    expect(sessionMessages).not.toHaveBeenCalled();
+  });
+
+  it('读不到会话记录按未通过；指派也记认领时间', async () => {
+    service.add(chatId, 'human', { title: 'Build', check });
+    now = 3000;
+    await service.assign(chatId, '#1', bob);
+    expect(store().find(chatId, '#1')?.claimedAt).toBe(3000);
+    sessionMessages.mockRejectedValueOnce(new Error('gone'));
+    expect(
+      await service.tool(chatId, bob, { action: 'complete', id: '#1', result: 'ok' })
+    ).toMatchObject({ ok: false });
+  });
+
+  it('关联委派随验收流转：通过 → done 记通过；未通过 → 退回 todo，result 记原因', () => {
+    const task = { ...todo, check };
+    const linked = taskAfterDelegation(task, delegation({ check }), 5)!;
+    expect(
+      taskAfterDelegation(
+        linked,
+        delegation({ state: 'completed', result: 'ok', check: { ...check, passed: true } }),
+        9
+      )
+    ).toMatchObject({ status: 'done', check: { ...check, passed: true } });
+    const back = taskAfterDelegation(
+      linked,
+      delegation({
+        state: 'failed',
+        failure: 'check',
+        error: '验收未通过：未在工具输出中看到「XYZ_PASS」',
+        result: 'I tried',
+        check: { ...check, passed: false },
+      }),
+      9
+    )!;
+    expect(back).toMatchObject({
+      status: 'todo',
+      result: '验收未通过：未在工具输出中看到「XYZ_PASS」',
+      check: { ...check, passed: false },
+    });
+    expect(taskAfterDelegation(back, delegation({ id: 'next', check }), 10)?.check).toEqual(check);
+  });
+
+  it('gate 带出任务的验收条件', () => {
+    const created = service.add(chatId, 'human', { title: 'Build', check });
+    expect(service.gate(chatId, '#1', alice)).toEqual({
+      ok: true,
+      taskId: created.ok ? created.task.id : '',
+      check,
+    });
   });
 });
 

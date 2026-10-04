@@ -16,6 +16,15 @@ it('normalizes aliases, numeric ids and nulls before typed schema validation', (
     id: '7',
   });
   expect(normalizeGroupTaskParams('bad')).toBe('bad');
+  expect(normalizeGroupTaskParams({ action: 'add', title: 'x', check: 'OK' })).toEqual({
+    action: 'add',
+    title: 'x',
+    check: { kind: 'output-contains', text: 'OK' },
+  });
+  expect(normalizeGroupTaskParams({ action: 'add', title: 'x', check: null })).toEqual({
+    action: 'add',
+    title: 'x',
+  });
 });
 
 it('declares a fully typed schema with prepareArguments', () => {
@@ -39,5 +48,6 @@ it('declares a fully typed schema with prepareArguments', () => {
     'cancel',
   ]);
   for (const property of Object.values(schema.properties)) expect(property).toHaveProperty('type');
+  expect(schema.properties.check).toMatchObject({ type: 'object' });
   expect(tool.prepareArguments).toBeDefined();
 });

@@ -1,11 +1,15 @@
 import { randomUUID } from 'node:crypto';
+import { checkFailureText, checkPassed } from '../../../shared/bots/taskCheck';
 import { TRANSCRIPT_LABELS } from '../../../shared/bots/transcript';
+import type { ProjectedMessage } from '../../../shared/types/agent';
 import {
   type BotChat,
   type Delegation,
   GROUP_TASK_TEXT_MAX,
   GROUP_TASK_TITLE_MAX,
   type GroupTask,
+  parseTaskCheck,
+  type TaskCheck,
 } from '../../../shared/types/bot';
 import type { BotEvent, BotSendResult } from '../../../shared/types/botIpc';
 import type { BotStore } from './botStore';
@@ -16,7 +20,9 @@ import type { GroupTaskStore } from './groupTaskStore';
 /** 'human' = 人类（UI）；其余为成员 botId */
 export type TaskActor = string;
 export type TaskResult = { ok: true; task: GroupTask } | { ok: false; error: string };
-export type TaskGate = { ok: true; taskId: string } | { ok: false; error: string };
+export type TaskGate =
+  | { ok: true; taskId: string; check?: TaskCheck }
+  | { ok: false; error: string };
 
 interface Deps {
   store: GroupTaskStore;
@@ -26,6 +32,8 @@ interface Deps {
   /** 以人类身份在群里发消息（复用群路由） */
   send?: (chatId: string, text: string) => Promise<BotSendResult>;
   cancelDelegation?: (id: string) => void;
+  /** 成员在该群当前会话的消息（complete 验收读最终工具结果） */
+  sessionMessages?: (chatId: string, botId: string) => Promise<readonly ProjectedMessage[]>;
   now?: () => number;
 }
 
@@ -36,6 +44,9 @@ const short = (text: string, max = 80) => {
   return flat.length > max ? `${flat.slice(0, max)}…` : flat;
 };
 const label = (task: GroupTask) => `#${task.seq} ${task.title}`;
+const pending = (check: TaskCheck | undefined) =>
+  check ? { check: { kind: check.kind, text: check.text } } : {};
+const CHECK_INVALID = 'check must be { kind: "output-contains", text } with 1-200 characters.';
 
 /**
  * 委派 → 任务状态机（纯函数）。返回 undefined 表示不变。
@@ -56,6 +67,7 @@ export function taskAfterDelegation(
     if (!free) return undefined;
     return {
       ...task,
+      ...pending(task.check),
       status: 'doing',
       assigneeBotId: record.targetBotId,
       delegationId: record.id,
@@ -63,12 +75,22 @@ export function taskAfterDelegation(
     };
   }
   if (task.status !== 'doing' || task.delegationId !== record.id) return undefined;
+  const verdict =
+    task.check && record.check?.passed !== undefined
+      ? { check: { ...task.check, passed: record.check.passed } }
+      : {};
   if (record.state === 'completed') {
     const result = delegationResultBody(record).trim().slice(0, GROUP_TASK_TEXT_MAX);
-    return { ...task, status: 'done', ...(result ? { result } : {}), updatedAt: now };
+    return { ...task, ...verdict, status: 'done', ...(result ? { result } : {}), updatedAt: now };
   }
   const { assigneeBotId: _assignee, delegationId: _delegation, ...rest } = task;
-  return { ...rest, status: 'todo', updatedAt: now };
+  return {
+    ...rest,
+    ...verdict,
+    ...(record.failure === 'check' && record.error ? { result: record.error } : {}),
+    status: 'todo',
+    updatedAt: now,
+  };
 }
 
 /** 群任务看板：成员工具、人类 UI 与委派联动共用；每次变更推 tasks 事件，关键变更写 system 时间线 */
@@ -79,15 +101,26 @@ export class GroupTaskService {
     return this.group(chatId) ? this.deps.store.list(chatId) : [];
   }
 
-  add(chatId: string, actor: TaskActor, input: { title: string; detail?: string }): TaskResult {
+  add(
+    chatId: string,
+    actor: TaskActor,
+    input: { title: string; detail?: string; check?: TaskCheck }
+  ): TaskResult {
     const denied = this.check(chatId, actor);
     if (denied) return denied;
     if (!input.title.trim()) return { ok: false, error: 'Title must not be empty.' };
     if (input.title.trim().length > GROUP_TASK_TITLE_MAX)
       return { ok: false, error: `Title must be at most ${GROUP_TASK_TITLE_MAX} characters.` };
+    const check = input.check && parseTaskCheck(input.check);
+    if (input.check && !check) return { ok: false, error: CHECK_INVALID };
     const task = this.deps.store.create(
       chatId,
-      { title: input.title, ...(input.detail ? { detail: input.detail } : {}), createdBy: actor },
+      {
+        title: input.title,
+        ...(input.detail ? { detail: input.detail } : {}),
+        ...pending(check),
+        createdBy: actor,
+      },
       this.now()
     );
     if (!task) return { ok: false, error: 'Task not saved.' };
@@ -99,19 +132,31 @@ export class GroupTaskService {
     chatId: string,
     actor: TaskActor,
     ref: string,
-    patch: { title?: string; detail?: string }
+    patch: { title?: string; detail?: string; check?: TaskCheck | null }
   ): TaskResult {
     const found = this.resolve(chatId, actor, ref);
     if (!found.ok) return found;
     const title = patch.title?.trim();
     if (patch.title !== undefined && (!title || title.length > GROUP_TASK_TITLE_MAX))
       return { ok: false, error: 'Title must be 1-200 characters.' };
-    const { detail: _detail, ...rest } = found.task;
+    const check = patch.check ? parseTaskCheck(patch.check) : undefined;
+    if (patch.check && !check) return { ok: false, error: CHECK_INVALID };
+    if (patch.check !== undefined && actor !== 'human' && found.task.createdBy !== actor)
+      return {
+        ok: false,
+        error: `Only the creator of task #${found.task.seq} can change its check.`,
+      };
+    const { detail: _detail, check: current, ...rest } = found.task;
     const detail = patch.detail === undefined ? found.task.detail : patch.detail.trim();
     return this.write(chatId, {
       ...rest,
       ...(title ? { title } : {}),
       ...(detail ? { detail: detail.slice(0, GROUP_TASK_TEXT_MAX) } : {}),
+      ...(patch.check === undefined || (check && current?.text === check.text)
+        ? current
+          ? { check: current }
+          : {}
+        : pending(check)),
       updatedAt: this.now(),
     });
   }
@@ -123,14 +168,29 @@ export class GroupTaskService {
     if (!found.ok) return found;
     const task = found.task;
     if (task.status !== 'todo' || task.assigneeBotId) return { ok: false, error: busy(task, this) };
+    const now = this.now();
     return this.write(
       chatId,
-      { ...task, status: 'doing', assigneeBotId: botId, updatedAt: this.now() },
+      {
+        ...task,
+        ...pending(task.check),
+        status: 'doing',
+        assigneeBotId: botId,
+        claimedAt: now,
+        updatedAt: now,
+      },
       `${this.name(botId)} 认领了 ${label(task)}`
     );
   }
 
-  complete(chatId: string, actor: TaskActor, ref: string, result?: string): TaskResult {
+  /** outputs：成员会话消息，带 check 的任务由成员完成时必须提供且通过 */
+  complete(
+    chatId: string,
+    actor: TaskActor,
+    ref: string,
+    result?: string,
+    outputs?: readonly ProjectedMessage[]
+  ): TaskResult {
     const found = this.resolve(chatId, actor, ref);
     if (!found.ok) return found;
     const task = found.task;
@@ -151,15 +211,44 @@ export class GroupTaskService {
             : `Claim task #${task.seq} before completing it.`,
         };
       if (!text) return { ok: false, error: 'Describe the result when completing a task.' };
+      if (task.check && !(outputs && checkPassed(task.check, outputs, task.claimedAt ?? 0)))
+        return {
+          ok: false,
+          error: `Acceptance check failed (${checkFailureText(task.check)}): none of your final tool outputs since claiming task #${task.seq} contains "${task.check.text}". Do the work so a tool output (e.g. a command) shows it, then complete again.`,
+        };
     }
+    const passed =
+      actor !== 'human' && task.check ? { check: { ...task.check, passed: true } } : {};
     return this.linkedAfter(
       task,
       this.write(
         chatId,
-        { ...task, status: 'done', ...(text ? { result: text } : {}), updatedAt: this.now() },
+        {
+          ...task,
+          ...passed,
+          status: 'done',
+          ...(text ? { result: text } : {}),
+          updatedAt: this.now(),
+        },
         `${this.name(actor)} 完成了 ${label(task)}${text ? `：${short(text)}` : ''}`
       )
     );
+  }
+
+  /** 成员 complete：带 check 时先读其会话再同步判定（读期间状态变化由 complete 重新校验） */
+  private async completeChecked(
+    chatId: string,
+    botId: string,
+    ref: string,
+    result?: string
+  ): Promise<TaskResult> {
+    let outputs: readonly ProjectedMessage[] | undefined;
+    try {
+      outputs = await this.deps.sessionMessages?.(chatId, botId);
+    } catch (cause) {
+      console.warn('[bots] task check read failed', cause);
+    }
+    return this.complete(chatId, botId, ref, result, outputs);
   }
 
   cancel(chatId: string, actor: TaskActor, ref: string): TaskResult {
@@ -199,11 +288,14 @@ export class GroupTaskService {
       return { ok: false, error: 'Member unavailable.' };
     if (task.status === 'done' || task.status === 'canceled' || task.delegationId)
       return { ok: false, error: busy(task, this) };
+    const now = this.now();
     const written = this.write(chatId, {
       ...task,
+      ...pending(task.check),
       status: 'doing',
       assigneeBotId: botId,
-      updatedAt: this.now(),
+      claimedAt: now,
+      updatedAt: now,
     });
     if (!written.ok) return written;
     const sent = this.deps.send
@@ -238,7 +330,9 @@ export class GroupTaskService {
     const free =
       !task.delegationId &&
       (task.status === 'todo' || (task.status === 'doing' && task.assigneeBotId === parentBotId));
-    return free ? { ok: true, taskId: task.id } : { ok: false, error: busy(task, this) };
+    return free
+      ? { ok: true, taskId: task.id, ...pending(task.check) }
+      : { ok: false, error: busy(task, this) };
   }
 
   /** 委派记录每次落盘后调用：按状态机同步任务 */
@@ -260,7 +354,12 @@ export class GroupTaskService {
     if (!this.deps.chats.get(chatId)) return;
     for (const task of this.deps.store.list(chatId)) {
       if (task.status !== 'doing' || task.assigneeBotId !== botId) continue;
-      const { assigneeBotId: _assignee, delegationId: _delegation, ...rest } = task;
+      const {
+        assigneeBotId: _assignee,
+        delegationId: _delegation,
+        claimedAt: _claimed,
+        ...rest
+      } = task;
       this.linkedAfter(
         task,
         this.write(
@@ -281,13 +380,15 @@ export class GroupTaskService {
     this.deps.store.forget(chatId);
   }
 
-  /** group_tasks 工具入口；参数已在 worker 侧归一化，这里仍按 unknown 收窄 */
+  /** group_tasks 工具入口；参数已在 worker 侧归一化，这里仍按 unknown 收窄；带 check 的 complete 异步 */
   tool(chatId: string, botId: string, params: Record<string, unknown>): unknown {
     const text = (key: string) =>
       typeof params[key] === 'string' ? (params[key] as string) : undefined;
     const id = text('id');
     const needId = (run: (ref: string) => TaskResult): unknown =>
       id ? this.view(run(id)) : { ok: false, error: `Specify id for action ${params.action}.` };
+    const check = params.check === undefined ? undefined : parseTaskCheck(params.check);
+    if (params.check !== undefined && !check) return { ok: false, error: CHECK_INVALID };
     switch (params.action) {
       case 'list': {
         const denied = this.check(chatId, botId);
@@ -299,24 +400,37 @@ export class GroupTaskService {
         const title = text('title');
         if (!title) return { ok: false, error: 'Specify title for action add.' };
         const detail = text('detail');
-        return this.view(this.add(chatId, botId, { title, ...(detail ? { detail } : {}) }));
+        return this.view(
+          this.add(chatId, botId, {
+            title,
+            ...(detail ? { detail } : {}),
+            ...(check ? { check } : {}),
+          })
+        );
       }
       case 'claim':
         return needId((ref) => this.claim(chatId, botId, ref));
       case 'update': {
         const title = text('title');
         const detail = text('detail');
-        if (title === undefined && detail === undefined)
-          return { ok: false, error: 'Specify title or detail for action update.' };
+        if (title === undefined && detail === undefined && !check)
+          return { ok: false, error: 'Specify title, detail or check for action update.' };
         return needId((ref) =>
           this.update(chatId, botId, ref, {
             ...(title !== undefined ? { title } : {}),
             ...(detail !== undefined ? { detail } : {}),
+            ...(check ? { check } : {}),
           })
         );
       }
-      case 'complete':
+      case 'complete': {
+        const task = id ? this.deps.store.find(chatId, id) : undefined;
+        if (id && task?.check && task.assigneeBotId === botId && !task.delegationId)
+          return this.completeChecked(chatId, botId, id, text('result')).then((result) =>
+            this.view(result)
+          );
         return needId((ref) => this.complete(chatId, botId, ref, text('result')));
+      }
       case 'cancel':
         return needId((ref) => this.cancel(chatId, botId, ref));
       default:
@@ -341,6 +455,8 @@ export class GroupTaskService {
       ...(task.assigneeBotId ? { assignee: this.name(task.assigneeBotId) } : {}),
       createdBy: this.name(task.createdBy),
       ...(task.result ? { result: task.result } : {}),
+      ...(task.check ? { check: task.check.text } : {}),
+      ...(task.check?.passed !== undefined ? { checkPassed: task.check.passed } : {}),
     };
   }
 

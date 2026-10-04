@@ -518,6 +518,20 @@ describe('群任务看板 IPC', () => {
     expect(await call(IPC_CHANNELS.BOT_TASK_SAVE, { chatId, id, title: 'Login v2' })).toMatchObject(
       { ok: true, task: { title: 'Login v2' } }
     );
+    expect(
+      await call(IPC_CHANNELS.BOT_TASK_SAVE, {
+        chatId,
+        id,
+        title: 'Login v2',
+        check: 'x'.repeat(201),
+      })
+    ).toEqual({ ok: false, error: 'invalid' });
+    expect(
+      await call(IPC_CHANNELS.BOT_TASK_SAVE, { chatId, id, title: 'Login v2', check: ' PASS ' })
+    ).toMatchObject({ ok: true, task: { check: { kind: 'output-contains', text: 'PASS' } } });
+    expect(
+      (await call(IPC_CHANNELS.BOT_TASK_SAVE, { chatId, id, title: 'Login v2', check: '' })).task
+    ).not.toHaveProperty('check');
     expect(await call(IPC_CHANNELS.BOT_TASK_COMPLETE, { chatId, id, result: 'ok' })).toMatchObject({
       ok: true,
       task: { status: 'done', result: 'ok' },

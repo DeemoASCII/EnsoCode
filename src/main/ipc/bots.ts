@@ -16,6 +16,7 @@ import {
   GROUP_TASK_TITLE_MAX,
   type HumanEntryRefs,
   isBotId,
+  TASK_CHECK_TEXT_MAX,
 } from '@shared/types/bot';
 import type {
   BotAbilitySuggestResult,
@@ -459,6 +460,8 @@ export function getBotServices(): BotServices | null {
     );
   });
   let delegationsRef: DelegationService | undefined;
+  const conversationMessages = (conversationId: string) =>
+    readBotSessionMessages(sessionDir(), authority.conversation(conversationId)?.sessionFile);
   const tasks = new GroupTaskService({
     store: taskStore,
     chats,
@@ -468,6 +471,11 @@ export function getBotServices(): BotServices | null {
       groups.send(chatId, text, { deliveryId: randomUUID(), source: 'human' }),
     cancelDelegation: (id) => {
       delegationsRef?.cancel(id);
+    },
+    sessionMessages: async (chatId, botId) => {
+      const conversationId = chats.get(chatId)?.sessions[botId]?.conversationId;
+      if (!conversationId) throw new Error('member session unavailable');
+      return conversationMessages(conversationId);
     },
   });
   host.onDiscard((scope) => {
@@ -481,6 +489,7 @@ export function getBotServices(): BotServices | null {
     store: delegationStore,
     emit: emitBotEvent,
     tasks,
+    sessionMessages: conversationMessages,
     deliverGroupResult: async (record, text, deliveryId) => {
       if (
         !record.chatId ||
@@ -1104,18 +1113,23 @@ export function registerBotHandlers(): void {
       typeof input.title !== 'string' ||
       input.title.length > GROUP_TASK_TITLE_MAX ||
       !optionalText(input.detail, GROUP_TASK_TEXT_MAX) ||
+      !optionalText(input.check, TASK_CHECK_TEXT_MAX) ||
       (input.id !== undefined && !isBotId(input.id))
     )
       return INVALID;
     const detail = typeof input.detail === 'string' ? input.detail : undefined;
+    const text = typeof input.check === 'string' ? input.check.trim() : undefined;
+    const check = text ? { kind: 'output-contains' as const, text } : undefined;
     return typeof input.id === 'string'
       ? tasks.update(input.chatId, 'human', input.id, {
           title: input.title,
           ...(detail !== undefined ? { detail } : {}),
+          ...(text !== undefined ? { check: check ?? null } : {}),
         })
       : tasks.add(input.chatId, 'human', {
           title: input.title,
           ...(detail ? { detail } : {}),
+          ...(check ? { check } : {}),
         });
   });
   handle(IPC_CHANNELS.BOT_TASK_ASSIGN, 'write', (_sender, request, services) => {

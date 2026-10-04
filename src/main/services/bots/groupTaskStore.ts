@@ -58,7 +58,12 @@ export class GroupTaskStore {
 
   create(
     chatId: string,
-    input: { title: string; detail?: string; createdBy: GroupTask['createdBy'] },
+    input: {
+      title: string;
+      detail?: string;
+      check?: GroupTask['check'];
+      createdBy: GroupTask['createdBy'];
+    },
     now: number
   ): GroupTask | undefined {
     if (!isBotChatId(chatId)) return undefined;
@@ -70,6 +75,7 @@ export class GroupTaskStore {
       seq: this.load(chatId).maxSeq + 1,
       title,
       ...(detail ? { detail } : {}),
+      ...(input.check ? { check: input.check } : {}),
       status: 'todo',
       createdBy: input.createdBy,
       createdAt: now,

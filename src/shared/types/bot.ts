@@ -121,7 +121,7 @@ export interface Delegation {
   context: string;
   childConversationId: string;
   state: DelegationState;
-  failure?: 'interrupted' | 'timeout' | 'denied' | 'error';
+  failure?: 'interrupted' | 'timeout' | 'denied' | 'error' | 'check';
   error?: string;
   result?: string;
   deliveredAt?: number;
@@ -139,6 +139,8 @@ export interface Delegation {
   timeoutMinutes?: number;
   /** 发起方要求父回合被停止 / 中断后仍继续 */
   keep?: true;
+  /** 验收条件；终态时记 passed，未通过为 failed + failure:'check' */
+  check?: TaskCheck;
 }
 
 export function parseDelegation(value: unknown): Delegation | undefined {
@@ -179,7 +181,8 @@ export function parseDelegation(value: unknown): Delegation | undefined {
     value.failure === 'interrupted' ||
     value.failure === 'timeout' ||
     value.failure === 'denied' ||
-    value.failure === 'error'
+    value.failure === 'error' ||
+    value.failure === 'check'
   )
     record.failure = value.failure;
   if (typeof value.error === 'string') record.error = value.error;
@@ -192,6 +195,8 @@ export function parseDelegation(value: unknown): Delegation | undefined {
   if (typeof value.timeoutMinutes === 'number' && value.timeoutMinutes > 0)
     record.timeoutMinutes = value.timeoutMinutes;
   if (value.keep === true) record.keep = true;
+  const check = parseTaskCheck(value.check);
+  if (check) record.check = check;
   if (value.effectivePermissions !== undefined) {
     const permissions = value.effectivePermissions;
     if (
@@ -739,8 +744,33 @@ export interface GroupTask {
   delegationId?: string;
   /** 完成说明 */
   result?: string;
+  /** 验收条件；passed 为最近一次校验结果 */
+  check?: TaskCheck;
+  /** 成员认领 / 被指派的时间：complete 验收只看此后的工具结果 */
+  claimedAt?: number;
   createdAt: number;
   updatedAt: number;
+}
+
+export const TASK_CHECK_TEXT_MAX = 200;
+
+/** 可验证完成条件：工具最终输出里包含 text */
+export interface TaskCheck {
+  kind: 'output-contains';
+  text: string;
+  passed?: boolean;
+}
+
+export function parseTaskCheck(value: unknown): TaskCheck | undefined {
+  if (!isObject(value) || value.kind !== 'output-contains' || typeof value.text !== 'string')
+    return undefined;
+  const text = value.text.trim();
+  if (!text || text.length > TASK_CHECK_TEXT_MAX) return undefined;
+  return {
+    kind: 'output-contains',
+    text,
+    ...(typeof value.passed === 'boolean' ? { passed: value.passed } : {}),
+  };
 }
 
 export function parseGroupTask(value: unknown): GroupTask | undefined {
@@ -770,5 +800,8 @@ export function parseGroupTask(value: unknown): GroupTask | undefined {
   if (isBotId(value.assigneeBotId)) task.assigneeBotId = value.assigneeBotId;
   if (isBotId(value.delegationId)) task.delegationId = value.delegationId;
   if (isText(value.result)) task.result = value.result.slice(0, GROUP_TASK_TEXT_MAX);
+  const check = parseTaskCheck(value.check);
+  if (check) task.check = check;
+  if (isTime(value.claimedAt)) task.claimedAt = value.claimedAt;
   return task;
 }

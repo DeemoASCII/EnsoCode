@@ -32,6 +32,15 @@ it('normalizes optional nulls and boolean text before full typed schema validati
   expect(normalizeDelegationParams({ deadlineMinutes: 'soon' })).toEqual({
     deadlineMinutes: 'soon',
   });
+  expect(normalizeDelegationParams({ to: 'Bob', task: 't', check: 'XYZ_PASS' })).toEqual({
+    to: 'Bob',
+    task: 't',
+    check: { kind: 'output-contains', text: 'XYZ_PASS' },
+  });
+  expect(normalizeDelegationParams({ to: 'Bob', task: 't', check: null })).toEqual({
+    to: 'Bob',
+    task: 't',
+  });
   const tools = createDelegationTools(
     new MemoryInvoker({ sessionId: 's', generation: 'g' }, () => {})
   );
@@ -42,6 +51,7 @@ it('normalizes optional nulls and boolean text before full typed schema validati
     'context',
     'deadlineMinutes',
     'keep',
+    'check',
   ]);
   for (const tool of tools) {
     const schema = tool.parameters as unknown as {

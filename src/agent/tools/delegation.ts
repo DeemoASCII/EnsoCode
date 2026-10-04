@@ -1,4 +1,5 @@
 import type { ToolDefinition } from '@earendil-works/pi-coding-agent';
+import { normalizeTaskCheck } from '@shared/bots/taskCheck';
 import type { MemoryInvoker } from './memory';
 
 export type DelegationOp =
@@ -22,8 +23,24 @@ export function normalizeDelegationParams(raw: unknown): unknown {
     const minutes = Number(params.deadlineMinutes);
     if (Number.isFinite(minutes)) params.deadlineMinutes = minutes;
   }
+  if ('check' in params) {
+    params.check = normalizeTaskCheck(params.check);
+    if (params.check === undefined) delete params.check;
+  }
   return params;
 }
+
+export const CHECK_SCHEMA = {
+  type: 'object',
+  description:
+    'Verifiable completion condition: done only if a tool result (e.g. a command output) contains text. A plain string is accepted as the text.',
+  properties: {
+    kind: { type: 'string', enum: ['output-contains'] },
+    text: { type: 'string', minLength: 1, maxLength: 200 },
+  },
+  required: ['kind', 'text'],
+  additionalProperties: false,
+};
 
 export function createDelegationTools(
   invoker: MemoryInvoker<DelegationOp>,
@@ -62,6 +79,7 @@ export function createDelegationTools(
     define(
       'delegate',
       "Delegate a task to another member by name or id. Returns immediately; results arrive asynchronously. Context is truncated to 8000 characters. The delegation fails with a timeout after deadlineMinutes (capped by the member's own limit, 240 minutes by default). If the user stops or interrupts your current turn, delegations started in it are canceled unless keep is true." +
+        " With check, the delegation passes only if one of the member's final tool outputs contains check.text; otherwise it ends as failed with 'acceptance check failed'." +
         (options.groupTasks
           ? ' Pass taskId (e.g. "#3") to hand a group board task to the member: the task becomes doing with them as assignee, and is marked done (or returned to todo on failure/cancel) when the delegation ends.'
           : ''),
@@ -72,6 +90,7 @@ export function createDelegationTools(
         ...(options.groupTasks ? { taskId: { type: 'string', minLength: 1 } } : {}),
         deadlineMinutes: { type: 'number', minimum: 1 },
         keep: { type: 'boolean' },
+        check: CHECK_SCHEMA,
       },
       ['to', 'task']
     ),

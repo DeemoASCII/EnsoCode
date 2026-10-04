@@ -35,6 +35,7 @@ import {
   parseUpdateConversationSelectionRequest,
   THINKING_LEVELS,
 } from '@shared/types/agent';
+import { parseTaskCheck } from '@shared/types/bot';
 import { effectiveSubagentAllowedModes } from '@shared/types/builtinTools';
 import {
   parseAgentDispatchRequest,
@@ -1165,8 +1166,10 @@ export function registerAgentHandlers(): void {
           (input.context === undefined || typeof input.context === 'string') &&
           (input.taskId === undefined || typeof input.taskId === 'string') &&
           (input.deadlineMinutes === undefined || typeof input.deadlineMinutes === 'number') &&
-          (input.keep === undefined || typeof input.keep === 'boolean')
+          (input.keep === undefined || typeof input.keep === 'boolean') &&
+          (input.check === undefined || parseTaskCheck(input.check))
         ) {
+          const check = parseTaskCheck(input.check);
           result = service.delegate(identity.sessionId, {
             to: input.to,
             task: input.task,
@@ -1176,6 +1179,7 @@ export function registerAgentHandlers(): void {
               ? { deadlineMinutes: input.deadlineMinutes }
               : {}),
             ...(input.keep === true ? { keep: true } : {}),
+            ...(check ? { check } : {}),
           });
         } else if (
           op === 'check_delegation' &&
@@ -1187,7 +1191,15 @@ export function registerAgentHandlers(): void {
             ...(typeof input.cancel === 'boolean' ? { cancel: input.cancel } : {}),
           });
         } else result = { ok: false, error: 'Invalid delegation arguments.' };
-        sendDelegationResultToSession(identity, requestId, { ok: true, result });
+        void Promise.resolve(result).then(
+          (value) =>
+            sendDelegationResultToSession(identity, requestId, { ok: true, result: value }),
+          (error: unknown) =>
+            sendDelegationResultToSession(identity, requestId, {
+              ok: false,
+              error: error instanceof Error ? error.message : String(error),
+            })
+        );
       } catch (error) {
         sendDelegationResultToSession(identity, requestId, {
           ok: false,

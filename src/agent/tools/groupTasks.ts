@@ -1,5 +1,6 @@
 import type { ToolDefinition } from '@earendil-works/pi-coding-agent';
-import type { DelegationOp } from './delegation';
+import { normalizeTaskCheck } from '@shared/bots/taskCheck';
+import { CHECK_SCHEMA, type DelegationOp } from './delegation';
 import type { MemoryInvoker } from './memory';
 
 const ACTIONS = ['list', 'add', 'claim', 'update', 'complete', 'cancel'] as const;
@@ -23,6 +24,10 @@ export function normalizeGroupTaskParams(raw: unknown): unknown {
   for (const key of ['id', 'title', 'detail', 'result']) {
     if (params[key] === null || params[key] === undefined) delete params[key];
   }
+  if ('check' in params) {
+    params.check = normalizeTaskCheck(params.check);
+    if (params.check === undefined) delete params.check;
+  }
   if (typeof params.id === 'number') params.id = String(params.id);
   if (typeof params.action === 'string') {
     const action = params.action.trim().toLowerCase();
@@ -36,7 +41,7 @@ export function createGroupTasksTool(invoker: MemoryInvoker<DelegationOp>): Tool
     name: 'group_tasks',
     label: 'group_tasks',
     description:
-      "Shared task board of this group chat. list: open tasks (#N, status, assignee). add: create a task (title, optional detail) - only for real multi-step work, not every message. claim: take a todo task (id) before working on it; fails if someone already claimed it. update: edit title/detail. complete: finish a task you claimed, with result (what was done). cancel: drop a task you created or own. Ids look like '#3'.",
+      "Shared task board of this group chat. list: open tasks (#N, status, assignee, check). add: create a task (title, optional detail, optional check) - only for real multi-step work, not every message. claim: take a todo task (id) before working on it; fails if someone already claimed it. update: edit title/detail (check only by its creator). complete: finish a task you claimed, with result (what was done); if the task has a check, complete is rejected unless one of your final tool outputs since claiming contains check.text. cancel: drop a task you created or own. Ids look like '#3'.",
     parameters: {
       type: 'object',
       properties: {
@@ -45,6 +50,7 @@ export function createGroupTasksTool(invoker: MemoryInvoker<DelegationOp>): Tool
         title: { type: 'string', minLength: 1, maxLength: 200 },
         detail: { type: 'string' },
         result: { type: 'string', description: 'Completion summary (required for complete)' },
+        check: CHECK_SCHEMA,
       },
       required: ['action'],
       additionalProperties: false,

@@ -1,5 +1,5 @@
 import type { BotChat, BotProfile, Delegation, GroupTask } from '@shared/types/bot';
-import { GROUP_TASK_TEXT_MAX, GROUP_TASK_TITLE_MAX } from '@shared/types/bot';
+import { GROUP_TASK_TEXT_MAX, GROUP_TASK_TITLE_MAX, TASK_CHECK_TEXT_MAX } from '@shared/types/bot';
 import { Check, Loader2, MoreHorizontal, Pencil, Plus, Trash2, UserPlus, X } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { ConfirmDialog } from '@/components/chat/ConfirmDialog';
@@ -32,7 +32,7 @@ import { isRetried } from '@/stores/bots/delegations';
 import { chatDelegationGroups, taskColumns } from '@/stores/bots/groupBoard';
 import { BotAvatar } from './BotAvatar';
 import { FieldLabel } from './BotFields';
-import { DelegationCard } from './DelegationCard';
+import { CheckBadge, DelegationCard } from './DelegationCard';
 
 /** 已完成 / 已取消 / 终态委派默认只显示最近几条 */
 const RECENT = 5;
@@ -271,10 +271,18 @@ function TaskCard({
         </div>
       )}
       {task.result && (
-        <div className="mt-1 rounded bg-success/10 px-1.5 py-1 text-foreground">
+        <div
+          className={cn(
+            'mt-1 rounded px-1.5 py-1 text-foreground',
+            task.status !== 'done' && task.check?.passed === false
+              ? 'bg-destructive/10'
+              : 'bg-success/10'
+          )}
+        >
           <div className="line-clamp-3 whitespace-pre-wrap">{task.result}</div>
         </div>
       )}
+      {task.check && <CheckBadge check={task.check} className="mt-1" />}
       <div className="mt-1 flex flex-wrap items-center gap-x-1.5 text-muted-foreground">
         {assignee || task.assigneeBotId ? (
           <span className="flex items-center gap-1">
@@ -304,6 +312,7 @@ function TaskEditor({
   const { t } = useI18n();
   const [title, setTitle] = useState(task?.title ?? '');
   const [detail, setDetail] = useState(task?.detail ?? '');
+  const [check, setCheck] = useState(task?.check?.text ?? '');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const save = async () => {
@@ -314,6 +323,7 @@ function TaskEditor({
         chatId,
         title: title.trim(),
         detail: detail.trim(),
+        check: check.trim(),
         ...(task ? { id: task.id } : {}),
       });
       if (result.ok) onClose(true);
@@ -345,6 +355,19 @@ function TaskEditor({
               maxLength={GROUP_TASK_TEXT_MAX}
               onChange={(event) => setDetail(event.target.value)}
             />
+          </div>
+          <div>
+            <FieldLabel>{t('Acceptance check (optional)')}</FieldLabel>
+            <Input
+              value={check}
+              maxLength={TASK_CHECK_TEXT_MAX}
+              onChange={(event) => setCheck(event.target.value)}
+            />
+            <p className="mt-1 text-muted-foreground text-xs">
+              {t(
+                "Done only when the member's tool output contains this text, e.g. a command printing ALL_TESTS_PASS."
+              )}
+            </p>
           </div>
           {error && <p className="text-destructive text-sm">{error}</p>}
         </DialogPanel>

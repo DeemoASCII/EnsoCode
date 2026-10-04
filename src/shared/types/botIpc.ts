@@ -50,6 +50,8 @@ export interface BotTaskSaveInput {
   id?: string;
   title: string;
   detail?: string;
+  /** 验收文本（output-contains）；编辑时传空串清除 */
+  check?: string;
 }
 
 /** renderer 可写的成员字段；engine:null = 跟随全局默认模型 */

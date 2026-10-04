@@ -141,7 +141,7 @@ interface Delegation {
   task: string; context: string;            // context ≤ 8k 字符
   childConversationId: string;
   state: 'queued' | 'running' | 'completed' | 'failed' | 'canceled';
-  failure?: 'interrupted' | 'timeout' | 'denied' | 'error';
+  failure?: 'interrupted' | 'timeout' | 'denied' | 'error' | 'check';   // check = 验收未通过
   result?: string; deliveredAt?: string;    // 只投递一次
   depth: number; createdAt; finishedAt?;
   batchId?: string;                         // 发起时父会话所在轮次的键（host turnKey），同父会话同 batchId 为一批
@@ -149,6 +149,7 @@ interface Delegation {
   retryOf?: string;                         // 由哪条委派重试而来；被指向的记录即「已重试」
   timeoutMinutes?: number;                  // 本次时限（发起方 deadlineMinutes 与目标上限取小）
   keep?: true;                              // 父回合被停止 / 中断后仍继续
+  check?: { kind: 'output-contains'; text: string; passed?: boolean };  // 可验证完成条件，见「可验证完成条件」
 }
 ```
 
@@ -229,7 +230,7 @@ bot 会话额外挂两个工具：
 
 **权限**按目标成员自身能力执行：工具集（tools）、技能（skillIds）、MCP（mcpServerIds）都用目标成员自己的配置，审批档取父子两者中更严的一档；能不能委派只由 `canDelegateTo/acceptFrom` 控制。工作区沿用父会话的工作区（被委派的人在委托方的目录里干活）。之所以不取交集：委派的意义就是把自己做不了的事交给有能力的成员，真机里只读的项目经理委派全栈工程师改文件，交集后子会话只剩只读，委派形同虚设；风险由委派授权名单和更严的审批档兜住。这条只管委派会话，readonly 成员自己的 `subagent` 子代理仍保持只读。
 
-**完成判定**：子会话 `turn-completed` 且这一轮没有以错误或中断结束，才算完成；result 取最后一条 assistant 文本。
+**完成判定**：子会话 `turn-completed` 且这一轮没有以错误或中断结束，才算完成；result 取最后一条 assistant 文本。带 `check` 的委派还要过验收（见「可验证完成条件」），未通过记 `failed / failure:'check'`。
 
 **结果投递**：父会话空闲时注入 `<delegation-result id="delegationId">` 唤醒它；父会话忙时等到本轮终态。同一父会话同一轮发起的多个委派（同 `batchId`）是一个批次：先到的结果暂存，批次全部到终态（completed / failed（含 timeout、interrupted）/ canceled）后合并为一条 `<delegation-results id="batchId">` 注入，内含各条 `<delegation-result>`；批次未齐时在群时间线写 system 提示（如「小设 已完成，等待 阿全」，私聊无提示，级联取消不提示），齐了不额外提示。单委派批次格式与 deliveryId 不变；不在宿主轮次内发起的委派与 UI 重试产生的委派各自成批（重试不并入原批次）。批次状态完全由持久化记录按（parent, batchId）聚合推导。稳定 `deliveryId`：单条为 `delegationId`，多条为 `batchId`；父会话实际开始处理后才给批次内每条记录写 `deliveredAt`；重启后未确认结果至少一次重投，父会话依据内存及 jsonl 用户消息中的结果 id 去重。群时间线只保留一条带 `summary` 的 `delegation` 条目，供卡片与增量上下文使用，不再以被委派成员名义重复写 `bot` 消息；该条目不触发路由。
 
@@ -322,7 +323,7 @@ Main 在 `spawnSession` 里根据 `ConversationAuthority.bot` 组装提示词，
 每个群一份共享任务清单，给多步工作做显式的拆分、认领和交付记录。
 
 - **存储**：`userData/bot-chats/<chatId>/tasks.jsonl`，append-only 整条快照（与 `delegations.jsonl` 一致，后写覆盖），删除写墓碑 `{id, seq, deleted:true}`；坏行 / 截断行跳过；每次追加带前导换行隔离撕裂的末行。`seq` 取历史最大值 +1（含已删除），显示为 `#N`，不复用。删群时整个聊天目录被删，同时清掉内存缓存。
-- **字段**：`{id, seq, title, detail?, status: todo|doing|done|canceled, assigneeBotId?, createdBy: 'human'|botId, delegationId?, result?, createdAt, updatedAt}`；标题 ≤ 200，详情 / 结果 ≤ 4000。
+- **字段**：`{id, seq, title, detail?, status: todo|doing|done|canceled, assigneeBotId?, createdBy: 'human'|botId, delegationId?, result?, check?, claimedAt?, createdAt, updatedAt}`；标题 ≤ 200，详情 / 结果 ≤ 4000，验收文本 ≤ 200。
 - **成员工具 `group_tasks`**：只挂在群聊成员会话（spawn 命令 `botGroupTasks`，由 `BotSpawnSpec.groupTasks` 在 chat.kind=group 时置位），私聊与委派子会话不挂；`action: list | add | claim | update | complete | cancel`，参数 `id / title / detail / result` 全部声明类型；`prepareArguments` 在 schema 校验前归一化（action 别名与大小写、`taskId`/`task_id` → `id`、数字 id → 字符串、可选键 null 删除）。经 `delegation-invoke`（op=`group_tasks`）进 Main，Main 再校验：开关开启、会话是该成员在该群的当前会话、成员仍在群里且未归档。规则：claim 只认领 `todo` 且无人负责的任务，「读-判-写」在 Main 单线程里一次同步完成，第二个认领返回 `Task #N is already claimed by X.`；complete 只能由负责人完成且必须写 result；cancel 只能由创建者或负责人取消。只读成员同样可以使用全部动作：看板是 Main 内的协调元数据，不涉及工作区文件写入，不突破只读档的边界。
 - **与委派打通**：`delegate` 在群聊会话里多一个可选参数 `taskId`（`#N` 或 id）。创建前过闸门：任务必须是 `todo`，或发起人自己认领中且尚无委派；否则拒绝且不建记录。委派记录每次落盘后同步任务（纯函数 `taskAfterDelegation`）：创建 → `doing`、负责人 = 目标、记 `delegationId`；完成 → `done`，result 取委派结果；失败 / 超时 / 中断 / 取消 → 退回 `todo` 并清负责人与 `delegationId`。只有任务仍由这条委派负责时终态才生效。委派进行中的任务成员不能用 `group_tasks` complete / cancel（真机里被委派的成员在群会话里看到「委派给你」后自己标了完成，导致委派被连带取消、卡片显示「已取消」），只能等委派结束自动同步；取消走 `check_delegation`，人类仍可直接完成 / 取消。UI 重试时，任务仍空闲才沿用关联。人类取消 / 完成 / 删除任务、成员离开时，先落新状态再取消关联中的委派，委派终态回写时任务已不归它负责，不会二次改写。
 - **人类 UI**：群信息面板「看板」页签，按 待办 / 进行中 / 已完成（默认最近 5 条）/ 已取消（默认折叠）分组；新建、编辑标题与详情、指派、标记完成、取消、删除。指派 = 任务置 `doing` + 负责人，再以人类身份在群里发「@成员 请处理任务 #N：标题」，复用群路由；投递失败回滚任务。
@@ -616,3 +617,21 @@ Main 在 `spawnSession` 里根据 `ConversationAuthority.bot` 组装提示词，
 **测试**：宿主静默（阈值、子代理输出撤销、审批期间不算、停止清理）、群批次合并（[skip]、失败、停止不报）、通知文案与前后台、合并器（合并、执行中补跑、失败不影响后续）、store 合并刷新与 afterSeq / 过期 seq、`readSince` 与入参收窄、聊天标志规则与解析、提醒定时器（过期立即触发、分段、dispose）、IPC 搁置 / 提醒 / 发言唤醒、置顶排序与未读回退、收件箱来源推导、存储（去重、忽略持久、重开、坏行、压缩、过期丢弃）、服务（审批与委派归属、全量同步、忽略校验、重启后结束）、收件箱 IPC、pair 解析与只读作用域、手机帧分发与标签。
 
 **真机**（隔离 userData，Max claude-sonnet-4-6 + hei qwen3.8-max）：两位成员在私聊里各跑 `sleep 100`，约 90s 时头部出现「已安静 9x 秒」、收件箱徽标 1 与静默卡片，命令结束后卡片与提示自动消失（jsonl 中两条静默均有 resolvedAt）。窗口在后台时私聊各弹一条「阿克 / 阿Q · 回复完成」，群里 @ 两人与 qwen→claude 接力各只弹一条「体验群 · 阿克、阿Q 已回复」；在 Code 模式调用通知点击路径切回 Bot 并打开群。接力期间 8 个 Bot 事件只引起 3 次时间线更新，seq 连续。右键上移与真实拖拽（CDP 拦截拖拽）都能调整置顶顺序；搁置后进入「已搁置」并取消置顶，向该私聊发消息即回到进行中；群设 1 分钟后提醒，到点弹「稍后提醒 · 体验群」、回到群聊分组并标为未读；标为未读后侧栏出现未读点。收件箱：Claude 成员改为全程审批后执行 `touch` 出现审批卡片并从收件箱放行（文件写入），qwen 预算 1 token 被拒后出现预算卡片，忽略后重启应用仍为已忽略、`reopen` 后重新出现，去掉预算后自动结束；qwen 用 `routine_propose` 提议的「早报」以待批准卡片出现，忽略被 Main 拒绝，拒绝后消失。未在真机验证：手机端收件箱（协议、解析与客户端有单测）、打包版原生通知的点击跳转（dev 版 macOS 走 osascript 无点击，点击路径直接调用验证）。
+
+## 可验证完成条件（2026-10 补充）
+
+委派和群看板任务可带可选验收条件 `check: { kind: 'output-contains', text }`（text 去首尾空白后 1–200 字，仅此一种）。思路借鉴 EnsoBot 的 `canFinishTask`：成员说「做完了」不算数，要在工具输出里看到约定的文本。
+
+**判定**（`shared/bots/taskCheck.ts` 纯函数 `checkPassed`）：读成员会话 jsonl 当前分支投影（`readBotSessionMessages`，worker 是同步追加写，`turn-completed` / 工具调用时已落盘），只看起点之后的 `toolResult`，**按 toolCallId 取最终一条**——最终是 `isError` 的不算，中途出现过的 PASS 不能沿用（EnsoBot 的经验）；`delegate / check_delegation / group_tasks / group_history / routine_propose` 这类协作工具会回显任务与验收文本，不算证据；助手正文不算。投影单条文本有 32KB 截断，超长输出靠后的文本可能看不到。
+
+**委派**：`delegate` 新增可选 `check`（schema 声明完整 object 类型；`prepareArguments` 在校验前把字符串归一化为 output-contains、null / 空串删除，`output_contains` 写法也接受）；带 `taskId` 且未传 check 时沿用看板任务的 check（`tasks.gate` 返回）。子会话收到的 `<delegation-task>` 里附 `<acceptance-check>` 说明条件。子会话本轮正常结束时异步读日志校验（起点 = 委派 `createdAt`，子会话是专用会话），读完重新取记录、仍进行中才落终态；读失败按未通过。通过 → `completed` + `check.passed:true`；未通过 → **`failed` + `failure:'check'`** + `check.passed:false`，`error` 为「验收未通过：未在工具输出中看到「…」」，`result` 仍保留子成员的回复。回合本身失败不做校验，照旧 `failure:'error'`。
+
+为什么用 `failed` 而不是 `completed + passed:false` 或新状态：现有状态集与手机协议（`PairDelegationState`、时间线 `delegation` 条目的 state/summary）不用改；重试链（只允许 failed / canceled）、看板联动（非 completed 退回待办）、批次合并（终态即齐）都天然成立；收件箱的中断提示只看 `interrupted` 不受影响。回传父会话为 `status="failed"`，正文是验收说明 + 空行 + 子成员回复（`delegationResultBody`）；批次等待提示写「验收未通过」。重试沿用 check。
+
+**看板任务**：`group_tasks` add / update 可带 `check`，update 改 check 只限创建者（防止负责人改条件绕过）；人类在看板新建 / 编辑里填写，`BOT_TASK_SAVE` 收 `check?: string`（≤200，编辑时空串 = 清除；文本不变时保留上次校验结果）。claim 与人类指派记 `claimedAt` 并清掉上次的 passed。带 check 的任务由成员 complete 时，Main 先异步读该成员在本群当前会话的日志，再同步重新校验状态并判定（起点 = `claimedAt`）；不通过拒绝 complete，返回 `Acceptance check failed (验收未通过：…): …`，通过则 `check.passed:true`。人类「标记完成」不校验。关联委派的任务按委派结果流转：通过 → done 并记通过；验收未通过 → 退回 todo，`result` 记未通过原因，`check.passed:false`。成员 list 看到 `check` 文本与 `checkPassed`。`group_tasks` 的 complete 因此可能返回 Promise，`agent.ts` 的 `delegation-invoke` 统一 `Promise.resolve` 后回 worker。
+
+**UI**：看板任务卡与 `DelegationCard` 显示「验收条件 <文本>」与通过 / 未通过徽标（`CheckBadge`）；退回待办且未通过的任务 result 底色为红；委派卡失败说明为「验收未通过：未在工具输出中看到「…」」。手机端不改。
+
+**测试**：判定纯函数（起点、按 toolCallId 取最终、错误覆盖 PASS、协作工具与正文不算）、解析与归一化、工具参数归一化与 schema、委派通过 / 未通过 / 读失败 / 起点前输出 / 继承任务 check / 回合失败不校验 / 重试沿用、看板 complete 拒绝与通过、创建者才能改 check、人类直接完成与清除、指派记认领时间、委派联动状态机、gate 带出 check、`BOT_TASK_SAVE` 入参收窄。
+
+**真机**（隔离 userData，Max claude-sonnet-4-6 + hei qwen3.8-max-0902）：Claude 成员委派 qwen 成员运行 `echo XYZ_PASS`、check=XYZ_PASS → completed、通过；qwen 成员委派 Claude 成员运行 `echo HELLO_ONLY`、check=NEVER_SEEN_42 → failed/check，父会话收到 `status="failed"` 且正文以「验收未通过：未在工具输出中看到「NEVER_SEEN_42」」开头，qwen 如实转述。看板：人类建任务 #1（check=BOARD_OK_7）指派 qwen，qwen 先直接 complete 被拒（list 输出里虽有 BOARD_OK_7 但不算证据），跑 `echo BOARD_OK_7` 后 complete 通过；任务 #2（check=FAIL_MARK_9）由 Claude 带 taskId 委派 qwen 跑 `echo OTHER_TEXT`，委派继承 check 并以验收未通过结束，#2 退回待办、result 记原因、卡片显示「未通过」。
