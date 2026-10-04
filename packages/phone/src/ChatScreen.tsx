@@ -11,7 +11,7 @@ import {
   PanelLeft,
   SquarePen,
 } from 'lucide-react';
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef } from 'react';
+import { type ReactNode, useCallback, useEffect, useLayoutEffect, useMemo, useRef } from 'react';
 import { ApprovalBar } from '@/components/chat/ApprovalBar';
 import { AskBar } from '@/components/chat/AskBar';
 import { Composer } from '@/components/chat/Composer';
@@ -77,7 +77,7 @@ interface Props {
   onApproval(requestId: string, decision: 'allow' | 'allowSession' | 'deny'): void;
   onAsk(requestId: string, answer: string): void;
   /** Bot 成员会话：发送走 bot-send，无回退/重试/斜杠命令；readOnly = 群聊「查看过程」 */
-  bot?: { readOnly?: boolean; onBack?(): void; notice?: string | null };
+  bot?: { readOnly?: boolean; onBack?(): void; notice?: string | null; outbox?: ReactNode };
 }
 
 /** 会话页：复用桌面的时间线 / 审批条 / 输入框，保持与桌面一致的渲染 */
@@ -385,6 +385,7 @@ export function ChatScreen(props: Props) {
                 tasks={view?.tasks ?? []}
                 subagents={view?.subagents ?? []}
               />
+              {bot?.outbox}
               {bot?.notice && (
                 <p className="mb-1 rounded-md bg-destructive/10 px-2 py-1 text-destructive text-xs">
                   {bot.notice}

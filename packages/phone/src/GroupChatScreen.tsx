@@ -36,6 +36,8 @@ interface Props {
   connState: ConnState;
   stateLabel: string;
   notice: string | null;
+  /** 离线待发队列；有它时断线也可发送（先入队，连上后重发） */
+  outbox?: ReactNode;
   onOpenDrawer(): void;
   onLoadOlder(): void;
   onSend(text: string): void;
@@ -272,6 +274,7 @@ export function GroupChatScreen(props: Props) {
       </div>
 
       <div className="phone-dock shrink-0 space-y-2 px-3 pt-1 pb-safe">
+        {props.outbox}
         {props.notice && (
           <p className="rounded-md bg-destructive/10 px-2 py-1 text-destructive text-xs">
             {props.notice}
@@ -349,7 +352,7 @@ export function GroupChatScreen(props: Props) {
             <button
               type="button"
               aria-label="发送"
-              disabled={!text.trim() || props.connState !== 'online'}
+              disabled={!text.trim() || (!props.outbox && props.connState !== 'online')}
               onClick={submit}
               className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-brand text-brand-foreground disabled:opacity-40"
             >

@@ -17,6 +17,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { applyAppBadge, attentionBadgeCount } from './attentionBadge';
 import { BotDrawerPanel } from './BotDrawerPanel';
+import { BotOutbox, type OutboxItem, phoneOutboxStorage } from './botOutbox';
 import { type GroupTimelineState, mergeGroupTimeline } from './botState';
 import { ChatScreen } from './ChatScreen';
 import { type ConnState, PairClient, type SessionView } from './client';
@@ -25,6 +26,7 @@ import { pickActive, removeDevice, renameDevice, upsertDevice } from './deviceLi
 import { GroupChatScreen, type MemberPending } from './GroupChatScreen';
 import { parseSessionFromSearch, parseSessionId, takeStashedSessionId } from './launchSession';
 import { NewSessionSheet } from './NewSessionSheet';
+import { OutboxBar } from './OutboxBar';
 import { PairScreen } from './PairScreen';
 import {
   isPushSupported,
@@ -157,6 +159,9 @@ export function App() {
   /** 群成员会话投影（只取审批/提问，来自不受订阅限制的 pending 事件） */
   const [memberViews, setMemberViews] = useState<Record<string, SessionView>>({});
   const [botNotice, setBotNotice] = useState<string | null>(null);
+  /** Bot 发送离线队列（按配对分库）；断线也能发，连上后按原 deliveryId 重发 */
+  const outboxRef = useRef<BotOutbox | null>(null);
+  const [outbox, setOutbox] = useState<OutboxItem[]>([]);
   const clientRef = useRef<PairClient | null>(null);
   const activeIdRef = useRef<string | null>(activeId);
   const catalogRef = useRef(catalog);
@@ -263,7 +268,10 @@ export function App() {
     setTransport('relay');
     setVoiceInput(false);
     const client = new PairClient(device, {
-      onState: setState,
+      onState: (next) => {
+        if (next !== 'online') outboxRef.current?.interrupted();
+        setState(next);
+      },
       onTransport: (next) => {
         setTransport(next);
         setRttMs(null);
@@ -313,7 +321,7 @@ export function App() {
         }, 200);
       },
       onBotSendResult: (result) => {
-        if (!result.ok) setBotNotice(`发送失败：${result.error ?? '未知错误'}`);
+        outboxRef.current?.settle(result.deliveryId, result.ok, result.error);
       },
       onSync: (state) => setSyncing(state === 'syncing'),
       onGhostSession: (id) => {
@@ -410,6 +418,34 @@ export function App() {
   useEffect(() => {
     if (pairId) saveLastSession(pairId, activeId);
   }, [activeId, pairId]);
+
+  useEffect(() => {
+    if (!pairId) return;
+    const box = new BotOutbox(phoneOutboxStorage, pairId);
+    outboxRef.current = box;
+    setOutbox([]);
+    const off = box.subscribe((items) => setOutbox([...items]));
+    void box.restore();
+    return () => {
+      off();
+      if (outboxRef.current === box) outboxRef.current = null;
+    };
+  }, [pairId]);
+
+  // 在线即冲刷待发项；deliveryId 沿用入队时生成的，Main 侧按它去重
+  // biome-ignore lint/correctness/useExhaustiveDependencies: outbox 变化（新入队/重试）也要触发冲刷
+  useEffect(() => {
+    if (state !== 'online') return;
+    for (const item of outboxRef.current?.drain() ?? []) {
+      clientRef.current?.send({
+        type: 'bot-send',
+        chatId: item.chatId,
+        text: item.text,
+        ...(item.images?.length ? { images: item.images } : {}),
+        deliveryId: item.deliveryId,
+      });
+    }
+  }, [state, outbox]);
 
   // 打开群聊或重连后：拉最新一页时间线与运行态；成员审批先用本地已有投影垫上
   const groupOpenId = botChat?.kind === 'group' ? botChat.id : null;
@@ -634,14 +670,16 @@ export function App() {
 
   const sendBot = (chatId: string, text: string, images: AttachedImage[] = []) => {
     setBotNotice(null);
-    send({
-      type: 'bot-send',
-      chatId,
-      text,
-      ...(images.length ? { images } : {}),
-      deliveryId: crypto.randomUUID(),
-    });
+    outboxRef.current?.enqueue({ chatId, text, images });
   };
+
+  const outboxBar = (chatId: string) => (
+    <OutboxBar
+      items={outbox.filter((item) => item.chatId === chatId)}
+      onRetry={(id) => outboxRef.current?.retry(id)}
+      onDiscard={(id) => outboxRef.current?.discard(id)}
+    />
+  );
 
   const botById = new Map(bots.map((bot) => [bot.id, bot]));
 
@@ -663,6 +701,7 @@ export function App() {
           connState={state}
           stateLabel={connectionLabel}
           notice={botNotice}
+          outbox={outboxBar(chat.id)}
           onOpenDrawer={openDrawer}
           onLoadOlder={() => {
             const beforeSeq = timelines[chat.id]?.entries[0]?.seq;
@@ -709,7 +748,11 @@ export function App() {
         historyLoading={Boolean(subscribedId && historyPending.has(subscribedId))}
         onLoadOlder={() => subscribedId && clientRef.current?.requestHistory(subscribedId)}
         voice={voice}
-        bot={process ? { readOnly: true, onBack: () => setProcessId(null) } : { notice: botNotice }}
+        bot={
+          process
+            ? { readOnly: true, onBack: () => setProcessId(null) }
+            : { notice: botNotice, outbox: outboxBar(chat.id) }
+        }
         onSend={(text, images) => sendBot(chat.id, text, images)}
         onAbort={() => subscribedId && send({ type: 'abort', sessionId: subscribedId })}
         onApproval={(requestId, decision) =>

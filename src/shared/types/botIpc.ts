@@ -204,7 +204,7 @@ export type BotChatWriteResult = { ok: true; chat: BotChat } | BotIpcError;
 export type BotTimelineResult = { ok: true; entries: GroupEntry[]; lastSeq: number } | BotIpcError;
 export type BotChatSessionsResult = { ok: true; sessions: BotSessionRecord[] } | BotIpcError;
 export type BotSendResult =
-  | { ok: true; conversationId?: string; queued?: boolean; turnId?: string }
+  | { ok: true; conversationId?: string; queued?: boolean; turnId?: string; duplicate?: true }
   | BotIpcError;
 export type BotChatStateResult =
   | {

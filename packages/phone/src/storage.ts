@@ -1,4 +1,5 @@
 import type { PairedDevice } from '@enso/pair';
+import { phoneOutboxStorage } from './botOutbox';
 import { migrateStore, type StoredDevice } from './deviceList';
 import { phoneCache } from './sessionCache';
 
@@ -57,6 +58,7 @@ export function saveActiveDeviceId(pairId: string | null): void {
 /** 解绑某台：顺带清掉它命名空间下的缓存、旧游标与最近会话 */
 export function clearDeviceData(pairId: string): void {
   void phoneCache.clear(pairId);
+  void phoneOutboxStorage.remove?.(pairId).catch(() => {});
   localStorage.removeItem(cursorKey(pairId));
   localStorage.removeItem(lastSessionKey(pairId));
 }

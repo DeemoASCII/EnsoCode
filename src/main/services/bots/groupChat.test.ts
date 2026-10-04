@@ -95,6 +95,18 @@ it('queued delivery only commits cursor after the worker receives the message', 
   deliverySent({ conversationId: a, deliveryId: options.deliveryId });
   expect(chats.get(id)!.sessions[a].cursor).toBe(1);
 });
+it('resending the same deliveryId is idempotent (phone offline outbox replay)', async () => {
+  expect(await group.send(id, 'hello', { deliveryId: 'phone-1' })).toEqual({ ok: true });
+  await done(a, 'hi');
+  expect(await group.send(id, 'hello', { deliveryId: 'phone-1' })).toEqual({
+    ok: true,
+    duplicate: true,
+  });
+  expect(entries().filter((entry) => entry.kind === 'human')).toHaveLength(1);
+  expect(deliver).toHaveBeenCalledTimes(1);
+  await group.send(id, 'hello', { deliveryId: 'phone-2' });
+  expect(entries().filter((entry) => entry.kind === 'human')).toHaveLength(2);
+});
 it('failed delivery is not a skip and continues to the next member', async () => {
   deliver.mockResolvedValueOnce({ ok: false, error: 'offline' });
   await group.send(id, '@Bob @Alice hello');

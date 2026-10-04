@@ -207,12 +207,16 @@ export class GroupChatService {
       if (chat?.kind !== 'group' || chat.archivedAt !== undefined)
         return { ok: false, error: 'group-unavailable' };
       if (this.round(chatId).stopping) return { ok: false, error: 'chat-stopping' };
+      // 手机离线队列按原 deliveryId 重放：同一条人类消息只落一次时间线
+      const entryId = options.deliveryId ? `human:${options.deliveryId}` : randomUUID();
+      if (options.deliveryId && this.deps.chats.hasEntry(chatId, entryId))
+        return { ok: true, duplicate: true };
       const members = this.members(chat);
       const entry = this.append(chatId, {
         kind: 'human',
         text,
         mentions: parseMentions(text, members).ids,
-        id: randomUUID(),
+        id: entryId,
         at: Date.now(),
       });
       if (entry?.kind !== 'human') return { ok: false, error: 'timeline-write-failed' };
