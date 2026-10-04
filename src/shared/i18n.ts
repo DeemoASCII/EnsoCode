@@ -2128,6 +2128,7 @@ export const zhTranslations: Record<string, string> = {
   'New group chat': '新建群聊',
   'No group chats yet': '还没有群聊',
   Members: '成员',
+  Member: '成员',
   'New member': '新建成员',
   'No members yet': '还没有成员',
   'Nothing archived': '没有已归档的内容',
