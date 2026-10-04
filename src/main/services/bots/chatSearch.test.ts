@@ -10,6 +10,11 @@ import {
   parseChatSearchQuery,
   searchBotChats,
 } from './chatSearch';
+
+async function* batches(entries: GroupEntry[]) {
+  yield entries;
+}
+
 import { BotChatStore } from './chatStore';
 
 const GROUP = '11111111-1111-4111-8111-111111111111';
@@ -43,7 +48,7 @@ function deps(over: Partial<ChatSearchDeps> = {}): ChatSearchDeps {
   ];
   return {
     chats: () => [chat(GROUP, 'group', [ALICE, BOB]), chat(DIRECT, 'direct', [BOB])],
-    timeline: () => entries,
+    timeline: () => batches(entries),
     sessions: () => [
       { conversationId: 'old', botId: BOB, current: false, sessionFile: 'old.jsonl' },
       { conversationId: 'cur', botId: BOB, current: true, sessionFile: 'cur.jsonl' },
@@ -171,7 +176,7 @@ describe('searchBotChats', () => {
   it('没有会话文件的会话跳过', async () => {
     const result = await searchBotChats(
       deps({
-        timeline: () => [],
+        timeline: () => batches([]),
         sessions: () => [{ conversationId: 'draft', botId: BOB, current: true }],
       }),
       { query: 'api', limit: 50 }
@@ -212,7 +217,7 @@ describe('searchBotChats + 真实时间线文件', () => {
     const result = await searchBotChats(
       {
         chats: () => store.list(),
-        timeline: (chatId) => store.readEntries(chatId, { limit: Number.MAX_SAFE_INTEGER }),
+        timeline: (chatId) => store.scanEntries(chatId),
         sessions: () => [],
         readMessages: async () => [],
       },

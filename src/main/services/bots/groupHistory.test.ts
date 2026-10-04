@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import type { GroupEntry } from '../../../shared/types/bot';
-import { parseGroupHistoryQuery, queryGroupHistory } from './groupHistory';
+import {
+  parseGroupHistoryQuery,
+  queryGroupHistory,
+  queryGroupHistoryNewestFirst,
+} from './groupHistory';
 
 const ALICE = '11111111-1111-4111-8111-111111111111';
 const BOB = '22222222-2222-4222-8222-222222222222';
@@ -117,5 +121,29 @@ describe('queryGroupHistory', () => {
     expect(got.length).toBeLessThan(60);
     expect(got.at(-1)).toBe(60);
     expect(result).toMatchObject({ hasMore: true });
+  });
+
+  it('consumes a newest-first source lazily and stops once the page is known', () => {
+    const many: GroupEntry[] = Array.from({ length: 1000 }, (_, i) => ({
+      ...base(i + 1),
+      kind: 'human' as const,
+      text: `m${i + 1}`,
+      mentions: [],
+    }));
+    let pulled = 0;
+    function* source() {
+      for (let i = many.length - 1; i >= 0; i--) {
+        pulled++;
+        yield many[i];
+      }
+    }
+    const page = queryGroupHistoryNewestFirst(source(), nameOf, { limit: 5 });
+    expect(seqs(page)).toEqual([996, 997, 998, 999, 1000]);
+    expect(page).toMatchObject({ hasMore: true, lastSeq: 1000 });
+    expect(pulled).toBeLessThanOrEqual(6);
+    pulled = 0;
+    const ranged = queryGroupHistoryNewestFirst(source(), nameOf, { afterSeq: 990, limit: 3 });
+    expect(seqs(ranged)).toEqual([991, 992, 993]);
+    expect(pulled).toBeLessThanOrEqual(11);
   });
 });

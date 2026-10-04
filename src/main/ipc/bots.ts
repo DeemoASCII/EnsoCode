@@ -69,7 +69,10 @@ import { turnDelegationTargets } from '../services/bots/delegationBatch';
 import { DelegationService } from '../services/bots/delegationService';
 import { DelegationStore } from '../services/bots/delegationStore';
 import { GroupChatService } from '../services/bots/groupChat';
-import { parseGroupHistoryQuery, queryGroupHistory } from '../services/bots/groupHistory';
+import {
+  parseGroupHistoryQuery,
+  queryGroupHistoryNewestFirst,
+} from '../services/bots/groupHistory';
 import { GroupTaskStore } from '../services/bots/groupTaskStore';
 import { GroupTaskService } from '../services/bots/groupTasks';
 import { removeBotMemorySpace } from '../services/bots/memoryCleanup';
@@ -667,8 +670,8 @@ export function groupHistoryTool(
     return { ok: false, error: 'History is only available in the current group chat session.' };
   const query = parseGroupHistoryQuery(params);
   if (typeof query === 'string') return { ok: false, error: query };
-  return queryGroupHistory(
-    services.chats.readEntries(chat.id, { limit: Number.MAX_SAFE_INTEGER }),
+  return queryGroupHistoryNewestFirst(
+    services.chats.backward(chat.id),
     (id) => services.bots.get(id)?.name,
     query
   );

@@ -1,4 +1,4 @@
-import { appendFileSync, mkdtempSync, rmSync } from 'node:fs';
+import { appendFileSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -146,5 +146,96 @@ describe('BotChatStore timeline', () => {
     expect(
       store.readEntries(chat.id, { beforeSeq: 2, limit: 10 }).map((entry) => entry.seq)
     ).toEqual([1]);
+  });
+
+  it('reads across chunk boundaries with multi-byte text and a torn tail', () => {
+    const small = new BotChatStore(root, now, { chunkSize: 7 });
+    const chat = small.create({
+      kind: 'group',
+      title: 't',
+      members: [BOT_A, BOT_B],
+      bossBotId: BOT_A,
+      workspace: { kind: 'project', projectId: 'p' },
+    });
+    if (!chat) throw new Error('create failed');
+    for (let i = 1; i <= 6; i++)
+      small.appendEntry(chat.id, { id: `e${i}`, at: i, kind: 'system', text: `中文消息${i}🙂` });
+    appendFileSync(join(root, chat.id, 'timeline.jsonl'), '{"seq":7,"id":"e7","at":7,"ki');
+    const reloaded = new BotChatStore(root, now, { chunkSize: 5 });
+    expect(reloaded.lastSeq(chat.id)).toBe(6);
+    expect(
+      reloaded
+        .readEntries(chat.id, { limit: 3 })
+        .map((entry) => entry.kind === 'system' && entry.text)
+    ).toEqual(['中文消息4🙂', '中文消息5🙂', '中文消息6🙂']);
+    expect(reloaded.readAfter(chat.id, 4).map((entry) => entry.seq)).toEqual([5, 6]);
+    expect(reloaded.appendEntry(chat.id, { id: 'e8', at: 8, kind: 'system', text: 'x' })?.seq).toBe(
+      7
+    );
+    expect(reloaded.readEntries(chat.id, { limit: 2 }).map((entry) => entry.id)).toEqual([
+      'e6',
+      'e8',
+    ]);
+  });
+
+  it('indexes entry ids for dedupe and lookup, surviving restart and appends', () => {
+    const chat = group();
+    store.appendEntry(chat.id, { id: 'delegation:d1', at: 1, kind: 'system', text: 'a' });
+    store.appendEntry(chat.id, { id: 'e2', at: 2, kind: 'system', text: 'b' });
+    expect(store.hasEntry(chat.id, 'delegation:d1')).toBe(true);
+    expect(store.hasEntry(chat.id, 'nope')).toBe(false);
+    store.appendEntry(chat.id, { id: 'e3', at: 3, kind: 'system', text: 'c' });
+    expect(store.findEntry(chat.id, 'e3')).toMatchObject({ seq: 3, text: 'c' });
+
+    const reloaded = new BotChatStore(root, now);
+    expect(reloaded.hasEntry(chat.id, 'delegation:d1')).toBe(true);
+    expect(reloaded.findEntry(chat.id, 'e2')).toMatchObject({ seq: 2, text: 'b' });
+    expect(reloaded.findEntry(chat.id, 'missing')).toBeUndefined();
+    reloaded.appendEntry(chat.id, { id: 'e4', at: 4, kind: 'system', text: 'd' });
+    expect(reloaded.findEntry(chat.id, 'e4')).toMatchObject({ seq: 4 });
+  });
+
+  it('scans the whole timeline asynchronously in batches', async () => {
+    const chat = group();
+    for (let i = 1; i <= 5; i++)
+      store.appendEntry(chat.id, { id: `e${i}`, at: i, kind: 'system', text: String(i) });
+    const seqs: number[] = [];
+    for await (const batch of store.scanEntries(chat.id)) seqs.push(...batch.map((e) => e.seq));
+    expect(seqs).toEqual([1, 2, 3, 4, 5]);
+  });
+
+  it('tail-reads a 50k-entry timeline without loading it all', () => {
+    const chat = group();
+    const file = join(root, chat.id, 'timeline.jsonl');
+    const lines: string[] = [];
+    for (let seq = 1; seq <= 50_000; seq++)
+      lines.push(
+        JSON.stringify({
+          seq,
+          id: `e${seq}`,
+          at: seq,
+          kind: 'system',
+          text: `消息 ${seq} `.repeat(8),
+        })
+      );
+    writeFileSync(file, `${lines.join('\n')}\n`);
+    const reloaded = new BotChatStore(root, now);
+    const started = performance.now();
+    expect(reloaded.lastSeq(chat.id)).toBe(50_000);
+    expect(reloaded.readEntries(chat.id, { limit: 50 }).map((e) => e.seq)).toEqual(
+      Array.from({ length: 50 }, (_, i) => 49_951 + i)
+    );
+    expect(
+      reloaded.readEntries(chat.id, { beforeSeq: 49_901, limit: 2 }).map((e) => e.seq)
+    ).toEqual([49_899, 49_900]);
+    expect(reloaded.readAfter(chat.id, 49_990)).toHaveLength(10);
+    expect(
+      reloaded.appendEntry(chat.id, { id: 'new', at: 1, kind: 'system', text: 'x' })?.seq
+    ).toBe(50_001);
+    expect(performance.now() - started).toBeLessThan(50);
+    expect(reloaded.readEntries(chat.id, { beforeSeq: 3, limit: 5 }).map((e) => e.seq)).toEqual([
+      1, 2,
+    ]);
+    expect(reloaded.findEntry(chat.id, 'e123')).toMatchObject({ seq: 123 });
   });
 });

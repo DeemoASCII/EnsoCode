@@ -426,11 +426,7 @@ export class DelegationService {
       const latest = this.deps.store.get(record.id);
       if (!latest || latest.deliveredAt !== undefined) continue;
       if (record.chatId && this.deps.chats.get(record.chatId)?.kind === 'group') {
-        if (
-          !this.deps.chats
-            .readEntries(record.chatId, { limit: Number.MAX_SAFE_INTEGER })
-            .some((entry) => entry.id === `delegation:${record.id}`)
-        )
+        if (!this.deps.chats.hasEntry(record.chatId, `delegation:${record.id}`))
           this.deps.chats.appendEntry(record.chatId, {
             kind: 'delegation',
             id: `delegation:${record.id}`,

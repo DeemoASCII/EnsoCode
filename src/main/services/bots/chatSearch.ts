@@ -21,7 +21,8 @@ export interface ChatSearchSession {
 
 export interface ChatSearchDeps {
   chats: () => BotChat[];
-  timeline: (chatId: string) => GroupEntry[];
+  /** 群时间线分批异步读取，避免一次性读入大文件占用主线程 */
+  timeline: (chatId: string) => AsyncIterable<readonly GroupEntry[]>;
   /** 私聊的当前与历史成员会话 */
   sessions: (chatId: string) => ChatSearchSession[];
   /** 会话文件的投影消息；下标即消息绝对下标 */
@@ -87,24 +88,24 @@ export async function searchBotChats(
   const hits: BotSearchHit[] = [];
   for (const chat of deps.chats()) {
     if (chat.kind === 'group') {
-      let entries: GroupEntry[] = [];
       try {
-        entries = deps.timeline(chat.id);
+        for await (const batch of deps.timeline(chat.id))
+          for (const entry of batch) {
+            if (entry.kind !== 'human' && entry.kind !== 'bot') continue;
+            const match = matchSnippet(entry.text, query);
+            if (!match) continue;
+            hits.push({
+              chatId: chat.id,
+              chatKind: chat.kind,
+              speaker:
+                entry.kind === 'bot' ? { kind: 'bot', botId: entry.botId } : { kind: 'human' },
+              at: entry.at,
+              ...match,
+              locator: { kind: 'timeline', seq: entry.seq },
+            });
+          }
       } catch (error) {
         console.warn('[bots] search timeline failed', chat.id, error);
-      }
-      for (const entry of entries) {
-        if (entry.kind !== 'human' && entry.kind !== 'bot') continue;
-        const match = matchSnippet(entry.text, query);
-        if (!match) continue;
-        hits.push({
-          chatId: chat.id,
-          chatKind: chat.kind,
-          speaker: entry.kind === 'bot' ? { kind: 'bot', botId: entry.botId } : { kind: 'human' },
-          at: entry.at,
-          ...match,
-          locator: { kind: 'timeline', seq: entry.seq },
-        });
       }
       continue;
     }

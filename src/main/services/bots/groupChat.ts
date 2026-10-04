@@ -515,7 +515,7 @@ export class GroupChatService {
   private async deliver(chat: BotChat, botId: string, options?: BotDeliverOptions) {
     const cursor = chat.sessions[botId]?.cursor ?? 0;
     const delta = buildGroupDelta({
-      entries: this.deps.chats.readEntries(chat.id, { limit: Number.MAX_SAFE_INTEGER }),
+      entries: this.deps.chats.readAfter(chat.id, cursor),
       botId,
       cursor,
       members: this.members(chat),

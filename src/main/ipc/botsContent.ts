@@ -60,7 +60,7 @@ export async function searchChats(
   const result = await searchBotChats(
     {
       chats: () => chats.list(),
-      timeline: (chatId) => chats.readEntries(chatId, { limit: Number.MAX_SAFE_INTEGER }),
+      timeline: (chatId) => chats.scanEntries(chatId),
       sessions: (chatId) =>
         host.sessionsOf(chatId).map((session) => ({
           ...session,
@@ -86,9 +86,7 @@ async function artifactsOf(
   let fallback: readonly ProjectedMessage[] = [];
   if ('entryId' in target) {
     if (chat.kind !== 'group') return null;
-    const entry = chats
-      .readEntries(chat.id, { limit: Number.MAX_SAFE_INTEGER })
-      .find((item) => item.id === target.entryId);
+    const entry = chats.findEntry(chat.id, target.entryId);
     if (entry?.kind !== 'bot') return null;
     conversationId = entry.conversationId;
     locate = (messages) => turnOfReply(messages, entry.text);
