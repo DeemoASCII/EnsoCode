@@ -207,6 +207,7 @@ import { ComputerInvoker, createComputerTool, withComputerApproval } from './too
 import { createDelegationTools, type DelegationOp } from './tools/delegation';
 import { createEnsoAppTool, EnsoAppInvoker } from './tools/ensoApp';
 import { createEnsoCapabilitiesTool } from './tools/ensoCapabilities';
+import { createGroupHistoryTool } from './tools/groupHistory';
 import { createGroupTasksTool } from './tools/groupTasks';
 import { createMemoryTools, MemoryInvoker } from './tools/memory';
 import { createWebTools } from './tools/web';
@@ -2247,7 +2248,9 @@ export class SessionSupervisor {
         : []),
       ...(memory ? createMemoryTools(memory, { language: memoryLanguage }) : []),
       ...(delegation ? createDelegationTools(delegation, { groupTasks: botGroupTasks }) : []),
-      ...(delegation && botGroupTasks ? [createGroupTasksTool(delegation)] : []),
+      ...(delegation && botGroupTasks
+        ? [createGroupTasksTool(delegation), createGroupHistoryTool(delegation)]
+        : []),
       ...(toolEnabled('web') ? createWebTools() : []),
       ...(toolEnabled('todo') ? [createTodoTool((todos) => todoReminder.update(todos))] : []),
       ...(computer ? [withComputerApproval(gate, createComputerTool(computer))] : []),

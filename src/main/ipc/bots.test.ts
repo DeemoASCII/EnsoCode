@@ -396,4 +396,60 @@ describe('群任务看板 IPC', () => {
       )
     ).toMatchObject({ ok: false });
   });
+
+  it('group_history 只读本群时间线，chatId 取自会话权威，越权一律拒绝', async () => {
+    const { alice, bob, carol, chatId } = await team();
+    const created = await call(IPC_CHANNELS.BOT_CHAT_CREATE, {
+      kind: 'group',
+      title: 'other',
+      members: [bob, carol],
+      bossBotId: bob,
+      workspace: { kind: 'chat-home' },
+    });
+    const other = { chatId: (created.chat as { id: string }).id };
+    const { getBotServices, groupHistoryTool } = await import('./bots');
+    const services = getBotServices()!;
+    services.chats.appendEntry(chatId, {
+      kind: 'human',
+      text: '本群早期约定：周五发布',
+      mentions: [],
+      id: 'h1',
+      at: 1,
+    });
+    services.chats.appendEntry(other.chatId, {
+      kind: 'human',
+      text: '别的群秘密',
+      mentions: [],
+      id: 'h2',
+      at: 1,
+    });
+    const session = services.host.ensureSession(chatId, alice);
+    if (!session.ok) throw new Error(session.error);
+    const read = groupHistoryTool(
+      services,
+      session.conversationId,
+      { botId: alice, chatId },
+      { query: '约定', chatId: other.chatId }
+    );
+    expect(read).toMatchObject({
+      ok: true,
+      entries: [{ from: '用户', text: '本群早期约定：周五发布' }],
+    });
+    expect(JSON.stringify(read)).not.toContain('别的群秘密');
+    expect(groupHistoryTool(services, 'stale', { botId: alice, chatId }, {})).toMatchObject({
+      ok: false,
+    });
+    expect(
+      groupHistoryTool(services, session.conversationId, { botId: alice, chatId: null }, {})
+    ).toMatchObject({ ok: false });
+    expect(
+      groupHistoryTool(services, session.conversationId, { botId: bob, chatId }, {})
+    ).toMatchObject({ ok: false });
+    expect(
+      groupHistoryTool(services, session.conversationId, { botId: alice, chatId }, { limit: 'x' })
+    ).toMatchObject({ ok: false });
+    expect(
+      groupHistoryTool(null, session.conversationId, { botId: alice, chatId }, {})
+    ).toMatchObject({ ok: false });
+  });
 });

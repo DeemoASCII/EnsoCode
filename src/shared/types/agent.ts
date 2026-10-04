@@ -1023,7 +1023,7 @@ export type AgentCommand =
       /** 仅普通 parent：替换 pi 默认提示词开头的角色段落，其余运行时内容保留 */
       systemPrompt?: string;
       botMode?: boolean;
-      /** Bot 群聊成员会话：挂 group_tasks 工具（私聊 / 委派子会话不挂） */
+      /** Bot 群聊成员会话：挂 group_tasks / group_history 工具（私聊 / 委派子会话不挂） */
       botGroupTasks?: boolean;
       /** 期望的 Plan 模式；与会话 jsonl 折叠结果不同时由 worker 追加切换条目 */
       planMode?: boolean;
@@ -1631,7 +1631,7 @@ export type AgentWorkerEvent =
       identity: SessionIdentity;
       seq: number;
       requestId: string;
-      op: 'delegate' | 'check_delegation' | 'group_tasks';
+      op: 'delegate' | 'check_delegation' | 'group_tasks' | 'group_history';
       params: unknown;
     }
   | {
@@ -3399,7 +3399,10 @@ export function parseAgentWorkerEvent(value: unknown): AgentWorkerEvent | null {
       return hasExactKeys(value, ['type', 'identity', 'seq', 'requestId', 'op', 'params']) &&
         parseSessionIdentity(value.identity) &&
         isNonEmptyString(value.requestId) &&
-        (value.op === 'delegate' || value.op === 'check_delegation' || value.op === 'group_tasks')
+        (value.op === 'delegate' ||
+          value.op === 'check_delegation' ||
+          value.op === 'group_tasks' ||
+          value.op === 'group_history')
         ? (value as unknown as AgentWorkerEvent)
         : null;
     case 'computer-invoke':

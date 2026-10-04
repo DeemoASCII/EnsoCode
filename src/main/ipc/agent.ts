@@ -145,7 +145,7 @@ import { titleModelCandidates } from '../services/titleSummary';
 import { ingestSessionJsonl } from '../services/usage/ledgerStore';
 import { sendToAllWindows } from '../windows/createAppWindow';
 import { isMainWebContents } from '../windows/MainWindow';
-import { botModeEnabled, getBotServices, groupTasksTool } from './bots';
+import { botModeEnabled, getBotServices, groupHistoryTool, groupTasksTool } from './bots';
 import { agentSessionIndex, capabilityGateway, handleCapabilityInvoke } from './capabilities';
 import { readSettings, readSshTimeoutSeconds } from './settings';
 import {
@@ -529,6 +529,29 @@ export async function readSessionHistoryFile(
  * 准入是策略，留在本文件（与渲染层走同一套 exactIdentity / persistedRootSpawn 守卫）；
  * pairHost 只做传输。解析不出身份就丢弃命令，不降级成按 sessionId 盲发。
  */
+/**
+ * 会话结束 / 闲置回收 / 压缩完成：从权威 jsonl 异步蒸馏长期记忆（开关、幂等、水位、失败全在
+ * memoryHost / BotMemoryService 内收口）。返回 bot 绑定供调用方做后续处理。
+ */
+function distillSessionMemory(identity: SessionIdentity) {
+  const conversation = sourceAuthority?.conversation(identity.sessionId);
+  const sessionFile = agentSessionIndex.sessionFile(identity);
+  if (sessionFile) {
+    const project = conversation ? sourceAuthority?.project(conversation.projectId) : undefined;
+    if (conversation?.bot) void getBotServices()?.memory.distill({ ...conversation, sessionFile });
+    else
+      void scheduleMemoryDistill(
+        {
+          sessionId: identity.sessionId,
+          sessionFile,
+          projectId: project?.state === 'active' ? project.projectId : null,
+        },
+        { continueFromLastJob: true }
+      );
+  }
+  return conversation?.bot;
+}
+
 function botControlError(sessionId: unknown): { ok: false; error: string } | undefined {
   return typeof sessionId === 'string' && sourceAuthority?.conversation(sessionId)?.bot
     ? { ok: false, error: 'Bot sessions must use Bot services for execution and policy changes.' }
@@ -1039,20 +1062,22 @@ export function registerAgentHandlers(): void {
       forgetParentToolProfile(workerEvent.identity.sessionId);
       void browserHost.closeForSession(workerEvent.identity.sessionId, { force: true });
       computerHost.close(workerEvent.identity.sessionId);
-      // 会话结束 / 闲置回收：从权威 jsonl 异步蒸馏长期记忆（开关、幂等、失败全部在 memoryHost 内收口）
-      const sessionFile = agentSessionIndex.sessionFile(workerEvent.identity);
-      if (sessionFile) {
-        const conversation = sourceAuthority?.conversation(workerEvent.identity.sessionId);
-        const project = conversation ? sourceAuthority?.project(conversation.projectId) : undefined;
-        if (conversation?.bot) {
-          void getBotServices()?.memory.distill({ ...conversation, sessionFile });
-        } else
-          void scheduleMemoryDistill({
-            sessionId: workerEvent.identity.sessionId,
-            sessionFile,
-            projectId: project?.state === 'active' ? project.projectId : null,
-          });
-      }
+      distillSessionMemory(workerEvent.identity);
+    }
+    // 压缩成功：jsonl 原文仍在，按水位提前整理记忆；群聊成员下次投递补群状态
+    if (
+      workerEvent.type === 'compaction' &&
+      workerEvent.state === 'end' &&
+      !workerEvent.error &&
+      !workerEvent.abandoned
+    ) {
+      const bot = distillSessionMemory(workerEvent.identity);
+      if (bot?.chatId)
+        getBotServices()?.groups.markCompacted(
+          bot.chatId,
+          bot.botId,
+          workerEvent.identity.sessionId
+        );
     }
     if (workerEvent.type === 'browser-invoke') {
       const { identity, requestId, op, params } = workerEvent;
@@ -1122,6 +1147,8 @@ export function registerAgentHandlers(): void {
         let result: unknown;
         if (op === 'group_tasks' && conversation?.bot) {
           result = groupTasksTool(services, identity.sessionId, conversation.bot, input);
+        } else if (op === 'group_history' && conversation?.bot) {
+          result = groupHistoryTool(services, identity.sessionId, conversation.bot, input);
         } else if (
           op === 'delegate' &&
           typeof input.to === 'string' &&
@@ -1770,8 +1797,7 @@ export function registerAgentHandlers(): void {
   ipcMain.handle(
     IPC_CHANNELS.AGENT_COMPACT,
     (_event, sessionId: unknown, instructions: unknown): AgentActionResult => {
-      const rejected = botControlError(sessionId);
-      if (rejected) return rejected;
+      // 压缩不改执行与策略（忙碌时 worker 排队），桌面端对 bot 会话放行；手机 pair 仍拒绝
       const identity = exactIdentity(sessionId);
       if (
         !identity ||

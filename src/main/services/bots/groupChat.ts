@@ -12,8 +12,14 @@ import {
   startRound,
 } from '../../../shared/bots/router';
 import { buildSmartRouteInput, type SmartRouteInput } from '../../../shared/bots/smartRoute';
-import { buildGroupDelta } from '../../../shared/bots/transcript';
-import type { BotChat, GroupEntryInput } from '../../../shared/types/bot';
+import { buildGroupDelta, buildGroupStateBlock } from '../../../shared/bots/transcript';
+import type {
+  BotChat,
+  BotId,
+  DelegationState,
+  GroupEntryInput,
+  GroupTaskStatus,
+} from '../../../shared/types/bot';
 import type {
   BotActionResult,
   BotChatStateResult,
@@ -61,6 +67,16 @@ interface GroupChatDeps {
   responder?: GroupResponderSelector;
   /** 某会话某一轮（BotTurnFinished.turnKey）新建委派的目标成员；正文 @ 他们不再接力 */
   delegatedTargets?: (conversationId: string, turnKey: string) => readonly string[];
+  /** 压缩后补群状态用：进行中的委派与看板未完成任务 */
+  groupState?: (chatId: string) => {
+    delegations: readonly { from: BotId; to: BotId; state: DelegationState; task: string }[];
+    tasks: readonly {
+      seq: number;
+      title: string;
+      status: GroupTaskStatus;
+      assigneeBotId?: BotId;
+    }[];
+  };
 }
 const SMART_ROUTE_HISTORY_SCAN = 40;
 const empty = (): RouterState => ({
@@ -84,6 +100,8 @@ export class GroupChatService {
   private locks = new Map<string, Promise<unknown>>();
   private autonomous = new Map<string, AutonomousReply[]>();
   private readonly cursors = new Map<string, { chatId: string; botId: string; cursor: number }>();
+  /** 刚压缩过、下次投递需补 <group-state> 的成员会话；只在内存，重启丢失可接受 */
+  private readonly compacted = new Map<string, { chatId: string; botId: string }>();
   private readonly unsubscribe: () => void;
   private readonly unsubscribeSent: () => void;
   private disposed = false;
@@ -456,6 +474,34 @@ export class GroupChatService {
     if (this.autonomous.get(chatId)?.length) await this.dispatch(chatId);
   }
 
+  /** 成员会话压缩成功：仅群聊里该成员的当前会话生效 */
+  markCompacted(chatId: string, botId: string, conversationId: string): void {
+    const chat = this.deps.chats.get(chatId);
+    if (chat?.kind === 'group' && chat.sessions[botId]?.conversationId === conversationId)
+      this.compacted.set(conversationId, { chatId, botId });
+  }
+
+  clearCompacted(scope: { chatId?: string; botId?: string; conversationId?: string }): void {
+    if (scope.conversationId) this.compacted.delete(scope.conversationId);
+    for (const [id, mark] of this.compacted)
+      if (mark.chatId === scope.chatId || mark.botId === scope.botId) this.compacted.delete(id);
+  }
+
+  private stateBlock(chat: BotChat, botId: string): string {
+    const extra = this.deps.groupState?.(chat.id);
+    const { state } = this.round(chat.id);
+    return buildGroupStateBlock({
+      chatTitle: chat.title,
+      selfId: botId,
+      members: this.members(chat),
+      bossBotId: chat.bossBotId,
+      routing: { current: state.current, queue: state.queue },
+      delegations: extra?.delegations ?? [],
+      tasks: extra?.tasks ?? [],
+      lastSeq: this.deps.chats.lastSeq(chat.id),
+    });
+  }
+
   private async deliver(chat: BotChat, botId: string, options?: BotDeliverOptions) {
     const cursor = chat.sessions[botId]?.cursor ?? 0;
     const delta = buildGroupDelta({
@@ -465,11 +511,16 @@ export class GroupChatService {
       members: this.members(chat),
       chatTitle: chat.title,
     });
+    const sessionId = chat.sessions[botId]?.conversationId;
+    const compacted = sessionId !== undefined && this.compacted.has(sessionId);
+    const text = compacted
+      ? [this.stateBlock(chat, botId), delta.text].filter(Boolean).join('\n')
+      : delta.text;
     let result: BotDeliverResult;
     const deliveryId = options?.deliveryId ?? randomUUID();
     this.cursors.set(deliveryId, { chatId: chat.id, botId, cursor: delta.cursor });
     try {
-      result = await this.deps.host.deliver(chat.id, botId, delta.text, { ...options, deliveryId });
+      result = await this.deps.host.deliver(chat.id, botId, text, { ...options, deliveryId });
     } catch (error) {
       result = {
         ok: false as const,
@@ -484,6 +535,7 @@ export class GroupChatService {
       return draft;
     });
     if (!result.ok || !result.queued) this.cursors.delete(deliveryId);
+    if (compacted && result.ok && !result.duplicate) this.compacted.delete(sessionId);
     return result;
   }
 
@@ -501,6 +553,7 @@ export class GroupChatService {
     this.rounds.clear();
     this.autonomous.clear();
     this.cursors.clear();
+    this.compacted.clear();
   }
 
   discard(chatId: string): void {
@@ -511,6 +564,7 @@ export class GroupChatService {
     if (round) this.cancelRouting(round);
     this.rounds.delete(chatId);
     for (const [id, cursor] of this.cursors) if (cursor.chatId === chatId) this.cursors.delete(id);
+    this.clearCompacted({ chatId });
   }
 
   private members(chat: BotChat) {

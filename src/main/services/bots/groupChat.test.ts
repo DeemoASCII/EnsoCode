@@ -479,3 +479,90 @@ describe('smart routing', () => {
     expect(group.state(id)).toMatchObject({ current: b, queue: [] });
   });
 });
+
+describe('压缩后补群状态', () => {
+  const text = (call: number) => String(deliver.mock.calls[call][2]);
+  const withState = () =>
+    new GroupChatService({
+      bots,
+      chats,
+      host,
+      emit,
+      groupState: () => ({
+        delegations: [{ from: a, to: b, state: 'running', task: '写登录页' }],
+        tasks: [{ seq: 1, title: '部署', status: 'todo' }],
+      }),
+    });
+
+  it('压缩后的下一次投递在增量前带 <group-state>，且只带一次', async () => {
+    group = withState();
+    await group.send(id, 'first');
+    await done(a, 'ok');
+    expect(text(0)).not.toContain('<group-state>');
+    group.markCompacted(id, a, a);
+    await group.send(id, 'second');
+    expect(text(1).startsWith('<group-state>')).toBe(true);
+    expect(text(1)).toContain('写登录页');
+    expect(text(1)).toContain('#1 部署');
+    expect(text(1)).toContain('second');
+    await done(a, 'ok');
+    await group.send(id, 'third');
+    expect(text(2)).not.toContain('<group-state>');
+  });
+
+  it('未压缩不带；会话不匹配 / 私聊的标记被忽略', async () => {
+    group = withState();
+    await group.send(id, 'first');
+    await done(a, 'ok');
+    group.markCompacted(id, a, 'stale-conversation');
+    group.markCompacted(id, b, a);
+    await group.send(id, 'second');
+    expect(text(1)).not.toContain('<group-state>');
+  });
+
+  it('投递失败不清标记，下次成功投递仍带上', async () => {
+    group = withState();
+    await group.send(id, 'first');
+    await done(a, 'ok');
+    group.markCompacted(id, a, a);
+    deliver.mockResolvedValueOnce({ ok: false, error: 'offline' });
+    await group.send(id, 'second');
+    expect(text(1)).toContain('<group-state>');
+    await group.send(id, '@Alice third');
+    expect(text(2)).toContain('<group-state>');
+    await done(a, 'ok');
+    await group.send(id, 'fourth');
+    expect(text(3)).not.toContain('<group-state>');
+  });
+
+  it('删群 / 会话退役 / 删成员时清标记', async () => {
+    group = withState();
+    await group.send(id, 'first');
+    await done(a, 'ok');
+    group.markCompacted(id, a, a);
+    group.clearCompacted({ conversationId: a });
+    await group.send(id, 'x');
+    expect(text(1)).not.toContain('<group-state>');
+    await done(a, 'ok');
+    group.markCompacted(id, a, a);
+    group.clearCompacted({ botId: a });
+    await group.send(id, 'y');
+    expect(text(2)).not.toContain('<group-state>');
+    await done(a, 'ok');
+    group.markCompacted(id, a, a);
+    group.discard(id);
+    await group.send(id, 'z');
+    expect(text(3)).not.toContain('<group-state>');
+  });
+
+  it('标记只在内存：服务重建（重启）后丢失，不会补发', async () => {
+    group = withState();
+    await group.send(id, 'first');
+    await done(a, 'ok');
+    group.markCompacted(id, a, a);
+    group.dispose();
+    group = withState();
+    await group.send(id, 'second');
+    expect(text(1)).not.toContain('<group-state>');
+  });
+});

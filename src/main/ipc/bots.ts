@@ -61,6 +61,7 @@ import { turnDelegationTargets } from '../services/bots/delegationBatch';
 import { DelegationService } from '../services/bots/delegationService';
 import { DelegationStore } from '../services/bots/delegationStore';
 import { GroupChatService } from '../services/bots/groupChat';
+import { parseGroupHistoryQuery, queryGroupHistory } from '../services/bots/groupHistory';
 import { GroupTaskStore } from '../services/bots/groupTaskStore';
 import { GroupTaskService } from '../services/bots/groupTasks';
 import { removeBotMemorySpace } from '../services/bots/memoryCleanup';
@@ -265,6 +266,7 @@ export function getBotServices(): BotServices | null {
   const delegationStore = new DelegationStore(
     path.join(userData, 'bot-chats', 'delegations.jsonl')
   );
+  const taskStore = new GroupTaskStore(path.join(userData, 'bot-chats'));
   const groups = new GroupChatService({
     bots,
     chats,
@@ -272,6 +274,20 @@ export function getBotServices(): BotServices | null {
     emit: emitBotEvent,
     delegatedTargets: (conversationId, turnKey) =>
       turnDelegationTargets(delegationStore.list(), conversationId, turnKey),
+    groupState: (chatId) => ({
+      delegations: delegationStore
+        .list(chatId)
+        .filter((record) => record.state === 'queued' || record.state === 'running')
+        .map((record) => ({
+          from: record.parentBotId,
+          to: record.targetBotId,
+          state: record.state,
+          task: record.task,
+        })),
+      tasks: taskStore
+        .list(chatId)
+        .filter((task) => task.status === 'todo' || task.status === 'doing'),
+    }),
     responder: createSmartRouter({
       settings: () => readSettingsState(),
       judge: async ({ preferred, ...request }, signal) => {
@@ -300,10 +316,11 @@ export function getBotServices(): BotServices | null {
   });
   host.onDiscard((scope) => {
     if (scope.chatId) groups.discard(scope.chatId);
+    groups.clearCompacted(scope);
   });
   let delegationsRef: DelegationService | undefined;
   const tasks = new GroupTaskService({
-    store: new GroupTaskStore(path.join(userData, 'bot-chats')),
+    store: taskStore,
     chats,
     bots,
     emit: emitBotEvent,
@@ -578,6 +595,30 @@ export function groupTasksTool(
   )
     return { ok: false, error: 'Tasks are only available in the current group chat session.' };
   return services.tasks.tool(chat.id, binding.botId, params);
+}
+
+/** worker 的 group_history 调用：chatId 只取会话权威绑定，且必须是该成员在该群的当前会话 */
+export function groupHistoryTool(
+  services: BotServices | null | undefined,
+  conversationId: string,
+  binding: { botId: string; chatId: string | null },
+  params: Record<string, unknown>
+): unknown {
+  const chat = services && binding.chatId ? services.chats.get(binding.chatId) : undefined;
+  if (
+    !services ||
+    chat?.kind !== 'group' ||
+    !chat.members.includes(binding.botId) ||
+    chat.sessions[binding.botId]?.conversationId !== conversationId
+  )
+    return { ok: false, error: 'History is only available in the current group chat session.' };
+  const query = parseGroupHistoryQuery(params);
+  if (typeof query === 'string') return { ok: false, error: query };
+  return queryGroupHistory(
+    services.chats.readEntries(chat.id, { limit: Number.MAX_SAFE_INTEGER }),
+    (id) => services.bots.get(id)?.name,
+    query
+  );
 }
 
 export function registerBotHandlers(): void {

@@ -1936,6 +1936,19 @@ describe('browser-invoke / browser-result', () => {
 });
 
 describe('memory-invoke / memory-result', () => {
+  it('delegation-invoke 接受 group_history，拒绝未知 op', () => {
+    const event = {
+      type: 'delegation-invoke',
+      identity: parent,
+      seq: 1,
+      requestId: 'd-1',
+      op: 'group_history',
+      params: { limit: 5 },
+    };
+    expect(parseAgentWorkerEvent(event)).toEqual(event);
+    expect(parseAgentWorkerEvent({ ...event, op: 'group_secrets' })).toBeNull();
+  });
+
   const invoke = {
     type: 'memory-invoke',
     identity: parent,

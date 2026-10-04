@@ -17,6 +17,7 @@ import {
   type DistillPayload,
   distillFingerprint,
   ensureDistillJob,
+  lastDistillWatermark,
   listDistillJobs,
   listResumableDistillJobs,
   runDistillJob,
@@ -244,12 +245,23 @@ async function readSessionTranscript(sessionFile: string): Promise<TranscriptMes
  * 建幂等任务（同会话同内容只一次）→ 后台跑。返回新水位（下次的 fromEntryId），由调用方保存；
  * 读失败 / 开关关闭时原样返回起点。开关关闭不建库也不建任务。绝不抛。
  */
-export async function scheduleMemoryDistill(payload: DistillPayload): Promise<string | undefined> {
+export async function scheduleMemoryDistill(
+  payload: DistillPayload,
+  /** continueFromLastJob：未给 fromEntryId 时从该会话最近一次任务的终点续作（Code 会话无外部水位） */
+  opts: { continueFromLastJob?: boolean } = {}
+): Promise<string | undefined> {
   if (!distillConfig.enabled) return payload.fromEntryId;
   let watermark = payload.fromEntryId;
-  await runDistill(payload, undefined, undefined, false, (next) => {
-    watermark = next;
-  });
+  await runDistill(
+    payload,
+    undefined,
+    undefined,
+    false,
+    (next) => {
+      watermark = next;
+    },
+    opts.continueFromLastJob === true
+  );
   return watermark;
 }
 
@@ -285,7 +297,8 @@ function runDistill(
   onStarted?: () => void,
   force?: boolean,
   manual = false,
-  onWatermark?: (watermark: string | undefined) => void
+  onWatermark?: (watermark: string | undefined) => void,
+  continueFromLastJob = false
 ): Promise<void> {
   const queuedAt = performance.now();
   return enqueueLlmJob(async () => {
@@ -294,6 +307,11 @@ function runDistill(
         sessionId: payload.sessionId,
         durationMs: Math.round(performance.now() - queuedAt),
       });
+    // 在串行队列里读水位：压缩触发与会话结束触发先后到达时，后者能看到前者盖的终点
+    if (continueFromLastJob && payload.fromEntryId === undefined) {
+      const fromEntryId = lastDistillWatermark(memoryDb(), payload.sessionId);
+      if (fromEntryId) payload = { ...payload, fromEntryId };
+    }
     const { messages, watermark } = sliceTranscript(
       await distillConfig.readTranscript(payload.sessionFile),
       payload.fromEntryId

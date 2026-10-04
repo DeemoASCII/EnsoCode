@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { GroupEntry } from '../types/bot';
-import { buildGroupDelta, TRANSCRIPT_LABELS } from './transcript';
+import { buildGroupDelta, buildGroupStateBlock, TRANSCRIPT_LABELS } from './transcript';
 
 const members = [
   { id: 'me', name: '阿后', title: '后端', scope: '写接口' },
@@ -164,5 +164,81 @@ describe('buildGroupDelta', () => {
       text: '',
       cursor: 0,
     });
+  });
+});
+
+describe('buildGroupStateBlock（压缩后补群状态）', () => {
+  const state = {
+    chatTitle: '项目群',
+    selfId: 'me',
+    members,
+    bossBotId: 'fe',
+    routing: { current: 'fe', queue: ['me'] },
+    delegations: [{ from: 'me', to: 'fe', state: 'running' as const, task: '做登录页' }],
+    tasks: [
+      { seq: 3, title: '登录页', status: 'doing' as const, assigneeBotId: 'fe' },
+      { seq: 4, title: '部署', status: 'todo' as const },
+    ],
+    lastSeq: 42,
+  };
+
+  it('确定性生成成员分工、群主、待回应、委派、看板与 seq 提示', () => {
+    const text = buildGroupStateBlock(state);
+    expect(text.startsWith('<group-state>')).toBe(true);
+    expect(text.endsWith('</group-state>')).toBe(true);
+    expect(text).toContain('阿后（后端）：写接口');
+    expect(text).toMatch(/阿后[^\n]*你/);
+    expect(text).toMatch(/Fe[^\n]*群主/);
+    expect(text).toContain('Fe（正在回复）');
+    expect(text).toContain('阿后 → Fe');
+    expect(text).toContain('做登录页');
+    expect(text).toContain('#3 登录页');
+    expect(text).toContain('#4 部署');
+    expect(text).toContain('42');
+    expect(text).toContain('group_history');
+    expect(buildGroupStateBlock(state)).toBe(text);
+  });
+
+  it('没有委派 / 任务 / 待回应时省略对应段落', () => {
+    const text = buildGroupStateBlock({
+      ...state,
+      routing: { current: null, queue: [] },
+      delegations: [],
+      tasks: [],
+    });
+    expect(text).not.toContain('→');
+    expect(text).not.toContain('#3');
+    expect(text).not.toContain('正在回复');
+  });
+
+  it('条目文本、条数与总长都有上限，超出时截断并注明', () => {
+    const many = Array.from({ length: 40 }, (_, i) => ({
+      seq: i + 1,
+      title: `任务${i}${'长'.repeat(300)}`,
+      status: 'todo' as const,
+    }));
+    const text = buildGroupStateBlock({
+      ...state,
+      delegations: Array.from({ length: 20 }, () => ({
+        from: 'me',
+        to: 'fe',
+        state: 'queued' as const,
+        task: '委'.repeat(1000),
+      })),
+      tasks: many,
+      maxChars: 2000,
+    });
+    expect(text.length).toBeLessThanOrEqual(2000);
+    expect(text).toContain('…');
+    expect(text).not.toContain('长'.repeat(200));
+    expect(text.endsWith('</group-state>')).toBe(true);
+  });
+
+  it('转义 XML 特殊字符', () => {
+    const text = buildGroupStateBlock({
+      ...state,
+      tasks: [{ seq: 1, title: '<b>&', status: 'todo' as const }],
+    });
+    expect(text).toContain('&lt;b&gt;&amp;');
   });
 });

@@ -1,4 +1,4 @@
-import type { BotId, BotProfile, DelegationState, GroupEntry } from '../types/bot';
+import type { BotId, BotProfile, DelegationState, GroupEntry, GroupTaskStatus } from '../types/bot';
 
 export type TranscriptMember = Pick<BotProfile, 'id' | 'name' | 'title' | 'scope'>;
 
@@ -21,10 +21,115 @@ export const TRANSCRIPT_LABELS = {
   intro: (title: string, self: string) => `你在群聊「${title}」中，你是 ${self}。群成员：`,
 } as const;
 
+export const GROUP_STATE_LABELS = {
+  head: (title: string) =>
+    `你的上下文刚被压缩，以下是群聊「${title}」当前状态（系统根据群记录生成，以此为准）：`,
+  members: '成员与分工：',
+  self: '你',
+  boss: '群主',
+  replying: '正在回复',
+  waiting: '待回应（按顺序）：',
+  delegations: '进行中的委派：',
+  tasks: '看板未完成任务：',
+  unassigned: '无人负责',
+  taskStatus: {
+    todo: '待办',
+    doing: '进行中',
+    done: '已完成',
+    canceled: '已取消',
+  } satisfies Record<GroupTaskStatus, string>,
+  more: (count: number) => `…另有 ${count} 项`,
+  footer: (seq: number) =>
+    `群时间线当前到 seq ${seq}。已达成的约定见群记忆；需要更早的原话时用 group_history 按 seq / 关键词 / 发言人查。`,
+} as const;
+
 const DEFAULT_LIMIT = 40;
+const STATE_MAX_CHARS = 4000;
+const STATE_ITEM_CHARS = 160;
+const STATE_MAX_ITEMS = 10;
 
 const escapeXml = (value: string): string =>
   value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+
+const oneLine = (value: string, max = STATE_ITEM_CHARS): string => {
+  const text = value.replace(/\s+/g, ' ').trim();
+  return text.length > max ? `${text.slice(0, max)}…` : text;
+};
+
+/**
+ * 压缩后补给成员的群状态块：只用 Main 的权威数据确定性生成（成员分工、群主、待回应、进行中委派、
+ * 看板未完成任务、时间线 seq），条目与总长都有上限。约定与决策由群记忆承载，不在这里生成。
+ */
+export function buildGroupStateBlock(input: {
+  chatTitle: string;
+  selfId: BotId;
+  members: readonly TranscriptMember[];
+  bossBotId: BotId | null;
+  routing: { current: BotId | null; queue: readonly BotId[] };
+  delegations: readonly { from: BotId; to: BotId; state: DelegationState; task: string }[];
+  tasks: readonly { seq: number; title: string; status: GroupTaskStatus; assigneeBotId?: BotId }[];
+  lastSeq: number;
+  maxChars?: number;
+}): string {
+  const L = GROUP_STATE_LABELS;
+  const nameOf = (id: BotId) =>
+    input.members.find((m) => m.id === id)?.name ?? TRANSCRIPT_LABELS.deleted;
+  const capped = (items: string[]) =>
+    items.length > STATE_MAX_ITEMS
+      ? [...items.slice(0, STATE_MAX_ITEMS), L.more(items.length - STATE_MAX_ITEMS)]
+      : items;
+  const lines = [
+    L.head(oneLine(input.chatTitle, 60)),
+    L.members,
+    ...capped(
+      input.members.map((m) => {
+        const title = m.title ? `（${oneLine(m.title, 40)}）` : '';
+        const scope = m.scope?.trim() ? `：${oneLine(m.scope)}` : '';
+        const tags = [
+          ...(m.id === input.bossBotId ? [L.boss] : []),
+          ...(m.id === input.selfId ? [L.self] : []),
+        ];
+        return `- ${m.name}${title}${scope}${tags.length ? ` [${tags.join('，')}]` : ''}`;
+      })
+    ),
+  ];
+  const waiting = [
+    ...(input.routing.current ? [`${nameOf(input.routing.current)}（${L.replying}）`] : []),
+    ...input.routing.queue.map(nameOf),
+  ];
+  if (waiting.length) lines.push(`${L.waiting}${waiting.join('、')}`);
+  if (input.delegations.length)
+    lines.push(
+      L.delegations,
+      ...capped(
+        input.delegations.map(
+          (d) =>
+            `- ${nameOf(d.from)} → ${nameOf(d.to)}（${TRANSCRIPT_LABELS.delegationState[d.state] ?? d.state}）：${oneLine(d.task)}`
+        )
+      )
+    );
+  if (input.tasks.length)
+    lines.push(
+      L.tasks,
+      ...capped(
+        input.tasks.map(
+          (t) =>
+            `- #${t.seq} ${oneLine(t.title)}（${L.taskStatus[t.status] ?? t.status}，${t.assigneeBotId ? nameOf(t.assigneeBotId) : L.unassigned}）`
+        )
+      )
+    );
+  lines.push(L.footer(input.lastSeq));
+  const open = '<group-state>\n';
+  const close = '\n</group-state>';
+  const budget = Math.max(200, input.maxChars ?? STATE_MAX_CHARS) - open.length - close.length;
+  let body = escapeXml(lines.join('\n'));
+  if (body.length > budget) {
+    // 页脚（seq 与 group_history 提示）必须保留，从中间截断
+    const footer = `\n…\n${escapeXml(L.footer(input.lastSeq))}`;
+    body = `${body.slice(0, Math.max(0, budget - footer.length)).replace(/&[a-z]*$/, '')}${footer}`;
+  }
+  return `${open}${body}${close}`;
+}
 
 function message(attrs: { from: string; role?: string; seq: number }, body: string): string {
   const role = attrs.role ? ` role="${escapeXml(attrs.role)}"` : '';

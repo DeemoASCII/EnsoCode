@@ -271,6 +271,15 @@ Main 在 `spawnSession` 里根据 `ConversationAuthority.bot` 组装提示词，
 - **事件与开关**：任务变更推 `BOT_EVENT {kind:'tasks', chatId}`，renderer 只刷新打开过看板的群。botModeEnabled 关闭时 IPC 返回 disabled（列表返回空 + `enabled:false`），worker 侧工具不挂，Main 侧调用一律拒绝。
 - **手机端**：本期不做；`tasks` 事件不经 pair 转发，pair 协议不变。
 
+### 压缩后的群协作连续性
+
+成员会话与 Code 共用压缩（用户选的压缩策略照常生效，bot 不覆盖）。群消息按 cursor 增量注入，压缩后早期原话只剩摘要，因此补三件事：
+
+- **`group_history` 只读工具**：与 `group_tasks` 同挂点（spawn `botGroupTasks`，仅群聊成员会话），经 `delegation-invoke`（op=`group_history`）进 Main。参数 `beforeSeq / afterSeq / limit(默认 30，≤100) / query(大小写不敏感子串) / from(成员名或「用户」)`，`prepareArguments` 在 schema 校验前归一化（别名键、`"#12"` 等数字串、limit 夹取、空值删除）。Main 只按会话权威绑定推导 chatId（参数里的 chatId 忽略），并要求是该成员在该群的当前会话；返回 `{seq, at, from, text}`，委派 / 系统条目给简短描述，单条 2000 字、总量 40000 字截断并标注，`hasMore` 指示继续翻页。无 afterSeq 时取最近，只给 afterSeq 时向后翻。botModeEnabled 关闭时 Main 拒绝。
+- **压缩触发记忆整理**：Main 收到成功的 `compaction end`（无 error、非 abandoned）时与会话结束走同一入口：bot 会话 `BotMemoryService.distill`（已有水位），Code 会话 `scheduleMemoryDistill(..., { continueFromLastJob: true })`——未给水位时在串行队列里读该会话最近一次 `memory_jobs` 的 `toEntryId` 续作，首个任务仍全量；会话结束蒸馏同样改走续作，压缩后再结束不重复整理前半段。jsonl 不因压缩丢原文，只是提前整理。
+- **压缩后补群状态**：群聊成员会话压缩成功后，`GroupChatService` 在内存里给该会话打标记；下一次向该成员投递群增量时在前面追加 `<group-state>`，由 Main 权威数据确定性生成：成员与分工、群主、本轮待回应顺序、进行中委派（谁→谁、任务）、看板未完成任务（#N、状态、负责人）、当前时间线 seq 与 `group_history` 提示；条目 / 条数 / 总长（4000 字）都有上限。已达成的约定由群记忆（chat 空间）承载，不在这里生成。投递成功（含排队）后清标记，失败保留；删群、会话退役、删成员时清标记；重启后标记丢失（可接受，最多少补一次）。私聊不做。
+- **手动压缩**：桌面 `AGENT_COMPACT` 对 bot 会话放行（不改执行与策略，忙碌时 worker 排队）；手机 pair 仍拒绝，不加 UI 入口。
+
 ## UI
 
 - **模式切换**：侧栏顶部 NodeSwitcher 旁边放 `Code | Bot` 分段控件，存到 `localStorage['enso-mode']`。只在本机生效：切到远程节点时隐藏切换并回到 Code 视图。快捷键、标题栏按钮、SidePanel 照远程节点的做法按模式屏蔽。
@@ -362,3 +371,9 @@ Main 在 `spawnSession` 里根据 `ConversationAuthority.bot` 组装提示词，
 - 例行任务：保存、立即运行、Code 模式下触发后切回 Bot 仍能看到新消息。
 - Code 模式：`@成员` 补全单独成组，拉成员当 coworker，在 Code 项目目录执行。
 - 未在真机验证：手机端（协议与客户端有单测，手机 vite build 通过）、Web Push、桌面通知点击跳转、定时自动触发（只验证了立即运行）。
+
+**压缩连续性真机验证（2026-10-04，隔离 userData，Claude sonnet-4-6 + 阿里云 GLM-5.3，压缩策略 continuous-memory）**
+
+- 两人群聊数轮后对两位成员手动压缩：各自下一次投递带 `<group-state>`（分工、群主、待回应、看板 #1 进行中、当前 seq），之后的投递不再带。
+- GLM 成员压缩后调用 `group_history {limit:20}` 找回 seq 1 暗号原话与 seq 9 文案原句；Claude 成员调用 `group_history {query:"按钮颜色"}` 找回 seq 10 原话。
+- 压缩后各生成一个蒸馏任务（带 chatId，群约定落 chat 空间）；新增若干轮后再压缩，新任务 `fromEntryId` = 上次 `toEntryId`；紧接着再压缩（Already compacted）不产生任务。

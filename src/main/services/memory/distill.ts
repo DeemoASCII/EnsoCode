@@ -663,6 +663,17 @@ export function ensureDistillJob(
     .immediate();
 }
 
+/** 该会话最近一次蒸馏任务盖章的终点水位；没有任务或旧任务未盖章时返回 undefined（调用方按全量处理） */
+export function lastDistillWatermark(db: Database.Database, sessionId: string): string | undefined {
+  const prefix = `${sessionId}#`;
+  const row = db
+    .prepare(
+      'SELECT * FROM memory_jobs WHERE kind = ? AND substr(target, 1, ?) = ? ORDER BY id DESC LIMIT 1'
+    )
+    .get(KIND, prefix.length, prefix) as JobRow | undefined;
+  return row ? toJob(row).payload.toEntryId : undefined;
+}
+
 /** 重启后要续跑的任务：pending 与上次进程死在半路的 running */
 export function listResumableDistillJobs(db: Database.Database): DistillJob[] {
   return (
