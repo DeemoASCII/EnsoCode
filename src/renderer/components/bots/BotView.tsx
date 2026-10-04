@@ -1,4 +1,4 @@
-import { Bot, Inbox, PanelLeft, UserPlus, Users } from 'lucide-react';
+import { Bot, Inbox, PanelLeft, Settings, UserPlus, Users } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { ResizeHandle } from '@/components/chat/ResizeHandle';
 import { Button } from '@/components/ui/button';
@@ -58,14 +58,6 @@ export function BotView({ sidebarWidth, collapsed, onToggleCollapse, onResize }:
           <button
             type="button"
             className={RAIL_BUTTON}
-            onClick={onToggleCollapse}
-            title={t('Expand sidebar')}
-          >
-            <PanelLeft className="h-4 w-4" />
-          </button>
-          <button
-            type="button"
-            className={RAIL_BUTTON}
             onClick={() => setNewMember(true)}
             title={t('New member')}
           >
@@ -89,6 +81,23 @@ export function BotView({ sidebarWidth, collapsed, onToggleCollapse, onResize }:
             {inboxCount > 0 && (
               <CountBadge count={inboxCount} className="-top-0.5 -right-1 absolute" />
             )}
+          </button>
+          <div className="flex-1" />
+          <button
+            type="button"
+            className={RAIL_BUTTON}
+            onClick={() => void window.electronAPI.window.openSettings()}
+            title={t('Settings')}
+          >
+            <Settings className="h-4 w-4" />
+          </button>
+          <button
+            type="button"
+            className={RAIL_BUTTON}
+            onClick={onToggleCollapse}
+            title={t('Expand sidebar')}
+          >
+            <PanelLeft className="h-4 w-4" />
           </button>
         </aside>
       ) : (

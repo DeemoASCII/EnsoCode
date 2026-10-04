@@ -3,7 +3,7 @@ import {
   Archive,
   ArchiveRestore,
   Inbox,
-  PanelLeft,
+  PanelLeftClose,
   Pin,
   PinOff,
   Plus,
@@ -127,15 +127,6 @@ export function BotSidebar({ width, onCollapse, onNewMember, onNewGroup }: BotSi
       <div className="flex h-12 shrink-0 items-center gap-1 pr-2 pl-1.5">
         <NodeSwitcher className="max-w-32" />
         <ModeSwitch />
-        <div className="flex-1" />
-        <button
-          type="button"
-          onClick={onCollapse}
-          className={ICON_BUTTON_CLASS}
-          title={t('Collapse sidebar')}
-        >
-          <PanelLeft className="h-4 w-4" />
-        </button>
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto pb-2">
@@ -237,50 +228,60 @@ export function BotSidebar({ width, onCollapse, onNewMember, onNewGroup }: BotSi
         )}
       </div>
 
-      <div className="flex shrink-0 items-center justify-around border-t p-1.5">
+      <div className="flex shrink-0 items-center justify-between border-t p-2">
         <button
           type="button"
+          onClick={onCollapse}
           className={ICON_BUTTON_CLASS}
-          onClick={onNewMember}
-          title={t('New member')}
+          title={t('Collapse sidebar')}
         >
-          <UserPlus className="h-4 w-4" />
+          <PanelLeftClose className="h-4 w-4" />
         </button>
-        <button
-          type="button"
-          className={ICON_BUTTON_CLASS}
-          onClick={onNewGroup}
-          title={t('New group chat')}
-        >
-          <Users className="h-4 w-4" />
-        </button>
-        <button
-          type="button"
-          className={cn(ICON_BUTTON_CLASS, view?.kind === 'inbox' && 'bg-muted text-foreground')}
-          onClick={() => setView({ kind: 'inbox' })}
-          title={t('Inbox')}
-        >
-          <Inbox className="h-4 w-4" />
-          {inboxCount > 0 && (
-            <CountBadge count={inboxCount} className="-top-0.5 -right-1 absolute" />
-          )}
-        </button>
-        <button
-          type="button"
-          className={cn(ICON_BUTTON_CLASS, showArchived && 'bg-muted text-foreground')}
-          onClick={() => setShowArchived((value) => !value)}
-          title={t('Archived')}
-        >
-          <Archive className="h-4 w-4" />
-        </button>
-        <button
-          type="button"
-          className={ICON_BUTTON_CLASS}
-          onClick={() => void window.electronAPI.window.openSettings()}
-          title={t('Settings')}
-        >
-          <Settings className="h-4 w-4" />
-        </button>
+        <div className="flex items-center">
+          <button
+            type="button"
+            className={ICON_BUTTON_CLASS}
+            onClick={onNewMember}
+            title={t('New member')}
+          >
+            <UserPlus className="h-4 w-4" />
+          </button>
+          <button
+            type="button"
+            className={ICON_BUTTON_CLASS}
+            onClick={onNewGroup}
+            title={t('New group chat')}
+          >
+            <Users className="h-4 w-4" />
+          </button>
+          <button
+            type="button"
+            className={cn(ICON_BUTTON_CLASS, view?.kind === 'inbox' && 'bg-muted text-foreground')}
+            onClick={() => setView({ kind: 'inbox' })}
+            title={t('Inbox')}
+          >
+            <Inbox className="h-4 w-4" />
+            {inboxCount > 0 && (
+              <CountBadge count={inboxCount} className="-top-0.5 -right-1 absolute" />
+            )}
+          </button>
+          <button
+            type="button"
+            className={cn(ICON_BUTTON_CLASS, showArchived && 'bg-muted text-foreground')}
+            onClick={() => setShowArchived((value) => !value)}
+            title={t('Archived')}
+          >
+            <Archive className="h-4 w-4" />
+          </button>
+          <button
+            type="button"
+            className={ICON_BUTTON_CLASS}
+            onClick={() => void window.electronAPI.window.openSettings()}
+            title={t('Settings')}
+          >
+            <Settings className="h-4 w-4" />
+          </button>
+        </div>
       </div>
 
       <ConfirmDialog
