@@ -7,6 +7,7 @@ import {
 } from '@/components/chat/MessageTimeline';
 import { RetryBar } from '@/components/chat/RetryBar';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { cn } from '@/lib/utils';
 import { useBotsStore } from '@/stores/bots';
 import { buildTimeline } from '@/stores/sessions/timeline';
 
@@ -14,6 +15,7 @@ interface LiveSessionTimelineProps {
   conversationId: string;
   speaker: { name: string; color: string };
   emptyTitle: string;
+  className?: string;
 }
 
 /** 成员会话的实时投影（私聊正文、群里正在回复的成员） */
@@ -21,6 +23,7 @@ export function LiveSessionTimeline({
   conversationId,
   speaker,
   emptyTitle,
+  className,
 }: LiveSessionTimelineProps) {
   const projection = useBotsStore((s) => s.sessions[conversationId]);
   const historyLoading = useBotsStore((s) => Boolean(s.sessionHistoryLoading[conversationId]));
@@ -57,7 +60,7 @@ export function LiveSessionTimeline({
 
   return (
     <ChatHostContext.Provider value={host}>
-      <div className="@container flex min-h-0 flex-1 flex-col">
+      <div className={cn('@container flex min-h-0 flex-1 flex-col', className)}>
         <MessageTimeline
           key={conversationId}
           ref={timelineRef}
@@ -112,15 +115,14 @@ export function LiveSessionDialog({
         <DialogHeader>
           <DialogTitle>{title}</DialogTitle>
         </DialogHeader>
-        <div className="flex min-h-0 flex-1 flex-col border-t">
-          {conversationId && (
-            <LiveSessionTimeline
-              conversationId={conversationId}
-              speaker={speaker}
-              emptyTitle={title}
-            />
-          )}
-        </div>
+        {conversationId && (
+          <LiveSessionTimeline
+            className="border-t"
+            conversationId={conversationId}
+            speaker={speaker}
+            emptyTitle={title}
+          />
+        )}
         {footer && <div className={CHAT_COL}>{footer}</div>}
       </DialogContent>
     </Dialog>
