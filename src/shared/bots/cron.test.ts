@@ -140,6 +140,8 @@ describe('describeCron', () => {
     expect(describeCron('30 8 1 * *', 'zh')).toBe('每月 1 日 08:30');
     expect(describeCron('30 8 1 * *', 'en')).toBe('Monthly on day 1 at 08:30');
     expect(describeCron(cron('0 9 * * *'), 'zh')).toBe('每天 09:00');
+    expect(describeCron('0 9 * * 1,3,5', 'zh')).toBe('每周一、三、五 09:00');
+    expect(describeCron('0 9 * * 0,6', 'en')).toBe('Every Sunday, Saturday at 09:00');
   });
 
   it('其余回退原文（含非法表达式）', () => {

@@ -1,5 +1,12 @@
 import type { AttachedImage } from '@shared/types/agent';
-import type { BotChat, BotProfile, Delegation, GroupEntry, GroupTask } from '@shared/types/bot';
+import type {
+  BotChat,
+  BotProfile,
+  BotRoutine,
+  Delegation,
+  GroupEntry,
+  GroupTask,
+} from '@shared/types/bot';
 import type { BotEvent, BotQueueItem, BotSearchHit, BotSendResult } from '@shared/types/botIpc';
 import { create } from 'zustand';
 import { usePendingMemoryWrites } from '@/stores/memoryReview';
@@ -91,6 +98,8 @@ interface BotsState {
   usage: BotUsageSnapshot | null;
   /** 收件箱里被忽略的预算提示，键为 botId:YYYY-MM-DD */
   dismissedBudgets: string[];
+  /** 全部例行任务：收件箱的待批准 / 阻塞提示、群时间线里的提议卡片 */
+  routines: BotRoutine[];
   timelines: Record<string, TimelineState>;
   runtime: Record<string, ChatRuntime>;
   /** 群任务看板；只缓存打开过看板的群 */
@@ -114,6 +123,7 @@ interface BotsState {
   dismissDelegation: (id: string) => void;
   refreshUsage: () => Promise<void>;
   dismissBudget: (key: string) => void;
+  refreshRoutines: () => Promise<void>;
   refreshTasks: (chatId: string) => Promise<void>;
   loadLatest: (chatId: string) => Promise<void>;
   loadOlder: (chatId: string) => Promise<void>;
@@ -200,9 +210,12 @@ export const useBotsStore = create<BotsState>()((set, get) => {
         break;
       case 'chat':
       case 'queue':
-      case 'routine':
         void get().refreshChats();
         if (event.chatId) void get().refreshRuntime(event.chatId);
+        break;
+      case 'routine':
+        void get().refreshChats();
+        void get().refreshRoutines();
         break;
       case 'timeline':
         if (event.chatId) void get().loadLatest(event.chatId);
@@ -249,6 +262,7 @@ export const useBotsStore = create<BotsState>()((set, get) => {
         get().refreshChats(),
         get().refreshDelegations(),
         get().refreshUsage(),
+        get().refreshRoutines(),
       ]);
       const groups = get().chats.filter((chat) => chat.kind === 'group');
       await Promise.all([
@@ -275,6 +289,7 @@ export const useBotsStore = create<BotsState>()((set, get) => {
     dismissedDelegations: loadDismissed(),
     usage: null,
     dismissedBudgets: loadDismissed(DISMISSED_BUDGETS_KEY),
+    routines: [],
     timelines: {},
     runtime: {},
     tasks: {},
@@ -357,6 +372,15 @@ export const useBotsStore = create<BotsState>()((set, get) => {
       const next = [...get().dismissedBudgets.filter((item) => item !== key), key].slice(-200);
       localStorage.setItem(DISMISSED_BUDGETS_KEY, JSON.stringify(next));
       set({ dismissedBudgets: next });
+    },
+
+    refreshRoutines: async () => {
+      try {
+        const result = await window.electronAPI.bots.routines.list();
+        if (result.ok) set({ routines: result.routines });
+      } catch {
+        // 只影响收件箱提示与提议卡片
+      }
     },
 
     loadLatest: async (chatId) => {

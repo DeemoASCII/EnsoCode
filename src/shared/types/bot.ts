@@ -205,7 +205,12 @@ export type GroupEntry =
       state: DelegationState;
       summary?: string;
     })
-  | (GroupEntryBase & { kind: 'system'; text: string });
+  | (GroupEntryBase & {
+      kind: 'system';
+      text: string;
+      /** 成员提议 / 改动例行任务：时间线据此渲染批准 / 拒绝卡片 */
+      routine?: { botId: BotId; id: string };
+    });
 
 export type GroupEntryInput = GroupEntry extends infer E
   ? E extends GroupEntry
@@ -469,43 +474,109 @@ export function parseGroupEntry(value: unknown): GroupEntry | undefined {
       return entry;
     }
     case 'system':
-      return typeof value.text === 'string'
-        ? { ...base, kind: 'system', text: value.text }
-        : undefined;
+      if (typeof value.text !== 'string') return undefined;
+      return isObject(value.routine) && isBotId(value.routine.botId) && isBotId(value.routine.id)
+        ? {
+            ...base,
+            kind: 'system',
+            text: value.text,
+            routine: { botId: value.routine.botId, id: value.routine.id },
+          }
+        : { ...base, kind: 'system', text: value.text };
     default:
       return undefined;
   }
 }
 
-export const BOT_ROUTINE_RESULTS = ['ok', 'error', 'skipped', 'budget'] as const;
+export const BOT_ROUTINE_RESULTS = [
+  'ok',
+  'error',
+  'skipped',
+  'budget',
+  /** 上一次还在跑时到点 */
+  'skipped-busy',
+  /** 应用退出时仍未结算，启动对账标记 */
+  'interrupted',
+  /** 运行前依赖检查不通过 */
+  'blocked',
+] as const;
 export type BotRoutineResult = (typeof BOT_ROUTINE_RESULTS)[number];
+export const BOT_ROUTINE_STATUSES = ['draft', 'enabled', 'paused', 'blocked'] as const;
+export type BotRoutineStatus = (typeof BOT_ROUTINE_STATUSES)[number];
+export const BOT_ROUTINE_TRIGGERS = ['scheduled', 'manual', 'catchup', 'dry-run'] as const;
+export type BotRoutineTrigger = (typeof BOT_ROUTINE_TRIGGERS)[number];
+export const BOT_ROUTINE_BLOCKS = [
+  'executor-missing',
+  'executor-archived',
+  'chat-missing',
+  'chat-archived',
+  'not-in-chat',
+  'acl',
+] as const;
+export type BotRoutineBlock = (typeof BOT_ROUTINE_BLOCKS)[number];
 
 /** userData/bots/<botId>/routines.json 的一条；触发后作为系统消息投进 chatId */
 export interface BotRoutine {
   id: string;
+  /** 归属成员（按它存放）；未指定 doneBy 时也是执行者 */
   botId: BotId;
   title: string;
   prompt: string;
   /** 5 段 cron，本地时区 */
   schedule: string;
   chatId: BotChatId;
-  enabled: boolean;
+  status: BotRoutineStatus;
+  /** 标题 / 提示词 / 执行者 / 调度 / 目标聊天变更 +1 */
+  procedureVersion: number;
+  /** 用户批准的版本；与 procedureVersion 相等才会按调度或手动运行 */
+  approvedVersion?: number;
+  /** 由另一位成员执行（受委派 ACL 约束） */
+  doneBy?: BotId;
+  /** 应用关闭期间错过时，启动后补跑最近一次 */
+  catchUp: boolean;
+  /** 成员经 routine_propose 提议 / 改动 */
+  proposedBy?: BotId;
+  blockedReason?: BotRoutineBlock;
+  /** 已处理到的调度时刻；之后、当前之前的时刻视为错过 */
+  cursor?: number;
   createdAt: number;
   updatedAt: number;
   lastRunAt?: number;
   lastResult?: BotRoutineResult;
-  /** 应用未运行期间错过的次数（不补跑，只展示），截断到 99 */
+  /** 应用未运行期间错过、未补跑的次数，截断到 99 */
   missed?: number;
 }
 
+export const isRoutineApproved = (routine: BotRoutine): boolean =>
+  routine.approvedVersion === routine.procedureVersion;
+export const routineExecutor = (routine: BotRoutine): BotId => routine.doneBy ?? routine.botId;
+/** 执行占用与投递去重的键：同一例程同一调度时刻只跑一次 */
+export const routineDeliveryId = (routineId: string, scheduledFor: number): string =>
+  `routine:${routineId}:${scheduledFor}`;
+
+const isVersion = (value: unknown): value is number =>
+  Number.isSafeInteger(value) && (value as number) >= 1;
+
 export function parseBotRoutine(value: unknown): BotRoutine | undefined {
   if (!isObject(value) || !isBotId(value.id) || !isBotId(value.botId)) return undefined;
-  if (!isBotChatId(value.chatId) || typeof value.enabled !== 'boolean') return undefined;
+  if (!isBotChatId(value.chatId)) return undefined;
   if (!isText(value.title) || !isText(value.prompt) || typeof value.schedule !== 'string') {
     return undefined;
   }
   const cron = parseCron(value.schedule);
   if (!cron || !isTime(value.createdAt) || !isTime(value.updatedAt)) return undefined;
+  const legacy = value.status === undefined;
+  if (legacy && typeof value.enabled !== 'boolean') return undefined;
+  const status = legacy ? (value.enabled ? 'enabled' : 'paused') : value.status;
+  if (!BOT_ROUTINE_STATUSES.includes(status as BotRoutineStatus)) return undefined;
+  const procedureVersion = legacy ? 1 : value.procedureVersion;
+  const approvedVersion = legacy ? 1 : value.approvedVersion;
+  if (!isVersion(procedureVersion)) return undefined;
+  if (
+    approvedVersion !== undefined &&
+    (!isVersion(approvedVersion) || approvedVersion > procedureVersion)
+  )
+    return undefined;
   const routine: BotRoutine = {
     id: value.id,
     botId: value.botId,
@@ -513,10 +584,18 @@ export function parseBotRoutine(value: unknown): BotRoutine | undefined {
     prompt: value.prompt,
     schedule: cron.source,
     chatId: value.chatId,
-    enabled: value.enabled,
+    status: status as BotRoutineStatus,
+    procedureVersion,
+    ...(approvedVersion !== undefined ? { approvedVersion } : {}),
+    catchUp: value.catchUp !== false,
     createdAt: value.createdAt,
     updatedAt: value.updatedAt,
   };
+  if (isBotId(value.doneBy)) routine.doneBy = value.doneBy;
+  if (isBotId(value.proposedBy)) routine.proposedBy = value.proposedBy;
+  if (BOT_ROUTINE_BLOCKS.includes(value.blockedReason as BotRoutineBlock))
+    routine.blockedReason = value.blockedReason as BotRoutineBlock;
+  if (isTime(value.cursor)) routine.cursor = value.cursor;
   if (isTime(value.lastRunAt)) routine.lastRunAt = value.lastRunAt;
   if (BOT_ROUTINE_RESULTS.includes(value.lastResult as BotRoutineResult)) {
     routine.lastResult = value.lastResult as BotRoutineResult;
@@ -524,6 +603,47 @@ export function parseBotRoutine(value: unknown): BotRoutine | undefined {
   if (isSeq(value.missed) && value.missed > 0)
     routine.missed = Math.min(MISSED_RUNS_MAX, value.missed);
   return routine;
+}
+
+/** userData/bots/<botId>/routine-runs.jsonl 的一条快照（同 runId 后写覆盖）；未结算即占用 */
+export interface BotRoutineRun {
+  runId: string;
+  routineId: string;
+  botId: BotId;
+  executorId: BotId;
+  chatId: BotChatId;
+  trigger: BotRoutineTrigger;
+  scheduledFor: number;
+  startedAt: number;
+  finishedAt?: number;
+  result?: BotRoutineResult;
+  conversationId?: string;
+  error?: string;
+}
+
+export function parseBotRoutineRun(value: unknown): BotRoutineRun | undefined {
+  if (!isObject(value) || !isBotId(value.routineId) || !isBotId(value.botId)) return undefined;
+  if (!isBotId(value.executorId) || !isBotChatId(value.chatId)) return undefined;
+  if (!BOT_ROUTINE_TRIGGERS.includes(value.trigger as BotRoutineTrigger)) return undefined;
+  if (!isSeq(value.scheduledFor) || !isTime(value.startedAt)) return undefined;
+  if (value.runId !== routineDeliveryId(value.routineId, value.scheduledFor)) return undefined;
+  if (value.result !== undefined && !BOT_ROUTINE_RESULTS.includes(value.result as never))
+    return undefined;
+  const run: BotRoutineRun = {
+    runId: value.runId,
+    routineId: value.routineId,
+    botId: value.botId,
+    executorId: value.executorId,
+    chatId: value.chatId,
+    trigger: value.trigger as BotRoutineTrigger,
+    scheduledFor: value.scheduledFor,
+    startedAt: value.startedAt,
+  };
+  if (isTime(value.finishedAt)) run.finishedAt = value.finishedAt;
+  if (value.result !== undefined) run.result = value.result as BotRoutineResult;
+  if (isText(value.conversationId)) run.conversationId = value.conversationId;
+  if (isText(value.error)) run.error = value.error.slice(0, 2000);
+  return run;
 }
 
 export const GROUP_TASK_STATUSES = ['todo', 'doing', 'done', 'canceled'] as const;

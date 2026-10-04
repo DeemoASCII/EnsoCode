@@ -36,7 +36,10 @@ const routine = (id: string, botId: string, chatId: string, createdAt: number): 
   title: id,
   prompt: 'p',
   schedule: '0 9 * * *',
-  enabled: true,
+  status: 'enabled',
+  procedureVersion: 1,
+  approvedVersion: 1,
+  catchUp: true,
   createdAt,
   updatedAt: createdAt,
 });

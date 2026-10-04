@@ -32,6 +32,14 @@ describe('parseBotInjectedMessage', () => {
     });
   });
 
+  it('试运行的例行任务带标记，并去掉给成员看的试运行说明', () => {
+    expect(
+      parseBotInjectedMessage(
+        '<routine title="日报" dry-run="true">[Dry run] The user triggered this routine manually as a trial run.\n\n写日报</routine>'
+      )
+    ).toEqual({ kind: 'routine', title: '日报', prompt: '写日报', dryRun: true });
+  });
+
   it('群消息逐条解码，隐藏 group-info，保留尾部指令', () => {
     expect(
       parseBotInjectedMessage(

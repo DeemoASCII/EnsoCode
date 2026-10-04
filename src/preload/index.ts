@@ -149,6 +149,8 @@ import type {
   BotNotesResult,
   BotPersonaSuggestRequest,
   BotPersonaSuggestResult,
+  BotRoutineReviewResult,
+  BotRoutineRunsResult,
   BotRoutineSaveInput,
   BotRoutineSaveResult,
   BotRoutinesResult,
@@ -1162,8 +1164,19 @@ const electronAPI = {
         ipcRenderer.invoke(IPC_CHANNELS.BOT_ROUTINE_SAVE, request),
       remove: (request: { botId: string; id: string }): Promise<BotActionResult> =>
         ipcRenderer.invoke(IPC_CHANNELS.BOT_ROUTINE_DELETE, request),
-      runNow: (request: { botId: string; id: string }): Promise<BotActionResult> =>
-        ipcRenderer.invoke(IPC_CHANNELS.BOT_ROUTINE_RUN_NOW, request),
+      runNow: (request: {
+        botId: string;
+        id: string;
+        dryRun?: boolean;
+      }): Promise<BotActionResult> => ipcRenderer.invoke(IPC_CHANNELS.BOT_ROUTINE_RUN_NOW, request),
+      review: (request: {
+        botId: string;
+        id: string;
+        approve: boolean;
+      }): Promise<BotRoutineReviewResult> =>
+        ipcRenderer.invoke(IPC_CHANNELS.BOT_ROUTINE_REVIEW, request),
+      runs: (request: { botId: string; id: string }): Promise<BotRoutineRunsResult> =>
+        ipcRenderer.invoke(IPC_CHANNELS.BOT_ROUTINE_RUNS, request),
     },
     /** 成员 / 群核心笔记：target 只传 { botId } 或 { chatId } */
     notes: {

@@ -1,5 +1,5 @@
 import type { ApprovalRequestInfo, AskRequestInfo } from '@shared/types/agent';
-import type { BotChat, Delegation } from '@shared/types/bot';
+import type { BotChat, BotRoutine, Delegation } from '@shared/types/bot';
 import { describe, expect, it } from 'vitest';
 import { emptyProjection } from '@/stores/sessions/reducer';
 import {
@@ -124,6 +124,13 @@ describe('botPendingCount', () => {
     };
     expect(botPendingCount(state)).toBe(3);
     expect(botPendingCount({ ...state, dismissedDelegations: ['d2'] })).toBe(2);
+    const draft = { id: 'r', status: 'draft', updatedAt: 1 } as BotRoutine;
+    expect(
+      botPendingCount({
+        ...state,
+        routines: [draft, { ...draft, id: 'r2', status: 'enabled' } as BotRoutine],
+      })
+    ).toBe(4);
     expect(
       botPendingCount({ sessions: {}, chats: [], delegations: [], dismissedDelegations: [] })
     ).toBe(0);

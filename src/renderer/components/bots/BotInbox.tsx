@@ -9,12 +9,14 @@ import { toolLabel } from '@/lib/toolLabels';
 import { useBotsStore } from '@/stores/bots';
 import { type BudgetAlert, budgetAlerts } from '@/stores/bots/budget';
 import { interruptedDelegations, pendingOwners } from '@/stores/bots/delegations';
+import { routineAlerts } from '@/stores/bots/routines';
 import { type PendingItem, pendingItems } from '@/stores/bots/selectors';
 import { usePendingMemoryWrites } from '@/stores/memoryReview';
 import { BotAvatar } from './BotAvatar';
 import { chatTitle } from './botText';
 import { DelegationBadge, failureText, retryDelegation } from './DelegationCard';
 import { MemoryWriteCard } from './MemoryWriteCard';
+import { RoutineAlertCard } from './RoutineCards';
 import { SessionHistoryDialog } from './SessionHistoryDialog';
 
 /** 收件箱：成员会话与委派会话里待你处理的审批、提问，以及重启中断的委派 */
@@ -27,6 +29,7 @@ export function BotInbox() {
   const dismissed = useBotsStore((s) => s.dismissedDelegations);
   const usage = useBotsStore((s) => s.usage);
   const dismissedBudgets = useBotsStore((s) => s.dismissedBudgets);
+  const routines = useBotsStore((s) => s.routines);
   const [history, setHistory] = useState<{ id: string; title: string; bot?: BotProfile } | null>(
     null
   );
@@ -39,6 +42,7 @@ export function BotInbox() {
     [delegations, dismissed]
   );
   const budgets = useMemo(() => budgetAlerts(usage, dismissedBudgets), [usage, dismissedBudgets]);
+  const routineItems = useMemo(() => routineAlerts(routines), [routines]);
   const memoryWrites = usePendingMemoryWrites();
   const byId = useMemo(() => new Map(bots.map((bot) => [bot.id, bot])), [bots]);
   const chatName = (chatId: string | null) => {
@@ -59,6 +63,7 @@ export function BotInbox() {
           {items.length === 0 &&
             interrupted.length === 0 &&
             budgets.length === 0 &&
+            routineItems.length === 0 &&
             memoryWrites.length === 0 && (
               <div className="flex flex-col items-center gap-2 py-16 text-muted-foreground">
                 <Inbox className="h-6 w-6" />
@@ -84,6 +89,9 @@ export function BotInbox() {
               bot={write.botId ? byId.get(write.botId) : undefined}
               chatName={chatName(write.chatId)}
             />
+          ))}
+          {routineItems.map((alert) => (
+            <RoutineAlertCard key={alert.routine.id} alert={alert} />
           ))}
           {interrupted.length > 0 && (
             <div className="pt-3 font-medium text-muted-foreground text-xs">

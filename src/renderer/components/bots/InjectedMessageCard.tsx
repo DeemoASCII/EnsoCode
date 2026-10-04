@@ -21,7 +21,7 @@ export function InjectedMessageCard({ message }: { message: BotInjectedMessage }
           : CornerDownRight;
   const title =
     message.kind === 'routine'
-      ? `${t('Routine task')} · ${message.title}`
+      ? `${message.dryRun ? t('Routine dry run') : t('Routine task')} · ${message.title}`
       : message.kind === 'group'
         ? t('Group messages')
         : message.kind === 'delegation-task'

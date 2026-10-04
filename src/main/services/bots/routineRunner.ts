@@ -1,12 +1,17 @@
-import { randomUUID } from 'node:crypto';
 import { parseChildSessionIdentity } from '../../../shared/builtinAgents';
 import type { AgentWorkerEvent, SessionIdentity } from '../../../shared/types/agent';
 import type { BotRoutine } from '../../../shared/types/bot';
 import type { BotSessionHost } from './botSessionHost';
 import type { BotChatStore } from './chatStore';
 import type { GroupChatService } from './groupChat';
+import type { RoutineRunOptions, RoutineRunResult } from './routineScheduler';
 
-type Result = { ok: boolean; error?: string };
+type Result = RoutineRunResult;
+const DRY_RUN_NOTE =
+  '[Dry run] The user triggered this routine manually as a trial run; it does not affect the schedule. Do the task as you normally would.';
+const attr = (text: string) =>
+  text.replaceAll('&', '&amp;').replaceAll('"', '&quot;').replaceAll('<', '&lt;');
+
 export class RoutineRunner {
   private readonly unsubscribe: () => void;
   private disposed = false;
@@ -28,6 +33,7 @@ export class RoutineRunner {
         this.pending.get(event.deliveryId)?.({
           ok: event.ok,
           ...(event.error ? { error: event.error } : {}),
+          conversationId: event.conversationId,
         });
         this.pending.delete(event.deliveryId);
       }
@@ -42,27 +48,36 @@ export class RoutineRunner {
     });
   }
 
-  run(routine: BotRoutine): Promise<Result> {
+  /** 以 executorId 的身份投进 routine.chatId；deliveryId 由调度器按 (routineId, scheduledFor) 派生 */
+  run(routine: BotRoutine, { deliveryId, executorId, dryRun }: RoutineRunOptions): Promise<Result> {
     if (this.disposed) return Promise.resolve({ ok: false, error: 'disabled' });
-    const deliveryId = `routine:${randomUUID()}`;
-    const text = `<routine title="${routine.title.replaceAll('&', '&amp;').replaceAll('"', '&quot;').replaceAll('<', '&lt;')}">${routine.prompt}</routine>`;
+    const text = dryRun
+      ? `<routine title="${attr(routine.title)}" dry-run="true">${DRY_RUN_NOTE}\n\n${routine.prompt}</routine>`
+      : `<routine title="${attr(routine.title)}">${routine.prompt}</routine>`;
+    const options = { deliveryId, queueIfBusy: true };
     return new Promise((resolve) => {
       this.pending.set(deliveryId, resolve);
       const sent =
         this.deps.chats.get(routine.chatId)?.kind === 'group'
-          ? this.deps.groups.runAs(routine.chatId, routine.botId, text, routine.title, {
-              deliveryId,
-              queueIfBusy: true,
-            })
-          : this.deps.host.deliver(routine.chatId, routine.botId, text, {
-              deliveryId,
-              queueIfBusy: true,
-            });
+          ? this.deps.groups.runAs(
+              routine.chatId,
+              executorId,
+              text,
+              dryRun ? `${routine.title}（试运行）` : routine.title,
+              options
+            )
+          : this.deps.host.deliver(routine.chatId, executorId, text, options);
       void sent
         .then((result) => {
-          if (!result.ok) {
+          // 同一 deliveryId 已处理过（占用之外的兜底）：不会再有结束事件
+          const duplicate = result.ok && 'duplicate' in result && result.duplicate;
+          if (!result.ok || duplicate) {
             this.pending.delete(deliveryId);
-            resolve(result);
+            resolve(
+              result.ok
+                ? { ok: false, error: 'duplicate', conversationId: result.conversationId }
+                : result
+            );
           }
         })
         .catch((error) => {

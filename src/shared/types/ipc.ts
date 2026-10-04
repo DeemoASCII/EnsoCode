@@ -395,6 +395,10 @@ export const IPC_CHANNELS = {
   BOT_ROUTINE_SAVE: 'bots:routine-save',
   BOT_ROUTINE_DELETE: 'bots:routine-delete',
   BOT_ROUTINE_RUN_NOW: 'bots:routine-run-now',
+  /** 批准 / 拒绝成员提议或改动的例行任务版本 */
+  BOT_ROUTINE_REVIEW: 'bots:routine-review',
+  /** 某例行任务最近 20 次运行历史 */
+  BOT_ROUTINE_RUNS: 'bots:routine-runs',
   /** 成员 / 群核心笔记：只收 botId 或 chatId，保存带 version 防覆盖 */
   BOT_NOTES_GET: 'bots:notes-get',
   BOT_NOTES_SAVE: 'bots:notes-save',

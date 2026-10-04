@@ -142,9 +142,11 @@ export function describeCron(cron: CronSchedule | string, lang: 'zh' | 'en'): st
   const time = `${pad(parsed.hour[0])}:${pad(parsed.minute[0])}`;
   if (dom === '*' && dow === '*') return zh ? `每天 ${time}` : `Every day at ${time}`;
   if (dom === '*' && dow === '1-5') return zh ? `工作日 ${time}` : `Weekdays at ${time}`;
-  if (dom === '*' && /^\d+$/u.test(dow)) {
-    const day = parsed.dayOfWeek[0];
-    return zh ? `每周${ZH_WEEKDAYS[day]} ${time}` : `Every ${EN_WEEKDAYS[day]} at ${time}`;
+  if (dom === '*' && /^\d+(,\d+)*$/u.test(dow)) {
+    const days = [...new Set(parsed.dayOfWeek.map((day) => day % 7))].sort((a, b) => a - b);
+    return zh
+      ? `每周${days.map((day) => ZH_WEEKDAYS[day]).join('、')} ${time}`
+      : `Every ${days.map((day) => EN_WEEKDAYS[day]).join(', ')} at ${time}`;
   }
   if (dow === '*' && /^\d+$/u.test(dom)) {
     const day = parsed.dayOfMonth[0];

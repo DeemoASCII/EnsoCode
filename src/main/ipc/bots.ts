@@ -66,6 +66,7 @@ import { BotStore } from '../services/bots/botStore';
 import { BotUsageService } from '../services/bots/botUsage';
 import { BotChatStore } from '../services/bots/chatStore';
 import { turnDelegationTargets } from '../services/bots/delegationBatch';
+import { delegationPolicy } from '../services/bots/delegationPolicy';
 import { DelegationService } from '../services/bots/delegationService';
 import { DelegationStore } from '../services/bots/delegationStore';
 import { GroupChatService } from '../services/bots/groupChat';
@@ -76,8 +77,10 @@ import {
 import { GroupTaskStore } from '../services/bots/groupTaskStore';
 import { GroupTaskService } from '../services/bots/groupTasks';
 import { removeBotMemorySpace } from '../services/bots/memoryCleanup';
+import { proposeRoutine } from '../services/bots/routineProposal';
 import { RoutineRunner } from '../services/bots/routineRunner';
-import { RoutineScheduler } from '../services/bots/routineScheduler';
+import { BotRoutineRunLog } from '../services/bots/routineRuns';
+import { RoutineScheduler, routineBlock } from '../services/bots/routineScheduler';
 import { BotRoutineStore } from '../services/bots/routineStore';
 import { createSmartRouter } from '../services/bots/smartRouter';
 import { createTeam } from '../services/bots/teamCreate';
@@ -123,6 +126,7 @@ interface BotServices {
   notes: BotNotesService;
   delegations: DelegationService;
   routines: BotRoutineStore;
+  routineRuns: BotRoutineRunLog;
   scheduler: RoutineScheduler;
   runner: RoutineRunner;
   tasks: GroupTaskService;
@@ -390,6 +394,7 @@ export function getBotServices(): BotServices | null {
   });
   delegationsRef = delegations;
   const routines = new BotRoutineStore(botsRoot);
+  const routineRuns = new BotRoutineRunLog(botsRoot);
   const runner = new RoutineRunner({
     host,
     chats,
@@ -400,18 +405,14 @@ export function getBotServices(): BotServices | null {
   });
   const scheduler = new RoutineScheduler({
     store: routines,
+    runs: routineRuns,
     eligible: (routine) => {
-      const bot = bots.get(routine.botId),
-        chat = chats.get(routine.chatId);
-      return Boolean(
-        bot &&
-          bot.archivedAt === undefined &&
-          chat &&
-          chat.archivedAt === undefined &&
-          chat.members.includes(routine.botId)
-      );
+      const bot = bots.get(routine.botId);
+      return Boolean(bot && bot.archivedAt === undefined);
     },
-    run: (routine) => runner.run(routine),
+    check: (routine) =>
+      routineBlock(routine, { bot: (id) => bots.get(id), chat: (id) => chats.get(id) }),
+    run: (routine, options) => runner.run(routine, options),
     emit: emitBotEvent,
   });
   setBotWorkerEventObserver((event) => {
@@ -445,6 +446,7 @@ export function getBotServices(): BotServices | null {
     notes,
     delegations,
     routines,
+    routineRuns,
     scheduler,
     runner,
     tasks,
@@ -677,6 +679,17 @@ export function groupHistoryTool(
   );
 }
 
+/** worker 的 routine_propose：chatId 取自会话权威绑定，且必须是该成员在该聊天的当前会话 */
+export function routineProposeTool(
+  services: BotServices | null | undefined,
+  conversationId: string,
+  binding: { botId: string; chatId: string | null; delegationId?: string },
+  params: Record<string, unknown>
+): unknown {
+  if (!services) return { ok: false, error: 'disabled' };
+  return proposeRoutine({ ...services, emit: emitBotEvent }, conversationId, binding, params);
+}
+
 export function registerBotHandlers(): void {
   syncBotModeServices();
   handle(
@@ -728,61 +741,97 @@ export function registerBotHandlers(): void {
         typeof input.prompt !== 'string' ||
         typeof input.schedule !== 'string' ||
         (input.id !== undefined && !isBotId(input.id)) ||
-        (input.enabled !== undefined && typeof input.enabled !== 'boolean')
+        (input.enabled !== undefined && typeof input.enabled !== 'boolean') ||
+        (input.catchUp !== undefined && typeof input.catchUp !== 'boolean') ||
+        (input.doneBy !== undefined && input.doneBy !== null && !isBotId(input.doneBy))
       )
         return INVALID;
-      if (!bots.get(input.botId) || !chats.get(input.chatId)?.members.includes(input.botId))
+      const previous =
+        typeof input.id === 'string'
+          ? routines.list(input.botId).find((item) => item.id === input.id)
+          : undefined;
+      // 缺省沿用原执行者；null 改回归属成员自己
+      const doneBy = input.doneBy === undefined ? previous?.doneBy : (input.doneBy ?? undefined);
+      const owner = bots.get(input.botId);
+      const executor = doneBy ? bots.get(doneBy) : owner;
+      if (!owner || !executor || !chats.get(input.chatId)?.members.includes(executor.id))
         return INVALID;
+      if (executor.id !== owner.id && delegationPolicy(owner, executor, 1, 0))
+        return { ok: false, error: 'acl' };
       const result = routines.save(input.botId, {
         title: input.title,
         prompt: input.prompt,
         schedule: input.schedule,
         chatId: input.chatId,
+        doneBy: doneBy ?? null,
         ...(typeof input.id === 'string' ? { id: input.id } : {}),
         ...(typeof input.enabled === 'boolean' ? { enabled: input.enabled } : {}),
+        ...(typeof input.catchUp === 'boolean' ? { catchUp: input.catchUp } : {}),
       });
       if (!result.ok) return { ok: false, error: result.reason };
+      const routine = scheduler.verify(input.botId, result.routine.id) ?? result.routine;
       scheduler.refresh();
       emitBotEvent({ kind: 'routine' });
-      return result;
+      return { ok: true, routine };
     }
   );
-  handle(IPC_CHANNELS.BOT_ROUTINE_DELETE, 'write', (_sender, request, { routines, scheduler }) => {
+  handle(
+    IPC_CHANNELS.BOT_ROUTINE_DELETE,
+    'write',
+    (_sender, request, { routines, routineRuns, scheduler }) => {
+      const input = objectInput(request);
+      if (
+        !input ||
+        !isBotId(input.botId) ||
+        !isBotId(input.id) ||
+        !routines.remove(input.botId, input.id)
+      )
+        return INVALID;
+      routineRuns.forget(input.botId, input.id);
+      scheduler.refresh();
+      emitBotEvent({ kind: 'routine' });
+      return { ok: true };
+    }
+  );
+  handle(IPC_CHANNELS.BOT_ROUTINE_RUN_NOW, 'write', (_sender, request, { scheduler }) => {
     const input = objectInput(request);
     if (
       !input ||
       !isBotId(input.botId) ||
       !isBotId(input.id) ||
-      !routines.remove(input.botId, input.id)
+      (input.dryRun !== undefined && typeof input.dryRun !== 'boolean')
     )
       return INVALID;
-    scheduler.refresh();
-    emitBotEvent({ kind: 'routine' });
+    const started = scheduler.trigger(input.botId, input.id, input.dryRun ? 'dry-run' : 'manual');
+    if (!started.ok)
+      return {
+        ok: false,
+        error: started.error,
+        ...(started.reason ? { reason: started.reason } : {}),
+      };
+    void started.done.catch((error) => console.warn('[bots] routine failed', error));
     return { ok: true };
   });
+  handle(IPC_CHANNELS.BOT_ROUTINE_REVIEW, 'write', (_sender, request, { routines, scheduler }) => {
+    const input = objectInput(request);
+    if (!input || !isBotId(input.botId) || !isBotId(input.id) || typeof input.approve !== 'boolean')
+      return INVALID;
+    const result = routines.review(input.botId, input.id, input.approve);
+    if (!result.ok) return { ok: false, error: result.reason };
+    const routine = 'routine' in result ? scheduler.verify(input.botId, input.id) : undefined;
+    scheduler.refresh();
+    emitBotEvent({ kind: 'routine' });
+    return routine ? { ok: true, routine } : { ok: true };
+  });
   handle(
-    IPC_CHANNELS.BOT_ROUTINE_RUN_NOW,
-    'write',
-    (_sender, request, { routines, scheduler, bots, chats }) => {
+    IPC_CHANNELS.BOT_ROUTINE_RUNS,
+    'read',
+    (_sender, request, { routineRuns }) => {
       const input = objectInput(request);
       if (!input || !isBotId(input.botId) || !isBotId(input.id)) return INVALID;
-      const routine = routines.list(input.botId).find((item) => item.id === input.id);
-      if (!routine) return INVALID;
-      const bot = bots.get(routine.botId),
-        chat = chats.get(routine.chatId);
-      if (
-        !bot ||
-        bot.archivedAt !== undefined ||
-        !chat ||
-        chat.archivedAt !== undefined ||
-        !chat.members.includes(bot.id)
-      )
-        return UNAVAILABLE;
-      void scheduler
-        .runNow(input.botId, input.id)
-        .catch((error) => console.warn('[bots] routine failed', error));
-      return { ok: true };
-    }
+      return { ok: true, runs: routineRuns.list(input.botId, input.id, 20) };
+    },
+    { ok: true, runs: [] }
   );
   handle(
     IPC_CHANNELS.BOT_TASKS_LIST,

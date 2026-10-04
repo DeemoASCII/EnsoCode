@@ -1,7 +1,7 @@
 import { stripBotNotesUpdate } from '@shared/bots/notes';
 
 export type BotInjectedMessage =
-  | { kind: 'routine'; title: string; prompt: string }
+  | { kind: 'routine'; title: string; prompt: string; dryRun?: true }
   | { kind: 'group'; messages: { from: string; text: string }[]; instruction: string }
   | { kind: 'delegation-task'; from: string; task: string; context: string }
   | { kind: 'delegation-result'; from: string; status: string; text: string }
@@ -77,7 +77,11 @@ export function parseBotInjectedMessage(text: string): BotInjectedMessage | null
   if (!attrs) return null;
   const body = match[3].trim();
   if (match[1] === 'routine') {
-    return attrs.title ? { kind: 'routine', title: attrs.title, prompt: decode(body) } : null;
+    if (!attrs.title) return null;
+    if (attrs['dry-run'] !== 'true')
+      return { kind: 'routine', title: attrs.title, prompt: decode(body) };
+    const prompt = decode(body.replace(/^\[Dry run\][^\n]*\n*/, ''));
+    return { kind: 'routine', title: attrs.title, prompt, dryRun: true };
   }
   if (!attrs.from) return null;
   if (match[1] === 'delegation-result') {

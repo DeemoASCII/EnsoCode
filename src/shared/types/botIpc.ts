@@ -2,7 +2,15 @@ import type { AbilitySuggestion } from '../bots/abilitySuggest';
 import type { PersonaSuggestion } from '../bots/personaSuggest';
 import type { TeamFileError, TeamRename, TeamSpec } from '../bots/team';
 import type { AttachedImage, ConversationAuthority } from './agent';
-import type { BotChat, BotProfile, BotRoutine, Delegation, GroupEntry, GroupTask } from './bot';
+import type {
+  BotChat,
+  BotProfile,
+  BotRoutine,
+  BotRoutineRun,
+  Delegation,
+  GroupEntry,
+  GroupTask,
+} from './bot';
 
 export type BotDelegationsResult =
   | { ok: true; delegations: Delegation[]; enabled: boolean }
@@ -16,8 +24,17 @@ export type BotRoutinesResult =
 export type BotRoutineSaveInput = Pick<
   BotRoutine,
   'botId' | 'title' | 'prompt' | 'schedule' | 'chatId'
-> & { id?: string; enabled?: boolean };
+> & {
+  id?: string;
+  enabled?: boolean;
+  catchUp?: boolean;
+  /** 缺省沿用原执行者；null = 由归属成员自己执行 */
+  doneBy?: string | null;
+};
 export type BotRoutineSaveResult = { ok: true; routine: BotRoutine } | BotIpcError;
+/** 拒绝从未批准过的提议时直接删除，不带 routine */
+export type BotRoutineReviewResult = { ok: true; routine?: BotRoutine } | BotIpcError;
+export type BotRoutineRunsResult = { ok: true; runs: BotRoutineRun[] } | BotIpcError;
 export type BotTasksResult = { ok: true; tasks: GroupTask[]; enabled: boolean } | BotIpcError;
 export type BotTaskWriteResult = { ok: true; task: GroupTask } | BotIpcError;
 /** 新建传 title/detail；编辑另带 id（只改标题 / 详情，不写时间线） */

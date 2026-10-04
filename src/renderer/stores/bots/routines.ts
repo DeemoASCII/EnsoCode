@@ -1,5 +1,5 @@
 import { describeCron, nextRun, parseCron } from '@shared/bots/cron';
-import type { BotChat } from '@shared/types/bot';
+import type { BotChat, BotRoutine } from '@shared/types/bot';
 
 /** 每天 9:00、工作日 9:00、每周一 9:00、每小时 */
 export const ROUTINE_PRESETS = ['0 9 * * *', '0 9 * * 1-5', '0 9 * * 1', '0 * * * *'] as const;
@@ -40,4 +40,22 @@ export function routineDraftIssue(draft: {
   if (!parseCron(draft.schedule)) return 'schedule';
   if (!draft.chatId) return 'chat';
   return null;
+}
+
+export interface RoutineAlert {
+  kind: 'approval' | 'blocked';
+  routine: BotRoutine;
+}
+
+/** 收件箱：成员提议 / 改动待批准的草稿，以及运行前依赖检查不通过被阻塞的例程 */
+export function routineAlerts(routines: readonly BotRoutine[]): RoutineAlert[] {
+  return routines
+    .flatMap((routine): RoutineAlert[] =>
+      routine.status === 'draft'
+        ? [{ kind: 'approval', routine }]
+        : routine.status === 'blocked'
+          ? [{ kind: 'blocked', routine }]
+          : []
+    )
+    .sort((a, b) => b.routine.updatedAt - a.routine.updatedAt);
 }

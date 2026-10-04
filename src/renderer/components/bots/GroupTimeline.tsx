@@ -19,6 +19,7 @@ import {
 import { ArtifactCards } from './ArtifactCards';
 import { BotAvatar } from './BotAvatar';
 import { DelegationCard } from './DelegationCard';
+import { RoutineProposalCard } from './RoutineCards';
 
 const timeOf = (at: number) =>
   new Date(at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
@@ -292,7 +293,9 @@ function EntryRow({
   const { t } = useI18n();
   switch (entry.kind) {
     case 'system':
-      return (
+      return entry.routine ? (
+        <RoutineProposalCard text={entry.text} target={entry.routine} />
+      ) : (
         <div className="self-center rounded-full bg-muted px-2.5 py-0.5 text-center text-muted-foreground text-xs">
           {entry.text}
         </div>

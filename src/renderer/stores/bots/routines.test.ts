@@ -1,6 +1,12 @@
-import type { BotChat } from '@shared/types/bot';
+import type { BotChat, BotRoutine } from '@shared/types/bot';
 import { describe, expect, it } from 'vitest';
-import { ROUTINE_PRESETS, routineDraftIssue, routineTargets, schedulePreview } from './routines';
+import {
+  ROUTINE_PRESETS,
+  routineAlerts,
+  routineDraftIssue,
+  routineTargets,
+  schedulePreview,
+} from './routines';
 
 const chat = (over: Partial<BotChat>): BotChat => ({
   id: 'c1',
@@ -64,5 +70,33 @@ describe('routineDraftIssue', () => {
     expect(routineDraftIssue({ ...draft, prompt: '' })).toBe('prompt');
     expect(routineDraftIssue({ ...draft, schedule: 'x' })).toBe('schedule');
     expect(routineDraftIssue({ ...draft, chatId: '' })).toBe('chat');
+  });
+});
+
+describe('routineAlerts', () => {
+  const base = {
+    botId: 'b',
+    chatId: 'c',
+    title: 't',
+    prompt: 'p',
+    schedule: '0 9 * * *',
+    procedureVersion: 1,
+    catchUp: true,
+    createdAt: 0,
+  };
+  const routine = (id: string, over: Partial<BotRoutine>): BotRoutine =>
+    ({ ...base, id, status: 'enabled', approvedVersion: 1, updatedAt: 1, ...over }) as BotRoutine;
+
+  it('收件箱只列待批准的草稿与被阻塞的例程，最近更新在前', () => {
+    const alerts = routineAlerts([
+      routine('a', {}),
+      routine('b', { status: 'draft', approvedVersion: undefined, updatedAt: 5 }),
+      routine('c', { status: 'blocked', blockedReason: 'chat-archived', updatedAt: 9 }),
+      routine('d', { status: 'paused', procedureVersion: 2 }),
+    ]);
+    expect(alerts.map((alert) => [alert.kind, alert.routine.id])).toEqual([
+      ['blocked', 'c'],
+      ['approval', 'b'],
+    ]);
   });
 });

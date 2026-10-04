@@ -28,7 +28,11 @@ describe('BotRoutineStore', () => {
     expect(saved.routine).toMatchObject({
       ...draft,
       botId: BOT,
-      enabled: true,
+      status: 'enabled',
+      procedureVersion: 1,
+      approvedVersion: 1,
+      catchUp: true,
+      cursor: saved.routine.updatedAt,
       createdAt: saved.routine.updatedAt,
     });
     expect(JSON.parse(readFileSync(join(root, BOT, 'routines.json'), 'utf8'))).toBeTruthy();
@@ -46,7 +50,9 @@ describe('BotRoutineStore', () => {
     expect(updated.routine).toMatchObject({
       id,
       title: '周报',
-      enabled: false,
+      status: 'paused',
+      procedureVersion: 2,
+      approvedVersion: 2,
       createdAt: created.routine.createdAt,
       lastResult: 'ok',
     });
@@ -63,8 +69,10 @@ describe('BotRoutineStore', () => {
       { ...draft, prompt: '' },
       { ...draft, schedule: '61 * * * *' },
       { ...draft, chatId: '../x' },
+      { ...draft, doneBy: '../x' },
     ]) {
       expect(store.save(BOT, bad)).toEqual({ ok: false, reason: 'invalid' });
+      expect(store.propose(BOT, bad).ok).toBe(false);
     }
     expect(store.save('../evil', draft)).toEqual({ ok: false, reason: 'invalid' });
     expect(store.list('../evil')).toEqual([]);
@@ -80,7 +88,8 @@ describe('BotRoutineStore', () => {
     expect(ran?.lastRunAt).toBeGreaterThan(created.routine.createdAt);
     const ok = store.markRun(BOT, created.routine.id, 'ok');
     expect(ok?.lastResult).toBe('ok');
-    expect(ok).not.toHaveProperty('missed');
+    expect(ok?.missed).toBe(99);
+    expect(store.markRun(BOT, created.routine.id, 'ok', 0)).not.toHaveProperty('missed');
     expect(store.markRun(BOT, 'nope', 'ok')).toBeUndefined();
   });
 
@@ -107,7 +116,10 @@ describe('BotRoutineStore', () => {
       ...draft,
       id: '66666666-6666-4666-8666-666666666666',
       botId: BOT,
-      enabled: true,
+      status: 'enabled',
+      procedureVersion: 1,
+      approvedVersion: 1,
+      catchUp: true,
       createdAt: 1,
       updatedAt: 1,
     };
@@ -124,5 +136,83 @@ describe('BotRoutineStore', () => {
     expect(store.list(BOT).map((r) => r.id)).toEqual([good.id]);
     mkdirSync(join(root, 'not-a-bot'));
     expect(store.listAll().map((r) => r.id)).toEqual([good.id]);
+  });
+
+  it('只有流程变更（标题 / 提示词 / 执行者 / 调度 / 聊天）才升版本；补跑开关不升', () => {
+    const created = store.save(BOT, draft);
+    if (!created.ok) throw new Error('setup');
+    const id = created.routine.id;
+    const same = store.save(BOT, { ...draft, id, catchUp: false });
+    expect(same.ok && same.routine).toMatchObject({ procedureVersion: 1, catchUp: false });
+    const doneBy = store.save(BOT, { ...draft, id, doneBy: BOT2 });
+    expect(doneBy.ok && doneBy.routine).toMatchObject({ procedureVersion: 2, doneBy: BOT2 });
+    const cleared = store.save(BOT, { ...draft, id, doneBy: null });
+    expect(cleared.ok && cleared.routine.procedureVersion).toBe(3);
+    expect(cleared.ok && cleared.routine).not.toHaveProperty('doneBy');
+    const self = store.save(BOT, { ...draft, id, doneBy: BOT });
+    expect(self.ok && self.routine).not.toHaveProperty('doneBy');
+  });
+
+  it('成员提议为待批准草稿；批准即启用，拒绝从未批准的直接删除', () => {
+    const proposed = store.propose(BOT, draft);
+    if (!proposed.ok) throw new Error('setup');
+    expect(proposed.created).toBe(true);
+    expect(proposed.routine).toMatchObject({
+      status: 'draft',
+      procedureVersion: 1,
+      proposedBy: BOT,
+    });
+    expect(proposed.routine).not.toHaveProperty('approvedVersion');
+    const approved = store.review(BOT, proposed.routine.id, true);
+    expect(approved).toMatchObject({
+      ok: true,
+      routine: { status: 'enabled', approvedVersion: 1, cursor: expect.any(Number) },
+    });
+    expect(store.review(BOT, proposed.routine.id, true)).toEqual({ ok: false, reason: 'invalid' });
+
+    const other = store.propose(BOT, { ...draft, title: '另一个' });
+    if (!other.ok) throw new Error('setup');
+    expect(store.review(BOT, other.routine.id, false)).toEqual({ ok: true, removed: true });
+    expect(store.list(BOT).map((r) => r.id)).toEqual([proposed.routine.id]);
+    expect(store.review(BOT, 'nope', true)).toEqual({ ok: false, reason: 'not-found' });
+  });
+
+  it('成员改动已批准的同名例程：升版本回到待批准；拒绝后暂停且不再视为已批准', () => {
+    const created = store.save(BOT, draft);
+    if (!created.ok) throw new Error('setup');
+    const same = store.propose(BOT, { ...draft, title: ` ${draft.title} ` });
+    expect(same).toMatchObject({ ok: true, created: false, unchanged: true });
+    const changed = store.propose(BOT, { ...draft, prompt: '改成汇总上周' });
+    expect(changed).toMatchObject({
+      ok: true,
+      created: false,
+      routine: {
+        id: created.routine.id,
+        status: 'draft',
+        procedureVersion: 2,
+        approvedVersion: 1,
+        prompt: '改成汇总上周',
+      },
+    });
+    const rejected = store.review(BOT, created.routine.id, false);
+    expect(rejected).toMatchObject({ ok: true, routine: { status: 'paused', approvedVersion: 1 } });
+  });
+
+  it('用户编辑草稿 / 阻塞的例程即视为批准并清除阻塞原因', () => {
+    const proposed = store.propose(BOT, draft);
+    if (!proposed.ok) throw new Error('setup');
+    const blocked = store.block(BOT, proposed.routine.id, 'not-in-chat');
+    expect(blocked).toMatchObject({ status: 'blocked', blockedReason: 'not-in-chat' });
+    const saved = store.save(BOT, { ...draft, id: proposed.routine.id });
+    expect(saved.ok && saved.routine).toMatchObject({ status: 'enabled', approvedVersion: 1 });
+    expect(saved.ok && saved.routine).not.toHaveProperty('blockedReason');
+  });
+
+  it('advance 只前移游标并记录错过次数', () => {
+    const created = store.save(BOT, draft);
+    if (!created.ok) throw new Error('setup');
+    const id = created.routine.id;
+    expect(store.advance(BOT, id, 5_000_000, 3)).toMatchObject({ cursor: 5_000_000, missed: 3 });
+    expect(store.advance(BOT, id, 10)?.cursor).toBe(5_000_000);
   });
 });

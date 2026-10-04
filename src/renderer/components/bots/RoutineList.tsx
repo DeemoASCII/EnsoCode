@@ -1,6 +1,16 @@
 import { describeCron } from '@shared/bots/cron';
-import type { BotRoutine } from '@shared/types/bot';
-import { Loader2, Pencil, Play, Plus, Trash2 } from 'lucide-react';
+import {
+  type SimpleSchedule,
+  simpleSchedule,
+  simpleScheduleCron,
+} from '@shared/bots/routineSchedule';
+import {
+  type BotRoutine,
+  type BotRoutineRun,
+  type BotRoutineTrigger,
+  isRoutineApproved,
+} from '@shared/types/bot';
+import { FlaskConical, History, Loader2, Pencil, Play, Plus, Trash2 } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ConfirmDialog } from '@/components/chat/ConfirmDialog';
 import { Button } from '@/components/ui/button';
@@ -37,8 +47,13 @@ import {
 } from '@/stores/bots/routines';
 import { FieldLabel } from './BotFields';
 import { chatTitle } from './botText';
-
-const PRESET_LABELS = ['Daily at 9:00', 'Weekdays at 9:00', 'Mondays at 9:00', 'Hourly'];
+import {
+  blockText,
+  RoutineBadge,
+  resultText,
+  routineErrorText,
+  useRoutineActions,
+} from './RoutineCards';
 
 const stamp = (at: number) =>
   new Date(at).toLocaleString([], {
@@ -47,23 +62,6 @@ const stamp = (at: number) =>
     hour: '2-digit',
     minute: '2-digit',
   });
-
-function routineErrorText(error: string, t: TFunction): string {
-  switch (error) {
-    case 'invalid':
-      return t(
-        'Check the title, prompt and schedule, and that the member is still in the target chat.'
-      );
-    case 'not-found':
-      return t('This routine no longer exists.');
-    case 'unavailable':
-      return t('The member or target chat is archived or unavailable.');
-    case 'disabled':
-      return t('Bot mode is off.');
-    default:
-      return error;
-  }
-}
 
 function issueText(issue: RoutineDraftIssue, t: TFunction): string {
   switch (issue) {
@@ -78,8 +76,27 @@ function issueText(issue: RoutineDraftIssue, t: TFunction): string {
   }
 }
 
+function triggerText(trigger: BotRoutineTrigger, t: TFunction): string {
+  switch (trigger) {
+    case 'scheduled':
+      return t('Scheduled');
+    case 'manual':
+      return t('Manual');
+    case 'catchup':
+      return t('Catch-up');
+    case 'dry-run':
+      return t('Dry run');
+  }
+}
+
+function duration(run: BotRoutineRun): string {
+  if (run.finishedAt === undefined) return '';
+  const seconds = Math.max(0, Math.round((run.finishedAt - run.startedAt) / 1000));
+  return seconds < 60 ? ` · ${seconds}s` : ` · ${Math.floor(seconds / 60)}m ${seconds % 60}s`;
+}
+
 /**
- * 例行任务列表：列表、启停、立即运行、编辑、删除。
+ * 例行任务列表：状态、审批、启停、立即运行 / 试运行、执行历史、编辑、删除。
  * 传 botId = 成员资料「例行」页签；传 chatId = 群信息里本群的例行任务（跨成员，显示成员名）。
  */
 export function RoutineList({
@@ -92,6 +109,8 @@ export function RoutineList({
   const [routines, setRoutines] = useState<BotRoutine[] | null>(null);
   const [editing, setEditing] = useState<BotRoutine | 'new' | null>(null);
   const [deleting, setDeleting] = useState<BotRoutine | null>(null);
+  const [historyOf, setHistoryOf] = useState<string | null>(null);
+  const actions = useRoutineActions();
 
   const refresh = useCallback(async () => {
     const result = await window.electronAPI.bots.routines
@@ -126,21 +145,13 @@ export function RoutineList({
         title: t('Routine not saved'),
         description: routineErrorText(result.error, t),
       });
-    void refresh();
-  };
-
-  const runNow = async (routine: BotRoutine) => {
-    const result = await window.electronAPI.bots.routines.runNow({
-      botId: routine.botId,
-      id: routine.id,
-    });
-    if (result.ok) addToast({ type: 'success', title: t('Routine started') });
-    else
+    else if (result.routine.status === 'blocked')
       addToast({
         type: 'error',
-        title: t('Routine did not run'),
-        description: routineErrorText(result.error, t),
+        title: t('Routine blocked'),
+        description: blockText(result.routine.blockedReason, t),
       });
+    void refresh();
   };
 
   const remove = async (routine: BotRoutine) => {
@@ -159,6 +170,7 @@ export function RoutineList({
   };
 
   if (routines === null) return <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />;
+  const name = (id: string) => bots.find((bot) => bot.id === id)?.name ?? t('Deleted member');
   return (
     <div className="space-y-1.5">
       <Button size="xs" variant="outline" onClick={() => setEditing('new')}>
@@ -170,48 +182,58 @@ export function RoutineList({
       )}
       {routines.map((routine) => {
         const chat = chats.find((item) => item.id === routine.chatId);
+        const draft = routine.status === 'draft';
+        const runnable =
+          isRoutineApproved(routine) &&
+          (routine.status === 'enabled' || routine.status === 'paused');
+        const target = chat
+          ? t('Posts to {{chat}}', { chat: chatTitle(chat, bots, t) })
+          : t('Target chat missing');
         return (
           <div
             key={routine.id}
             className={cn(
               'rounded-lg border bg-card px-2.5 py-2 text-xs',
-              !routine.enabled && 'opacity-70'
+              routine.status === 'paused' && 'opacity-70'
             )}
           >
             <div className="flex items-center gap-2">
               <span className="min-w-0 flex-1 truncate font-medium text-sm">{routine.title}</span>
-              <Switch
-                checked={routine.enabled}
-                onCheckedChange={(enabled) => void toggle(routine, enabled)}
-                title={routine.enabled ? t('Enabled') : t('Paused')}
-              />
+              <RoutineBadge routine={routine} />
+              {!draft && (
+                <Switch
+                  checked={routine.status === 'enabled'}
+                  onCheckedChange={(enabled) => void toggle(routine, enabled)}
+                  title={routine.status === 'enabled' ? t('Enabled') : t('Paused')}
+                />
+              )}
             </div>
             <div className="mt-0.5 text-muted-foreground">
-              {chatId
-                ? `${bots.find((bot) => bot.id === routine.botId)?.name ?? t('Deleted member')} · `
-                : ''}
-              {describeCron(routine.schedule, locale)}
-              {chatId
-                ? ''
-                : ` · ${
-                    chat
-                      ? t('Posts to {{chat}}', { chat: chatTitle(chat, bots, t) })
-                      : t('Target chat missing')
-                  }`}
+              {[
+                chatId ? name(routine.botId) : '',
+                describeCron(routine.schedule, locale),
+                routine.doneBy ? t('Done by {{name}}', { name: name(routine.doneBy) }) : '',
+                chatId ? '' : target,
+              ]
+                .filter(Boolean)
+                .join(' · ')}
             </div>
+            {routine.proposedBy && draft && (
+              <div className="mt-0.5 text-warning">
+                {t('Proposed by {{name}}, waiting for your approval', {
+                  name: name(routine.proposedBy),
+                })}
+              </div>
+            )}
+            {routine.status === 'blocked' && (
+              <div className="mt-0.5 text-destructive">{blockText(routine.blockedReason, t)}</div>
+            )}
             <div className="mt-0.5 flex flex-wrap items-center gap-x-2 text-muted-foreground">
               <span>
                 {routine.lastRunAt
                   ? t('Last run {{time}} · {{result}}', {
                       time: stamp(routine.lastRunAt),
-                      result:
-                        routine.lastResult === 'ok'
-                          ? '✓'
-                          : routine.lastResult === 'error'
-                            ? t('Error')
-                            : routine.lastResult === 'budget'
-                              ? t('Over budget')
-                              : t('Skipped'),
+                      result: resultText(routine.lastResult, t),
                     })
                   : t('Never run')}
               </span>
@@ -220,16 +242,55 @@ export function RoutineList({
                   {t('Missed {{n}} times', { n: routine.missed })}
                 </span>
               ) : null}
+              {!routine.catchUp && <span>{t('No catch-up')}</span>}
             </div>
-            <div className="mt-1.5 flex justify-end gap-1">
+            <div className="mt-1.5 flex flex-wrap justify-end gap-1">
+              {draft ? (
+                <>
+                  <Button
+                    size="xs"
+                    variant="ghost"
+                    disabled={actions.busy}
+                    onClick={() => void actions.review(routine, false)}
+                  >
+                    {t('Reject')}
+                  </Button>
+                  <Button
+                    size="xs"
+                    disabled={actions.busy}
+                    onClick={() => void actions.review(routine, true)}
+                  >
+                    {t('Approve')}
+                  </Button>
+                </>
+              ) : (
+                <Button
+                  size="xs"
+                  variant="ghost"
+                  disabled={!runnable || actions.busy}
+                  onClick={() => void actions.run(routine, false)}
+                >
+                  <Play />
+                  {t('Run now')}
+                </Button>
+              )}
               <Button
                 size="xs"
                 variant="ghost"
-                disabled={!routine.enabled}
-                onClick={() => void runNow(routine)}
+                disabled={actions.busy}
+                title={t('Run once without affecting the schedule')}
+                onClick={() => void actions.run(routine, true)}
               >
-                <Play />
-                {t('Run now')}
+                <FlaskConical />
+                {t('Dry run')}
+              </Button>
+              <Button
+                size="xs"
+                variant={historyOf === routine.id ? 'secondary' : 'ghost'}
+                onClick={() => setHistoryOf(historyOf === routine.id ? null : routine.id)}
+              >
+                <History />
+                {t('History')}
               </Button>
               <Button size="xs" variant="ghost" onClick={() => setEditing(routine)}>
                 <Pencil />
@@ -240,6 +301,7 @@ export function RoutineList({
                 {t('Delete')}
               </Button>
             </div>
+            {historyOf === routine.id && <RoutineHistory routine={routine} />}
           </div>
         );
       })}
@@ -267,6 +329,181 @@ export function RoutineList({
   );
 }
 
+/** 最近 20 次运行：时间、触发方式、结果、耗时、跳到聊天、错误 */
+function RoutineHistory({ routine }: { routine: BotRoutine }) {
+  const { t } = useI18n();
+  const setView = useBotsStore((s) => s.setView);
+  const [runs, setRuns] = useState<BotRoutineRun[] | null>(null);
+  const { botId, id } = routine;
+  useEffect(() => {
+    let active = true;
+    const load = () =>
+      void window.electronAPI.bots.routines
+        .runs({ botId, id })
+        .then((result) => active && setRuns(result.ok ? result.runs : []))
+        .catch(() => active && setRuns([]));
+    load();
+    const off = window.electronAPI.bots.onEvent((event) => {
+      if (event.kind === 'routine') load();
+    });
+    return () => {
+      active = false;
+      off();
+    };
+  }, [botId, id]);
+  if (runs === null) return <Loader2 className="mt-2 h-3.5 w-3.5 animate-spin" />;
+  if (runs.length === 0) return <p className="mt-2 text-muted-foreground">{t('No runs yet')}</p>;
+  return (
+    <ul className="mt-2 space-y-1 border-t pt-2">
+      {runs.map((run) => (
+        <li key={run.runId} className="flex flex-wrap items-center gap-x-2 text-muted-foreground">
+          <span className="tabular-nums">{stamp(run.startedAt)}</span>
+          <span>{triggerText(run.trigger, t)}</span>
+          <span
+            className={cn(
+              run.result === 'ok' && 'text-success',
+              (run.result === 'error' || run.result === 'blocked' || run.result === 'budget') &&
+                'text-destructive'
+            )}
+          >
+            {resultText(run.result, t)}
+            {duration(run)}
+          </span>
+          {run.conversationId && (
+            <button
+              type="button"
+              className="text-primary hover:underline"
+              onClick={() => setView({ kind: 'chat', chatId: run.chatId })}
+            >
+              {t('Open chat')}
+            </button>
+          )}
+          {run.error && (
+            <span className="w-full truncate text-destructive" title={run.error}>
+              {run.result === 'blocked' ? blockText(run.error as never, t) : run.error}
+            </span>
+          )}
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+const WEEKDAY_KEYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+const pad = (n: number) => String(n).padStart(2, '0');
+
+/** 简单选择器：每天 / 工作日 / 每周几 + 时间；高级模式直接写 cron */
+function SchedulePicker({ value, onChange }: { value: string; onChange: (cron: string) => void }) {
+  const { t, locale } = useI18n();
+  const initial = simpleSchedule(value);
+  const [advanced, setAdvanced] = useState(!initial);
+  const [simple, setSimple] = useState<SimpleSchedule>(
+    initial ?? { kind: 'daily', days: [1], hour: 9, minute: 0 }
+  );
+  const preview = schedulePreview(value, locale, Date.now());
+  const update = (next: SimpleSchedule) => {
+    setSimple(next);
+    const cron = simpleScheduleCron(next);
+    if (cron) onChange(cron);
+  };
+  const kinds = [
+    { value: 'daily', label: t('Every day') },
+    { value: 'weekdays', label: t('Weekdays') },
+    { value: 'weekly', label: t('Every week on') },
+  ];
+  const toggleMode = () => {
+    if (!advanced) return setAdvanced(true);
+    // 切回简单模式：当前 cron 能表达就沿用，否则用上次的简单设置覆盖
+    const next = simpleSchedule(value);
+    if (next) setSimple(next);
+    else update(simple);
+    setAdvanced(false);
+  };
+  return (
+    <div>
+      <FieldLabel
+        hint={advanced ? t('cron: minute hour day month weekday, local time') : undefined}
+        action={
+          <Button size="xs" variant="ghost" onClick={toggleMode}>
+            {advanced ? t('Simple') : t('Advanced (cron)')}
+          </Button>
+        }
+      >
+        {t('Schedule')}
+      </FieldLabel>
+      {advanced ? (
+        <Input
+          className="font-mono"
+          value={value}
+          placeholder="0 9 * * 1-5"
+          onChange={(event) => onChange(event.target.value)}
+        />
+      ) : (
+        <div className="flex flex-wrap items-center gap-1.5">
+          <Select
+            items={kinds}
+            value={simple.kind}
+            onValueChange={(kind) =>
+              update({
+                ...simple,
+                kind: kind as SimpleSchedule['kind'],
+                days: simple.days.length ? simple.days : [1],
+              })
+            }
+          >
+            <SelectTrigger className="w-32">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectPopup zIndex={Z_INDEX.DROPDOWN_IN_MODAL}>
+              {kinds.map((kind) => (
+                <SelectItem key={kind.value} value={kind.value}>
+                  {kind.label}
+                </SelectItem>
+              ))}
+            </SelectPopup>
+          </Select>
+          {simple.kind === 'weekly' &&
+            WEEKDAY_KEYS.map((key, day) => {
+              const on = simple.days.includes(day);
+              return (
+                <Button
+                  key={key}
+                  size="xs"
+                  variant={on ? 'default' : 'outline'}
+                  onClick={() => {
+                    const days = on
+                      ? simple.days.filter((item) => item !== day)
+                      : [...simple.days, day].sort();
+                    if (days.length) update({ ...simple, days });
+                  }}
+                >
+                  {t(key)}
+                </Button>
+              );
+            })}
+          <Input
+            type="time"
+            className="w-28"
+            value={`${pad(simple.hour)}:${pad(simple.minute)}`}
+            onChange={(event) => {
+              const [hour, minute] = event.target.value.split(':').map(Number);
+              if (Number.isInteger(hour) && Number.isInteger(minute))
+                update({ ...simple, hour, minute });
+            }}
+          />
+        </div>
+      )}
+      <p className={cn('mt-1 text-xs', preview ? 'text-muted-foreground' : 'text-destructive')}>
+        {preview
+          ? `${preview.description} · ${
+              preview.next ? t('Next run {{time}}', { time: stamp(preview.next) }) : t('Never runs')
+            }`
+          : issueText('schedule', t)}
+      </p>
+    </div>
+  );
+}
+
 /** 群模式（fixedChatId）：目标聊天固定为本群，新建时选本群成员，编辑时成员不可改 */
 function RoutineEditor({
   botId: memberId,
@@ -279,7 +516,7 @@ function RoutineEditor({
   routine?: BotRoutine;
   onClose: (saved: boolean) => void;
 }) {
-  const { t, locale } = useI18n();
+  const { t } = useI18n();
   const chats = useBotsStore((s) => s.chats);
   const bots = useBotsStore((s) => s.bots);
   const members = useMemo(() => {
@@ -295,9 +532,10 @@ function RoutineEditor({
   const [prompt, setPrompt] = useState(routine?.prompt ?? '');
   const [schedule, setSchedule] = useState(routine?.schedule ?? ROUTINE_PRESETS[0]);
   const [chatId, setChatId] = useState(routine?.chatId ?? fixedChatId ?? targets[0]?.id ?? '');
+  const [doneBy, setDoneBy] = useState(routine?.doneBy ?? '');
+  const [catchUp, setCatchUp] = useState(routine?.catchUp ?? true);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const preview = schedulePreview(schedule, locale, Date.now());
   const chatLabel = (id: string) => {
     const chat = chats.find((item) => item.id === id);
     if (!chat) return t('Target chat missing');
@@ -307,6 +545,19 @@ function RoutineEditor({
     targets.some((chat) => chat.id === chatId) || !chatId
       ? targets.map((chat) => chat.id)
       : [chatId, ...targets.map((chat) => chat.id)];
+  // 执行者：目标聊天里除归属成员外的未归档成员；委派 ACL 由 Main 校验
+  const executors = useMemo(() => {
+    const chat = chats.find((item) => item.id === chatId);
+    return (chat?.members ?? []).flatMap((id) => {
+      const bot = bots.find((item) => item.id === id && item.archivedAt === undefined);
+      return bot && bot.id !== botId ? [bot] : [];
+    });
+  }, [chats, bots, chatId, botId]);
+  const executorItems = [
+    { value: '', label: t('The member itself') },
+    ...executors.map((bot) => ({ value: bot.id, label: bot.name })),
+  ];
+  const executor = executors.some((bot) => bot.id === doneBy) ? doneBy : '';
 
   const save = async () => {
     if (!botId) return setError(t('Choose a member.'));
@@ -321,7 +572,9 @@ function RoutineEditor({
         prompt,
         schedule,
         chatId,
-        ...(routine ? { id: routine.id, enabled: routine.enabled } : {}),
+        catchUp,
+        doneBy: executor || null,
+        ...(routine ? { id: routine.id, enabled: routine.status !== 'paused' } : {}),
       });
       if (result.ok) onClose(true);
       else setError(routineErrorText(result.error, t));
@@ -347,42 +600,7 @@ function RoutineEditor({
             </FieldLabel>
             <Textarea rows={4} value={prompt} onChange={(event) => setPrompt(event.target.value)} />
           </div>
-          <div>
-            <FieldLabel hint={t('cron: minute hour day month weekday, local time')}>
-              {t('Schedule')}
-            </FieldLabel>
-            <div className="mb-1.5 flex flex-wrap gap-1.5">
-              {ROUTINE_PRESETS.map((preset, index) => (
-                <Button
-                  key={preset}
-                  size="xs"
-                  variant={
-                    schedulePreview(schedule, locale, 0)?.source === preset ? 'default' : 'outline'
-                  }
-                  onClick={() => setSchedule(preset)}
-                >
-                  {t(PRESET_LABELS[index])}
-                </Button>
-              ))}
-            </div>
-            <Input
-              className="font-mono"
-              value={schedule}
-              placeholder="0 9 * * 1-5"
-              onChange={(event) => setSchedule(event.target.value)}
-            />
-            <p
-              className={cn('mt-1 text-xs', preview ? 'text-muted-foreground' : 'text-destructive')}
-            >
-              {preview
-                ? `${preview.description} · ${
-                    preview.next
-                      ? t('Next run {{time}}', { time: stamp(preview.next) })
-                      : t('Never runs')
-                  }`
-                : issueText('schedule', t)}
-            </p>
-          </div>
+          <SchedulePicker value={schedule} onChange={setSchedule} />
           {fixedChatId ? (
             <div>
               <FieldLabel>{t('Member')}</FieldLabel>
@@ -431,6 +649,39 @@ function RoutineEditor({
               )}
             </div>
           )}
+          {executors.length > 0 && (
+            <div>
+              <FieldLabel hint={t('Another member of the target chat runs it, as a delegation')}>
+                {t('Done by')}
+              </FieldLabel>
+              <Select
+                items={executorItems}
+                value={executor}
+                onValueChange={(value) => setDoneBy(value as string)}
+              >
+                <SelectTrigger className="w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectPopup zIndex={Z_INDEX.DROPDOWN_IN_MODAL}>
+                  {executorItems.map((item) => (
+                    <SelectItem key={item.value || 'self'} value={item.value}>
+                      {item.label}
+                    </SelectItem>
+                  ))}
+                </SelectPopup>
+              </Select>
+            </div>
+          )}
+          <div className="flex items-center justify-between gap-3">
+            <FieldLabel
+              hint={t(
+                'If the app was closed at the scheduled time, run the latest missed one once on startup'
+              )}
+            >
+              {t('Catch up missed runs')}
+            </FieldLabel>
+            <Switch checked={catchUp} onCheckedChange={setCatchUp} />
+          </div>
           {error && <p className="text-destructive text-sm">{error}</p>}
         </DialogPanel>
         <DialogFooter>

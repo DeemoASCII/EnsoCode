@@ -489,3 +489,176 @@ describe('群任务看板 IPC', () => {
     ).toMatchObject({ ok: false });
   });
 });
+
+describe('例行任务生命周期', () => {
+  async function group(options: { bobAcceptsNobody?: boolean } = {}) {
+    const alice = await createBot('Alice');
+    const created = await call(IPC_CHANNELS.BOT_CREATE, {
+      name: 'Bob',
+      persona: 'Calm.',
+      ...(options.bobAcceptsNobody ? { delegation: { canDelegateTo: 'any', acceptFrom: [] } } : {}),
+    });
+    const bob = (created.bot as { id: string }).id;
+    const carol = await createBot('Carol');
+    const chat = await call(IPC_CHANNELS.BOT_CHAT_CREATE, {
+      kind: 'group',
+      title: 'team',
+      members: [alice, bob],
+      bossBotId: alice,
+      workspace: { kind: 'chat-home' },
+    });
+    const chatId = (chat.chat as { id: string }).id;
+    const { getBotServices, routineProposeTool } = await import('./bots');
+    const services = getBotServices()!;
+    const session = services.host.ensureSession(chatId, alice);
+    if (!session.ok) throw new Error(session.error);
+    return { alice, bob, carol, chatId, services, routineProposeTool, session };
+  }
+
+  it('routine_propose：只对成员当前会话开放，解析简单调度，越权与坏参数拒绝', async () => {
+    const { alice, bob, chatId, services, routineProposeTool, session } = await group();
+    const binding = { botId: alice, chatId };
+    const params = { title: '日报', prompt: '汇总今天的进展', schedule: '工作日 18:30' };
+    for (const [conversationId, bad] of [
+      ['stale', binding],
+      [session.conversationId, { botId: alice, chatId: null }],
+      [session.conversationId, { ...binding, delegationId: 'd' }],
+      [session.conversationId, { botId: bob, chatId }],
+    ] as const)
+      expect(routineProposeTool(services, conversationId, bad, params)).toMatchObject({
+        ok: false,
+      });
+    expect(routineProposeTool(null, session.conversationId, binding, params)).toMatchObject({
+      ok: false,
+    });
+    expect(
+      routineProposeTool(services, session.conversationId, binding, {
+        ...params,
+        schedule: 'sometimes',
+      })
+    ).toMatchObject({ ok: false, error: expect.stringContaining('cron') });
+    expect(
+      routineProposeTool(services, session.conversationId, binding, { ...params, prompt: '' })
+    ).toMatchObject({ ok: false });
+    expect(
+      routineProposeTool(services, session.conversationId, binding, {
+        ...params,
+        doneBy: 'Nobody',
+      })
+    ).toMatchObject({ ok: false });
+    expect(
+      routineProposeTool(services, session.conversationId, binding, { ...params, doneBy: 'carol' })
+    ).toMatchObject({ ok: false });
+
+    const proposed = routineProposeTool(services, session.conversationId, binding, {
+      ...params,
+      doneBy: 'bob',
+    });
+    expect(proposed).toMatchObject({ ok: true, status: 'draft', doneBy: 'Bob' });
+    const listed = await call(IPC_CHANNELS.BOT_ROUTINES_LIST, { botId: alice });
+    expect(listed.routines).toEqual([
+      expect.objectContaining({
+        status: 'draft',
+        schedule: '30 18 * * 1-5',
+        doneBy: bob,
+        proposedBy: alice,
+      }),
+    ]);
+    const id = (proposed as { id: string }).id;
+    expect(services.chats.readEntries(chatId).at(-1)).toMatchObject({
+      kind: 'system',
+      routine: { botId: alice, id },
+      text: expect.stringContaining('等待批准'),
+    });
+  });
+
+  it('routine_propose 遵守委派 ACL：执行成员不接受委派时拒绝', async () => {
+    const { alice, chatId, services, routineProposeTool, session } = await group({
+      bobAcceptsNobody: true,
+    });
+    expect(
+      routineProposeTool(
+        services,
+        session.conversationId,
+        { botId: alice, chatId },
+        { title: 't', prompt: 'p', schedule: 'hourly', doneBy: 'Bob' }
+      )
+    ).toMatchObject({ ok: false, error: expect.stringContaining('does not accept') });
+    expect(
+      await call(IPC_CHANNELS.BOT_ROUTINE_SAVE, {
+        botId: alice,
+        chatId,
+        title: 't',
+        prompt: 'p',
+        schedule: '0 9 * * *',
+        doneBy: (services.bots.list().find((bot) => bot.name === 'Bob') as { id: string }).id,
+      })
+    ).toEqual({ ok: false, error: 'acl' });
+  });
+
+  it('审批、试运行、手动运行与运行历史经 IPC 收窄', async () => {
+    const { alice, chatId, services, routineProposeTool, session } = await group();
+    const proposed = routineProposeTool(
+      services,
+      session.conversationId,
+      { botId: alice, chatId },
+      { title: '日报', prompt: '写日报', schedule: 'daily 09:00' }
+    ) as { id: string };
+    const target = { botId: alice, id: proposed.id };
+    expect(await call(IPC_CHANNELS.BOT_ROUTINE_REVIEW, { ...target, approve: 'yes' })).toEqual({
+      ok: false,
+      error: 'invalid',
+    });
+    expect(await call(IPC_CHANNELS.BOT_ROUTINE_RUNS, { botId: '../x', id: proposed.id })).toEqual({
+      ok: false,
+      error: 'invalid',
+    });
+    expect(await call(IPC_CHANNELS.BOT_ROUTINE_RUN_NOW, target)).toEqual({
+      ok: false,
+      error: 'not-approved',
+    });
+    expect(await call(IPC_CHANNELS.BOT_ROUTINE_RUN_NOW, { ...target, dryRun: 1 })).toEqual({
+      ok: false,
+      error: 'invalid',
+    });
+    expect(await call(IPC_CHANNELS.BOT_ROUTINE_RUN_NOW, { ...target, dryRun: true })).toEqual({
+      ok: true,
+    });
+    expect(await call(IPC_CHANNELS.BOT_ROUTINE_RUNS, target)).toMatchObject({
+      ok: true,
+      runs: [{ trigger: 'dry-run', executorId: alice, chatId }],
+    });
+    expect(await call(IPC_CHANNELS.BOT_ROUTINE_RUN_NOW, { ...target, dryRun: true })).toEqual({
+      ok: false,
+      error: 'busy',
+    });
+    expect(await call(IPC_CHANNELS.BOT_ROUTINE_REVIEW, { ...target, approve: true })).toMatchObject(
+      { ok: true, routine: { status: 'enabled', approvedVersion: 1 } }
+    );
+    expect(await call(IPC_CHANNELS.BOT_ROUTINE_REVIEW, { ...target, approve: true })).toEqual({
+      ok: false,
+      error: 'invalid',
+    });
+    expect(await call(IPC_CHANNELS.BOT_ROUTINE_DELETE, target)).toEqual({ ok: true });
+    expect(await call(IPC_CHANNELS.BOT_ROUTINE_RUNS, target)).toEqual({ ok: true, runs: [] });
+  });
+
+  it('保存时执行成员不在目标聊天里拒绝；成员离群后依赖检查自动阻塞', async () => {
+    const { alice, bob, carol, chatId, services } = await group();
+    const draft = { botId: alice, chatId, title: 't', prompt: 'p', schedule: '0 9 * * *' };
+    expect(await call(IPC_CHANNELS.BOT_ROUTINE_SAVE, { ...draft, doneBy: carol })).toEqual({
+      ok: false,
+      error: 'invalid',
+    });
+    const saved = await call(IPC_CHANNELS.BOT_ROUTINE_SAVE, { ...draft, doneBy: bob });
+    expect(saved).toMatchObject({ ok: true, routine: { status: 'enabled', doneBy: bob } });
+    const id = (saved.routine as { id: string }).id;
+    expect(
+      services.chats.update(chatId, (chat) => ({ ...chat, members: [alice, carol] }))
+    ).toBeTruthy();
+    expect(services.scheduler.verify(alice, id)).toMatchObject({
+      status: 'blocked',
+      blockedReason: 'not-in-chat',
+    });
+  });
+});
