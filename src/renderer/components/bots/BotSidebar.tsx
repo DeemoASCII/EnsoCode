@@ -10,6 +10,7 @@ import {
   Inbox,
   LayoutTemplate,
   Mail,
+  MoreHorizontal,
   PanelLeftClose,
   Pin,
   PinOff,
@@ -34,6 +35,7 @@ import {
   ContextMenuSubTrigger,
   ContextMenuTrigger,
 } from '@/components/ui/context-menu';
+import { Menu, MenuItem, MenuPopup, MenuTrigger } from '@/components/ui/menu';
 import { addToast } from '@/components/ui/toast';
 import { useI18n } from '@/i18n';
 import { formatRelativeTime } from '@/lib/time';
@@ -74,6 +76,12 @@ export function BotSidebar({
   onStartFromGoal,
 }: BotSidebarProps) {
   const { t, locale } = useI18n();
+  const createActions = [
+    { label: t('Start from a goal'), icon: Target, onClick: onStartFromGoal },
+    { label: t('New member'), icon: UserPlus, onClick: onNewMember },
+    { label: t('New group chat'), icon: Users, onClick: onNewGroup },
+    { label: t('Create team from template'), icon: LayoutTemplate, onClick: onNewTeam },
+  ];
   const bots = useBotsStore((s) => s.bots);
   const chats = useBotsStore((s) => s.chats);
   const queue = useBotsStore((s) => s.queue);
@@ -390,7 +398,7 @@ export function BotSidebar({
         )}
       </div>
 
-      <div className="flex shrink-0 items-center justify-between border-t p-2">
+      <div className="@container flex shrink-0 items-center justify-between border-t p-2">
         <button
           type="button"
           onClick={onCollapse}
@@ -401,38 +409,33 @@ export function BotSidebar({
         </button>
         <div className="flex items-center">
           <BotSearchButton className={ICON_BUTTON_CLASS} />
-          <button
-            type="button"
-            className={ICON_BUTTON_CLASS}
-            onClick={onStartFromGoal}
-            title={t('Start from a goal')}
-          >
-            <Target className="h-4 w-4" />
-          </button>
-          <button
-            type="button"
-            className={ICON_BUTTON_CLASS}
-            onClick={onNewMember}
-            title={t('New member')}
-          >
-            <UserPlus className="h-4 w-4" />
-          </button>
-          <button
-            type="button"
-            className={ICON_BUTTON_CLASS}
-            onClick={onNewGroup}
-            title={t('New group chat')}
-          >
-            <Users className="h-4 w-4" />
-          </button>
-          <button
-            type="button"
-            className={ICON_BUTTON_CLASS}
-            onClick={onNewTeam}
-            title={t('Create team from template')}
-          >
-            <LayoutTemplate className="h-4 w-4" />
-          </button>
+          {createActions.map(({ label, icon: Icon, onClick }) => (
+            <button
+              key={label}
+              type="button"
+              className={cn(ICON_BUTTON_CLASS, 'hidden @min-[18.5rem]:flex')}
+              onClick={onClick}
+              title={label}
+            >
+              <Icon className="h-4 w-4" />
+            </button>
+          ))}
+          <Menu>
+            <MenuTrigger
+              className={cn(ICON_BUTTON_CLASS, '@min-[18.5rem]:hidden')}
+              title={t('More actions')}
+            >
+              <MoreHorizontal className="h-4 w-4" />
+            </MenuTrigger>
+            <MenuPopup align="end" side="top">
+              {createActions.map(({ label, icon: Icon, onClick }) => (
+                <MenuItem key={label} onClick={onClick}>
+                  <Icon />
+                  {label}
+                </MenuItem>
+              ))}
+            </MenuPopup>
+          </Menu>
           {(inboxCount > 0 || view?.kind === 'inbox') && (
             <button
               type="button"
