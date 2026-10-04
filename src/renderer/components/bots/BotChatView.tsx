@@ -1,4 +1,5 @@
 import type { BotChat, BotProfile } from '@shared/types/bot';
+import { findVirtualModel } from '@shared/virtualModels';
 import { MessageSquarePlus, Shield, Sparkles } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { ApprovalBar } from '@/components/chat/ApprovalBar';
@@ -26,8 +27,11 @@ import { WorkspaceMenu } from './WorkspaceMenu';
 export function useModelLabel(bot: BotProfile | undefined): string {
   const { t } = useI18n();
   const providers = useSettingsStore((s) => s.providers);
+  const virtualModels = useSettingsStore((s) => s.virtualModels);
   if (!bot?.engine) return t('Default model');
   const { providerId, modelId } = bot.engine;
+  const virtual = findVirtualModel(virtualModels, bot.engine);
+  if (virtual) return virtual.name;
   const model = providers.find((p) => p.id === providerId)?.models.find((m) => m.id === modelId);
   return model?.label ?? modelId;
 }

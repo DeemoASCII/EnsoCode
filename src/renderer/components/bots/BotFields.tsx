@@ -106,6 +106,7 @@ export function EngineField({
   const { t } = useI18n();
   const providers = useSettingsStore((s) => s.providers);
   const defaultModel = useSettingsStore((s) => s.defaultModel);
+  const virtualModels = useSettingsStore((s) => s.virtualModels);
   const snapshot = useOauthCredentialStore((s) => s.snapshot);
   const usable = useMemo(
     () => usableProvidersForOauthSnapshot(providers, snapshot),
@@ -115,7 +116,7 @@ export function EngineField({
   return (
     <div className="space-y-2">
       <label className="flex items-center justify-between gap-2 text-sm">
-        <span>{t('Follow default model')}</span>
+        <span>{t('Use the default model')}</span>
         <Switch
           checked={follow}
           onCheckedChange={(checked) => {
@@ -133,6 +134,7 @@ export function EngineField({
       {engine && (
         <ModelPicker
           providers={usable}
+          virtualModels={virtualModels}
           providerId={engine.providerId}
           modelId={engine.modelId}
           reasoningEnabled={engine.thinkingLevel !== undefined}

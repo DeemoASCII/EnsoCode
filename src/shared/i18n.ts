@@ -438,6 +438,7 @@ export const zhTranslations: Record<string, string> = {
     '新会话发出首条消息后，用 AI 自动生成简短标题。',
   'Follows the default model': '跟随默认模型',
   'Follow default model': '改跟默认模型',
+  'Use the default model': '使用默认模型',
   'Summarizing title': '标题总结中',
   'Title summary failed': '标题总结失败',
   'Click to retry': '点击重试',
