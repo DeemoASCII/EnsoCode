@@ -101,6 +101,7 @@ export {
   DEFAULT_RELAY_URL,
   normalizeRelayUrl,
   type PairedDevice,
+  type PairScope,
   toWebSocketUrl,
 } from './relay';
 export {

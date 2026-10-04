@@ -337,6 +337,7 @@ export const IPC_CHANNELS = {
   PAIR_CANCEL: 'pair:cancel',
   PAIR_REVOKE: 'pair:revoke',
   PAIR_RENAME: 'pair:rename',
+  PAIR_SET_SCOPE: 'pair:set-scope',
   PAIR_STATUS: 'pair:status',
   PAIR_SET_RELAY: 'pair:set-relay',
   PAIR_CATALOG: 'pair:catalog',

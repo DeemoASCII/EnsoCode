@@ -423,6 +423,8 @@ export type HostToPhone =
       iceServers?: IceServerEntry[];
       /** 桌面语音识别可用（设置开启且模型就绪） */
       voiceInput?: true;
+      /** 本设备被桌面设为只读：手机隐藏发送/审批等写操作（host 侧另有强制拦截） */
+      readOnly?: true;
     }
   | { type: 'direct-answer'; gen: number; sdp: string }
   | ({ type: 'direct-ice'; gen: number } & DirectCandidate)

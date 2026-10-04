@@ -679,6 +679,19 @@ describe('PairClient 缓存与续传', () => {
     expect(onVoiceInput).toHaveBeenLastCalledWith(false);
   });
 
+  it('host-info 声明 readOnly 即只读，缺省（旧桌面或已切回可操作）不是只读', async () => {
+    const onReadOnly = vi.fn();
+    events.onReadOnly = onReadOnly;
+    const socket = await start();
+    socket.onmessage?.({ data: JSON.stringify({ type: 'host-online' }) });
+    socket.receive({ type: 'host-info', hostname: 'h', appVersion: '1', readOnly: true });
+    await settle();
+    expect(onReadOnly).toHaveBeenLastCalledWith(true);
+    socket.receive({ type: 'host-info', hostname: 'h', appVersion: '1' });
+    await settle();
+    expect(onReadOnly).toHaveBeenLastCalledWith(false);
+  });
+
   function voiceChunks(socket: Socket) {
     return socket.sent.flatMap((item) => (item.type === 'voice-chunk' ? [item] : []));
   }

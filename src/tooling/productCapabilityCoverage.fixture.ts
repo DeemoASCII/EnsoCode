@@ -599,6 +599,7 @@ export const IPC_PRODUCT_COVERAGE = {
   PAIR_RESUME_SESSION: excluded('Phone second-screen pairing transport; not an Enso capability.'),
   PAIR_REVOKE: excluded('Phone second-screen pairing transport; not an Enso capability.'),
   PAIR_RENAME: excluded('Phone second-screen pairing transport; not an Enso capability.'),
+  PAIR_SET_SCOPE: excluded('Phone second-screen pairing transport; not an Enso capability.'),
   PAIR_SESSION_CREATED: excluded('Phone second-screen pairing transport; not an Enso capability.'),
   PAIR_SET_RELAY: excluded('Phone second-screen pairing transport; not an Enso capability.'),
   PAIR_START: excluded('Phone second-screen pairing transport; not an Enso capability.'),

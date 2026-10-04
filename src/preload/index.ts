@@ -1035,6 +1035,11 @@ const electronAPI = {
     revoke: (pairId: string): Promise<void> => ipcRenderer.invoke(IPC_CHANNELS.PAIR_REVOKE, pairId),
     rename: (pairId: string, deviceName: string): Promise<{ ok: boolean; error?: string }> =>
       ipcRenderer.invoke(IPC_CHANNELS.PAIR_RENAME, pairId, deviceName),
+    setScope: (
+      pairId: string,
+      scope: 'read' | 'operate'
+    ): Promise<{ ok: boolean; error?: string }> =>
+      ipcRenderer.invoke(IPC_CHANNELS.PAIR_SET_SCOPE, pairId, scope),
     status: (): Promise<PairStatus> => ipcRenderer.invoke(IPC_CHANNELS.PAIR_STATUS),
     setRelayUrl: (url: string): Promise<PairStatus> =>
       ipcRenderer.invoke(IPC_CHANNELS.PAIR_SET_RELAY, url),

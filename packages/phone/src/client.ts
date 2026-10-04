@@ -109,6 +109,8 @@ export interface ClientEvents {
   onRtt?(ms: number): void;
   /** 桌面语音识别是否可用；断线/换主机视为不可用 */
   onVoiceInput?(available: boolean): void;
+  /** 桌面把本设备设为只读（host-info.readOnly）；host 侧另有强制拦截 */
+  onReadOnly?(readOnly: boolean): void;
   /** Bot 模式（桌面开启时才下发；enabled=false = 已关闭） */
   onBotCatalog?(enabled: boolean, bots: PairBotMember[]): void;
   onBotChats?(chats: PairBotChatSummary[]): void;
@@ -496,6 +498,7 @@ export class PairClient {
       case 'host-info':
         this.direct.hostInfo(payload);
         this.setVoiceInput(payload.voiceInput === true);
+        this.events.onReadOnly?.(payload.readOnly === true);
         break;
       case 'voice-result': {
         const { error } = payload;

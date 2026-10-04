@@ -78,6 +78,8 @@ interface Props {
   onAsk(requestId: string, answer: string): void;
   /** Bot 成员会话：发送走 bot-send，无回退/重试/斜杠命令；readOnly = 群聊「查看过程」 */
   bot?: { readOnly?: boolean; onBack?(): void; notice?: string | null; outbox?: ReactNode };
+  /** 桌面把本设备设为只读：只能查看，隐藏输入/审批/回答等写操作 */
+  deviceReadOnly?: boolean;
 }
 
 /** 会话页：复用桌面的时间线 / 审批条 / 输入框，保持与桌面一致的渲染 */
@@ -106,9 +108,15 @@ export function ChatScreen(props: Props) {
   }, [sessionId, props.tabGroup]);
   const running = view?.status === 'running';
   const bot = props.bot;
+  const readOnly = Boolean(bot?.readOnly || props.deviceReadOnly);
   const host = useMemo(
-    () => ({ sessionId, canRewind: !bot, canRetry: !bot, canFork: false }),
-    [sessionId, bot]
+    () => ({
+      sessionId,
+      canRewind: !bot && !props.deviceReadOnly,
+      canRetry: !bot && !props.deviceReadOnly,
+      canFork: false,
+    }),
+    [sessionId, bot, props.deviceReadOnly]
   );
   const slashCommands = useMemo<SlashCommand[]>(() => {
     if (bot) return [];
@@ -369,13 +377,13 @@ export function ChatScreen(props: Props) {
               {/* 自动重试横幅：只展示不可取消（pair 桥无 abort-retry 通道，整轮 abort 已够用） */}
               {view?.retry && <RetryBar retry={view.retry} />}
               {/* 排队区：复用桌面组件，编辑/删除/立即发送/打断并发送经桩发 pair 命令 */}
-              {!bot?.readOnly && (
+              {!readOnly && (
                 <MessageQueue
                   conversationId={sessionId}
                   queued={(props.queued ?? []).map((q) => ({ id: q.id, text: q.text }))}
                 />
               )}
-              {props.goal && !bot?.readOnly && (
+              {props.goal && !readOnly && (
                 <GoalBar conversationId={sessionId} goal={{ ...props.goal, noProgressRuns: 0 }} />
               )}
               <TodoBar key={sessionId} conversationId={sessionId} />
@@ -391,9 +399,17 @@ export function ChatScreen(props: Props) {
                   {bot.notice}
                 </p>
               )}
-              <ApprovalBar approvals={view?.approvals ?? []} onRespond={props.onApproval} />
-              <AskBar asks={view?.asks ?? []} onAnswer={props.onAsk} />
-              {!bot?.readOnly && (
+              {props.deviceReadOnly ? (
+                <p className="mb-1 rounded-md bg-muted px-2 py-1 text-center text-muted-foreground text-xs">
+                  此设备为只读，只能查看；可在桌面「设置 → 设备」切换为可操作
+                </p>
+              ) : (
+                <>
+                  <ApprovalBar approvals={view?.approvals ?? []} onRespond={props.onApproval} />
+                  <AskBar asks={view?.asks ?? []} onAnswer={props.onAsk} />
+                </>
+              )}
+              {!readOnly && (
                 <Composer
                   commands={slashCommands}
                   running={running}
@@ -426,7 +442,7 @@ export function ChatScreen(props: Props) {
                   voiceMode="hold"
                 />
               )}
-              {!bot?.readOnly && (
+              {!readOnly && (
                 <SessionStatsLine usageTotals={props.usageTotals} context={props.context} />
               )}
             </div>

@@ -142,6 +142,8 @@ export function App() {
   /** 已收到桌面下发的 push-config；旧版桌面不会发，开关据此提示升级 */
   const [pushConfigReady, setPushConfigReady] = useState(false);
   const [voiceInput, setVoiceInput] = useState(false);
+  /** 桌面把本设备设为只读（host-info.readOnly） */
+  const [deviceReadOnly, setDeviceReadOnly] = useState(false);
   /** 订阅进行中：开关乐观显示已开但禁用，避免数秒无反馈 */
   const [pushBusy, setPushBusy] = useState(false);
   const [pushError, setPushError] = useState<PushFailureReason | null>(null);
@@ -267,6 +269,7 @@ export function App() {
     setHistoryPending(new Set());
     setTransport('relay');
     setVoiceInput(false);
+    setDeviceReadOnly(false);
     const client = new PairClient(device, {
       onState: (next) => {
         if (next !== 'online') outboxRef.current?.interrupted();
@@ -278,6 +281,7 @@ export function App() {
       },
       onRtt: setRttMs,
       onVoiceInput: setVoiceInput,
+      onReadOnly: setDeviceReadOnly,
       onCatalog: (entries, order) => {
         setCatalog(entries);
         setPinnedOrder(order ?? []);
@@ -702,6 +706,7 @@ export function App() {
           stateLabel={connectionLabel}
           notice={botNotice}
           outbox={outboxBar(chat.id)}
+          deviceReadOnly={deviceReadOnly}
           onOpenDrawer={openDrawer}
           onLoadOlder={() => {
             const beforeSeq = timelines[chat.id]?.entries[0]?.seq;
@@ -753,6 +758,7 @@ export function App() {
             ? { readOnly: true, onBack: () => setProcessId(null) }
             : { notice: botNotice, outbox: outboxBar(chat.id) }
         }
+        deviceReadOnly={deviceReadOnly}
         onSend={(text, images) => sendBot(chat.id, text, images)}
         onAbort={() => subscribedId && send({ type: 'abort', sessionId: subscribedId })}
         onApproval={(requestId, decision) =>
@@ -819,7 +825,7 @@ export function App() {
             setComposeProjectId(null);
             setComposing(true);
           }}
-          canCreate={state === 'online' && projects.length > 0}
+          canCreate={state === 'online' && projects.length > 0 && !deviceReadOnly}
           modelLabel={state === 'online' ? modelLabel : undefined}
           onOpenConfig={() => setConfigOpen(true)}
           tabGroup={tabGroup}
@@ -836,6 +842,7 @@ export function App() {
           context={entry?.context}
           usageTotals={entry?.usageTotals}
           slashCommands={entry?.slashCommands}
+          deviceReadOnly={deviceReadOnly}
           onSend={(text, images) => {
             if (!activeId) return;
             const compact = parseCompactCommand(text);
@@ -882,7 +889,7 @@ export function App() {
         catalog={catalog}
         pinnedOrder={pinnedOrder}
         activeId={botChatId ? null : activeId}
-        canCreate={state === 'online'}
+        canCreate={state === 'online' && !deviceReadOnly}
         devices={devices}
         activeDevicePairId={device.pairId}
         connected={state === 'online'}

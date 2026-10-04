@@ -38,6 +38,8 @@ interface Props {
   notice: string | null;
   /** 离线待发队列；有它时断线也可发送（先入队，连上后重发） */
   outbox?: ReactNode;
+  /** 桌面把本设备设为只读：只能看时间线 */
+  deviceReadOnly?: boolean;
   onOpenDrawer(): void;
   onLoadOlder(): void;
   onSend(text: string): void;
@@ -280,24 +282,30 @@ export function GroupChatScreen(props: Props) {
             {props.notice}
           </p>
         )}
-        {props.pending.map(({ sessionId, botId, view }) =>
-          view.approvals.length > 0 || view.asks.length > 0 ? (
-            <div key={sessionId} className="space-y-1">
-              <p className="text-muted-foreground text-xs">{bots.get(botId)?.name ?? '成员'}</p>
-              <ApprovalBar
-                approvals={view.approvals}
-                onRespond={(requestId, decision) =>
-                  props.onApproval(sessionId, requestId, decision)
-                }
-              />
-              <AskBar
-                asks={view.asks}
-                onAnswer={(requestId, answer) => props.onAsk(sessionId, requestId, answer)}
-              />
-            </div>
-          ) : null
+        {props.deviceReadOnly && (
+          <p className="rounded-md bg-muted px-2 py-1 text-center text-muted-foreground text-xs">
+            此设备为只读，只能查看；可在桌面「设置 → 设备」切换为可操作
+          </p>
         )}
-        <div className="relative">
+        {!props.deviceReadOnly &&
+          props.pending.map(({ sessionId, botId, view }) =>
+            view.approvals.length > 0 || view.asks.length > 0 ? (
+              <div key={sessionId} className="space-y-1">
+                <p className="text-muted-foreground text-xs">{bots.get(botId)?.name ?? '成员'}</p>
+                <ApprovalBar
+                  approvals={view.approvals}
+                  onRespond={(requestId, decision) =>
+                    props.onApproval(sessionId, requestId, decision)
+                  }
+                />
+                <AskBar
+                  asks={view.asks}
+                  onAnswer={(requestId, answer) => props.onAsk(sessionId, requestId, answer)}
+                />
+              </div>
+            ) : null
+          )}
+        <div className={cn('relative', props.deviceReadOnly && 'hidden')}>
           {options.length > 0 && (
             <div className="absolute right-0 bottom-full left-0 mb-1 max-h-48 overflow-y-auto rounded-lg border bg-popover p-1 shadow-md">
               {options.map((option) => {

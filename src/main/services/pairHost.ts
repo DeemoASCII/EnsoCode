@@ -15,6 +15,7 @@ import {
   isConnectStuck,
   openFrame,
   type PairedDevice,
+  type PairScope,
   type PairSyncCursor,
   type PhoneToHost,
   type ProjectEntry,
@@ -88,6 +89,7 @@ import {
 import { seedRelayHostCache } from './pairRelayLookup';
 import { openPairRelayWebSocket } from './pairRelayOpen';
 import { PairReplayLog } from './pairReplay';
+import { commandAllowedForScope, deviceScope, setScopeInList } from './pairScope';
 import {
   isSecureStorageAvailable,
   loadDevices,
@@ -540,6 +542,22 @@ export function renameDevice(pairId: string, deviceName: string): { ok: boolean;
   return { ok: true };
 }
 
+export function setDeviceScope(pairId: string, scope: PairScope): { ok: boolean; error?: string } {
+  const list = loadDevices();
+  if (!list.some((d) => d.pairId === pairId)) return { ok: false, error: 'device not found' };
+  const next = setScopeInList(list, pairId, scope);
+  saveDevices(next);
+  const conn = connections.get(pairId);
+  const updated = next.find((d) => d.pairId === pairId);
+  if (conn && updated) {
+    conn.device = updated;
+    // host-info 指纹含 readOnly，变了即重发给在线手机
+    requestMeta(conn);
+  }
+  notifyStatus();
+  return { ok: true };
+}
+
 export async function revokeDevice(pairId: string): Promise<void> {
   const device = loadDevices().find((d) => d.pairId === pairId);
   forgetDevice(pairId);
@@ -564,6 +582,7 @@ export function getPairStatus(): PairStatus {
         pairId: d.pairId,
         deviceName: d.deviceName,
         pairedAt: d.pairedAt,
+        scope: deviceScope(d),
         connected: conn?.ws?.readyState === 1,
         phoneOnline: conn?.phoneOnline ?? false,
         transport: conn?.direct.transport() ?? 'relay',
@@ -872,6 +891,19 @@ async function handleFrame(
     return;
   }
   const command = parsed.command;
+  if (!commandAllowedForScope(deviceScope(conn.device), command.type)) {
+    console.warn(`[pair] command rejected: ${command.type} needs operate scope`);
+    // bot-send 需要回执：否则手机离线队列一直停在「发送中」
+    if (command.type === 'bot-send')
+      void send(conn, {
+        type: 'bot-send-result',
+        chatId: command.chatId,
+        deliveryId: command.deliveryId,
+        ok: false,
+        error: 'read-only',
+      });
+    return;
+  }
   if ('sessionId' in command && command.sessionId) {
     const error = botCommandError(
       command.type,
@@ -1236,6 +1268,7 @@ async function sendMeta(conn: Connection): Promise<void> {
     appVersion: app.getVersion(),
     ...(directReady ? { capabilities: ['direct-v1' as const], iceServers: PAIR_STUN_SERVERS } : {}),
     ...(speechAvailable() ? { voiceInput: true as const } : {}),
+    ...(deviceScope(conn.device) === 'read' ? { readOnly: true as const } : {}),
   };
   const catalogEntries = slimCatalogForPhone(catalog, conn.subscribedId);
   const projectEntries = slimProjectsForPhone(projects);
