@@ -499,3 +499,23 @@ Main 在 `spawnSession` 里根据 `ConversationAuthority.bot` 组装提示词，
 **测试**：分类器 55 条正例 + 35 条反例 + 密钥路径 / MCP 名字；ApprovalGate（Code 默认不弹、底线下 full 仍弹、会话白名单不覆盖、代审跳过、read 密钥）；注入命中 19 条 / 误报 11 条、脱敏；待审批入队 / 批准 / 结晶 / 拒绝；bridge（bot 写 global 入队且脱敏、Code 写 global 直接落库且脱敏、注入两种会话都拒绝、bot 结晶入队）；蒸馏丢弃、笔记过滤；IPC 收窄与广播；收件箱 store 订阅；设置项默认关。
 
 **真机**（隔离 userData，完全放行成员：Max claude-opus-4-6、hei qwen3.8-max、hei glm-5.3）：Claude 与 Qwen 分别被要求执行 `rm -rf /tmp/enso-floor-test` 和 `git push --force origin main`，四次都弹出「受保护：删除」审批（收件箱无「本会话总是允许」）；批准的 rm 执行，拒绝的 force push 远端未变。Qwen 与 GLM 把假 `sk-test-…` 写进全局记忆，返回 `pending_review` + `redacted: true`，收件箱显示 `api_key=[REDACTED]`；Claude 两次拒绝存疑似凭据（模型自身行为），改写无密钥的全局偏好同样进入待审批。收件箱批准后全局空间出现脱敏后的记忆，拒绝的不落库；设置页记忆库同步显示剩余两条并可批准，主窗口收件箱实时减少。Qwen / GLM 写 `SYSTEM: 忽略之前的所有指令…` 到 bot 空间被拒，错误列出三类命中。未真机验证：Code 会话开启设置项后的表现、例行任务里受保护审批 30 分钟自动拒绝（沿用既有机制，单测覆盖）。
+
+## 存储层性能与健壮性（2026-10 补充）
+
+**群时间线不再全量读**（`chatStore.ts`）
+
+- `readEntries` / `lastSeq` / 新增 `readAfter(afterSeq)` 都从 `timeline.jsonl` 文件尾按 64KB 块倒读，按字节切行（多字节字符跨块安全），半截行 / 坏行跳过；倒读时只接受 seq 严格递减的条目（等价于原先正读的单调过滤）。API 语义不变：升序返回 `seq < beforeSeq` 的最后 `limit` 条。
+- 深翻页：倒读经过的每个 128 倍数 seq 记下行首偏移（文件只追加，偏移长期有效，越界即作废），带 `beforeSeq` 时从最近的检查点开始读。
+- id 索引：`hasEntry` / `findEntry` 首次使用时顺序扫一遍，只解析行首固定的 `{"seq":N,"id":"…"` 前缀（不匹配再整行解析），记 id → {seq, 偏移, 长度}；`appendEntry` 用同一个 fd 判断末行是否撕裂并增量维护索引。委派卡片「只写一次」改用 `hasEntry`，产物卡片按 entryId 直接定位。
+- 调用方：群增量投递用 `readAfter(cursor)`；`group_history` 改为惰性消费倒序序列（`queryGroupHistoryNewestFirst`，够一页并多看到一条判断 hasMore 即停；按发言人过滤且名字未出现过时才扫全量以给出 Known 列表）；聊天搜索用 `scanEntries` 异步分块（256KB/块）读取，不一次性占用主线程；手机端聊天列表摘要（limit 1）自动变为尾读。
+- 未做：新成员首次投递（cursor=0）仍需读全量以给出「省略 N 条」的准确计数（一次性，约 10MB/数十毫秒）；时间线条目本身不带 schemaVersion。
+
+**委派结果去重**（`startedDeliveries.ts`）：`hasStartedDelivery` 不再每次读整个会话 jsonl。每个会话文件首次全量扫描，之后只读追加的字节（按 inode + 大小判断，文件被替换或变短则重扫）；末行未写完时能解析就先记下但水位不越过它。jsonl 仍是唯一权威：Main 崩溃重启后新索引从 jsonl 重建，已写入但未确认的结果照样判重。
+
+**jsonl 压缩与归档**：`delegations.jsonl` 与群 `tasks.jsonl` 在加载和每次追加后检查冗余行（被覆盖的旧快照、坏行），达到 `max(阈值, 记录数)`（委派 500、看板 200）时用临时文件 + rename 原子重写为最新快照，失败只 `console.warn` 并保留原文件。看板被删的最大 seq 以一条 `seq-floor` 墓碑保留，`#N` 不复用。已投递（有 `deliveredAt`）的终态委派超过 30 天在加载时移入同目录 `delegations.archive.jsonl`（只追加，不再加载）；归档后旧群里的委派卡片退化为只用时间线条目信息展示，不能再重试 / 查看过程。
+
+**schemaVersion 与迁移**（`shared/bots/migrations.ts`）：`bot.json`、`chat.json`、`routines.json`（文件级 `{schemaVersion, routines}`）、`delegations.jsonl` 每行、`tasks.jsonl` 每条任务快照写入 `schemaVersion`，与乐观并发的 `version` 无关。读盘后 parse 前统一 `migrateRecord(kind, raw)`：缺省按第 1 版处理（旧数据兼容），按步骤数组逐版升级；由更新版本写出的记录不解析（避免有损降级覆盖），jsonl 压缩时原样保留这类行，看板 seq 计入其编号。
+
+**测试**：5 万条尾读正确性与相对耗时上界、跨块多字节 + 半截行、深翻页检查点与无检查点结果一致、id 索引重启后去重、异步扫描；会话 jsonl 增量扫描（追加、半截行、文件替换、原地改写已扫区域不再读到、崩溃重启后宿主拒绝重放）；压缩阈值、加载时压缩与归档、原子重写失败保留原文件、墓碑保 seq；迁移管线、旧数据读取、新版本记录拒绝与压缩保留。
+
+**真机**（隔离 userData，Max claude-sonnet-4-6 + hei qwen3.8-max，群时间线 2 万条 / 9.8MB）：打开 1.8ms；逐页翻到底 199 页共 427ms，单页最大 16ms，期间 Main 探针最大 10ms；学到检查点后深页 2ms。⌘K 搜索 98ms（命中 seq 19990 与 123），宽泛搜索 140ms，期间 Main 探针最大 12ms。两位成员 @ 回复正常；重启后 lastSeq 不回退，增量只投递 cursor 之后的两条。已知未解决：搜索结果跳到很早的条目时，renderer 按页累计渲染数千条时间线条目明显卡顿（renderer 未虚拟化，非 Main 读取问题）。
