@@ -1686,6 +1686,10 @@ export const zhTranslations: Record<string, string> = {
   'Showing {{shown}} of {{total}} models': '显示 {{shown}} / 共 {{total}} 个模型',
   // Status line · 段位与预设
   'Status line settings': '状态栏设置',
+  'Recent request body': '最近请求体',
+  'Serialized payload': '已序列化',
+  'Before send': '发送前',
+  'Blocked before send': '超限，未发送',
   'No data yet': '暂无数据',
   '{{count}} coworkers': '{{count}} 名队员',
   'Drag to reorder': '拖动排序',

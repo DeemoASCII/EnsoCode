@@ -74,7 +74,12 @@ vi.mock('@earendil-works/pi-coding-agent', async (importOriginal) => {
     getModels() {
       return [...this.models.values()];
     },
-    getProvider: () => undefined,
+    getProvider(providerId: string) {
+      if (![...this.models.keys()].some((key) => key.startsWith(`${providerId}/`)))
+        return undefined;
+      return { id: providerId, models: [], stream: vi.fn(), streamSimple: vi.fn() };
+    },
+    registerNativeProvider: vi.fn(),
     refresh: vi.fn(async () => ({ aborted: false, errors: new Map() })),
     completeSimple: vi.fn(async () => ({ content: [] })),
   };

@@ -29,6 +29,7 @@ import {
   parsePlanState,
 } from '../planMode';
 import { PRODUCT_SURFACE_INVENTORY, type ProductSurfaceId } from '../productSurfaces';
+import { parseRequestBodyUsage, type RequestBodyUsage } from '../requestBodyUsage';
 import { parseRtkToolStats, type RtkToolStats } from '../rtk';
 import { parseSmartCompactMode } from '../smartCompactMode';
 import { parseSshTimeoutSeconds } from '../sshTimeout';
@@ -1251,6 +1252,7 @@ export interface SessionSnapshot {
    */
   baseIndex?: number;
   commands: SlashCommand[];
+  requestBody?: RequestBodyUsage;
   pendingApprovals?: ApprovalRequestInfo[];
   pendingAsks?: AskRequestInfo[];
   backgroundTasks?: BackgroundTaskInfo[];
@@ -1488,6 +1490,7 @@ export type AgentWorkerEvent =
       abandoned?: true;
     }
   | { type: 'commands'; identity: SessionIdentity; seq: number; commands: SlashCommand[] }
+  | { type: 'request-body'; identity: SessionIdentity; seq: number; usage: RequestBodyUsage }
   | {
       type: 'session-meta';
       identity: SessionIdentity;
@@ -2484,6 +2487,7 @@ export function parseSessionSnapshot(value: unknown): SessionSnapshot | null {
       'compaction',
       'compactionNoticeAt',
       'planState',
+      'requestBody',
     ]) ||
     !parseAnySessionIdentity(value.identity) ||
     (value.status !== 'idle' && value.status !== 'running' && value.status !== 'failed') ||
@@ -2498,6 +2502,7 @@ export function parseSessionSnapshot(value: unknown): SessionSnapshot | null {
     ) ||
     (value.child !== undefined && parseChildConversationMetadata(value.child) === null) ||
     (value.planState !== undefined && parsePlanState(value.planState) === null) ||
+    (value.requestBody !== undefined && parseRequestBodyUsage(value.requestBody) === null) ||
     (value.safeJournal !== undefined && parseSafeJournalProjection(value.safeJournal) === null) ||
     (value.customEntries !== undefined &&
       (!Array.isArray(value.customEntries) ||
@@ -3090,6 +3095,12 @@ export function parseAgentWorkerEvent(value: unknown): AgentWorkerEvent | null {
   const identity = parseAnySessionIdentity(value.identity);
   if (!identity || !isSequence(value.seq)) return null;
   switch (value.type) {
+    case 'request-body': {
+      const usage = parseRequestBodyUsage(value.usage);
+      return hasExactKeys(value, ['type', 'identity', 'seq', 'usage']) && usage
+        ? { type: 'request-body', identity, seq: value.seq, usage }
+        : null;
+    }
     case 'agent-control-invoke':
       return hasExactKeys(value, ['type', 'identity', 'seq', 'requestId', 'request']) &&
         isNonEmptyString(value.requestId) &&

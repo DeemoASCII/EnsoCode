@@ -1,5 +1,37 @@
+import { STATUS_LINE_PRESETS, STATUS_LINE_SEGMENT_IDS } from '@shared/statusLine';
 import { describe, expect, it } from 'vitest';
 import { mergeSettingsState, migrateSettings, SETTINGS_VERSION } from './migrate';
+
+describe('请求体状态栏段位升级', () => {
+  const oldDefault = [
+    'model',
+    'tokens',
+    'cache',
+    'context',
+    'turns',
+    'speed',
+    'duration',
+    'sessionTime',
+  ];
+  it('新默认开启请求体，并迁移旧默认但不覆盖用户自定义 / 全关', () => {
+    expect(STATUS_LINE_PRESETS.default).toContain('requestBody');
+    expect(migrateSettings({ statusLineSegments: oldDefault }, 13)).toMatchObject({
+      statusLineSegments: STATUS_LINE_PRESETS.default,
+    });
+    for (const list of [[], ['model'], [...oldDefault].reverse()])
+      expect(migrateSettings({ statusLineSegments: list }, 13)).toMatchObject({
+        statusLineSegments: list,
+      });
+  });
+  it('旧完整预设补新段，升级幂等', () => {
+    const oldFull = STATUS_LINE_SEGMENT_IDS.filter((id) => String(id) !== 'requestBody');
+    expect(migrateSettings({ statusLineSegments: oldFull }, 13)).toMatchObject({
+      statusLineSegments: STATUS_LINE_PRESETS.full,
+    });
+    const current = { statusLineSegments: STATUS_LINE_PRESETS.default };
+    expect(migrateSettings(current, SETTINGS_VERSION)).toBe(current);
+  });
+});
 
 /** v0 持久化数据里订阅条目的形状 */
 const legacyProvider = {

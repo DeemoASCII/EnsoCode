@@ -1,5 +1,6 @@
 import { type AccentColor, resolveAccentColor } from '@shared/accentColor';
 import { resolveCompactStrategy } from '@shared/compactStrategy';
+import { STATUS_LINE_PRESETS, STATUS_LINE_SEGMENT_IDS } from '@shared/statusLine';
 import { type EditMode, resolveEditMode } from '@shared/types';
 import { effectiveSubagentAllowedModes } from '@shared/types/builtinTools';
 import { isSpeechModelId } from '@shared/types/speech';
@@ -16,7 +17,7 @@ import { isSpeechModelId } from '@shared/types/speech';
  */
 
 /** 当前持久化数据版本；改数据形状时 +1 并在 `migrateSettings` 里加一段 */
-export const SETTINGS_VERSION = 13;
+export const SETTINGS_VERSION = 14;
 
 export function mergeSettingsState<T extends { editMode: EditMode; accentColor: AccentColor }>(
   persisted: unknown,
@@ -123,6 +124,26 @@ export function migrateSettings(persisted: unknown, version: number): unknown {
   }
   if (version < 13) {
     state = migrateAgentToolModes(state);
+  }
+  if (version < 14 && Array.isArray(state.statusLineSegments)) {
+    const segments = state.statusLineSegments;
+    const oldDefault = [
+      'model',
+      'tokens',
+      'cache',
+      'context',
+      'turns',
+      'speed',
+      'duration',
+      'sessionTime',
+    ];
+    const oldFull = STATUS_LINE_SEGMENT_IDS.filter((id) => id !== 'requestBody');
+    const matches = (preset: readonly string[]) =>
+      segments.length === preset.length && preset.every((id, i) => segments[i] === id);
+    if (matches(oldDefault))
+      state = { ...state, statusLineSegments: [...STATUS_LINE_PRESETS.default] };
+    else if (matches(oldFull))
+      state = { ...state, statusLineSegments: [...STATUS_LINE_PRESETS.full] };
   }
   return state;
 }

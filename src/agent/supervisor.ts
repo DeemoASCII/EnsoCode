@@ -43,6 +43,7 @@ import { resolvePiProviderBaseUrl } from '@shared/providerCatalog';
 import { ANTIGRAVITY_PROVIDER_ID, antigravityProviderConfig } from '@shared/providers/antigravity';
 import { installCodexLinkedRefresh } from '@shared/providers/codexAuth';
 import { DEVIN_PROVIDER_ID, devinProviderConfig } from '@shared/providers/devin';
+import type { RequestBodyUsage } from '@shared/requestBodyUsage';
 import { computeStats, toUsageTotals } from '@shared/sessionStats';
 import type { SmartCompactMode } from '@shared/smartCompactMode';
 import { buildSshShellCommand, shellQuote } from '@shared/ssh';
@@ -144,6 +145,8 @@ import { createSubmitPlanTool, PlanController, withPlanGate } from './planMode';
 import { projectMessage } from './projection';
 import { applyWorkerProxyEnv } from './proxyEnv';
 import { withReadTruncationMeta } from './readTruncation';
+import { withRequestBodyBudget } from './requestBodyBudget';
+import { runWithRequestBodyObserver } from './requestBodyTelemetry';
 import { projectMessages, projectResumeTail } from './resumeSnapshots';
 import { withRtkOptimization } from './rtk';
 import { RunawayGuard } from './runawayGuard';
@@ -317,6 +320,7 @@ interface ManagedSession {
   /** 最近一次收到命令或产生事件；闲置回收的计时起点 */
   lastActivityAt: number;
   contextUsage: ContextUsageTracker;
+  requestBody?: RequestBodyUsage;
   unsubscribe: () => void;
 }
 
@@ -2284,6 +2288,30 @@ export class SessionSupervisor {
       this.onSessionEvent(managed, event);
     });
     this.sessions.set(identity.sessionId, managed);
+    const stream = session.agent?.streamFunction;
+    if (stream) {
+      session.agent.streamFunction = (model, context, options) =>
+        runWithRequestBodyObserver(
+          (usage) => {
+            // 共享 runtime/provider 不意味着共享会话；释放、换代或换模型后的尾回调不能污染新投影。
+            if (
+              this.sessions.get(identity.sessionId) !== managed ||
+              session.model?.id !== model.id ||
+              session.model?.provider !== model.provider
+            )
+              return;
+            managed.requestBody = usage;
+            this.options.emit({
+              type: 'request-body',
+              identity: managed.identity,
+              seq: ++managed.seq,
+              usage,
+            });
+          },
+          () => stream.call(session.agent, model, context, options),
+          { sessionId: session.sessionId, signal: options?.signal }
+        );
+    }
     if (opts.resumeFile) {
       const raw = this.transcript(managed);
       const { immediate, deferFull } = projectResumeTail(raw);
@@ -3628,6 +3656,7 @@ export class SessionSupervisor {
         status: managed.status,
         messages: managed.messages,
         commands: managed.commands,
+        ...(managed.requestBody ? { requestBody: managed.requestBody } : {}),
         ...(managed.gate.snapshot().length > 0
           ? { pendingApprovals: managed.gate.snapshot() }
           : {}),
@@ -4111,6 +4140,9 @@ export function resolveBaseModel(runtime: ModelRuntime, model: SpawnModelConfig)
     if (!oauthModel) {
       throw new Error(`oauth model not found: ${model.oauthAccountKey}/${model.modelId}`);
     }
+    const provider = runtime.getProvider(oauthModel.provider);
+    if (!provider) throw new Error(`oauth provider not found: ${oauthModel.provider}`);
+    runtime.registerNativeProvider(withRequestBodyBudget(provider));
     return oauthModel;
   }
   const providerId = providerKeyFor(model);
@@ -4138,6 +4170,9 @@ export function resolveBaseModel(runtime: ModelRuntime, model: SpawnModelConfig)
         reasoning: resolved.reasoning,
         ...(resolved.thinkingLevelMap ? { thinkingLevelMap: resolved.thinkingLevelMap } : {}),
         input: ['text', 'image'],
+        ...(catalog?.api === model.api && catalog.inputLimits
+          ? { inputLimits: catalog.inputLimits }
+          : {}),
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         // applyExtension 原样展开定义，不填默认值；缺 contextWindow 时 pi 会把 max_tokens 钳成 NaN
         contextWindow,
@@ -4147,12 +4182,14 @@ export function resolveBaseModel(runtime: ModelRuntime, model: SpawnModelConfig)
       },
     ],
   });
-  if (model.api === 'openai-responses') {
-    const provider = runtime.getProvider(providerId);
-    if (!provider) throw new Error(`provider not found after register: ${providerId}`);
-    // 保留鉴权与 raw/simple 两条流；注册为 native provider 后 runtime.refresh 仍保留适配。
-    runtime.registerNativeProvider(withOpenAIResponsesRouting(provider));
-  }
+  const provider = runtime.getProvider(providerId);
+  if (!provider) throw new Error(`provider not found after register: ${providerId}`);
+  // 保留鉴权与 raw/simple；预算在 caller / routing payload hook 后检查最终请求。
+  runtime.registerNativeProvider(
+    model.api === 'openai-responses'
+      ? withOpenAIResponsesRouting(withRequestBodyBudget(provider))
+      : withRequestBodyBudget(provider)
+  );
   const registered = runtime.getModel(providerId, model.modelId);
   if (!registered) throw new Error(`model not found after register: ${model.modelId}`);
   return registered;
