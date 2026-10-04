@@ -510,26 +510,29 @@ function DelegationField({
   );
 }
 
-type RoutinesApi = {
-  routines?: (
-    botId: string
-  ) => Promise<{ ok: true; routines: BotRoutine[] } | { ok: false; error: string }>;
-};
-
-/** 例行任务：Main 侧接口就绪前显示「即将推出」 */
 function RoutineList({ botId }: { botId: string }) {
   const { t, locale } = useI18n();
   const chats = useBotsStore((s) => s.chats);
   const bots = useBotsStore((s) => s.bots);
-  const api = (window.electronAPI.bots as RoutinesApi).routines;
+  const api = window.electronAPI.bots.routines;
   const [routines, setRoutines] = useState<BotRoutine[] | null>(null);
 
   useEffect(() => {
     if (!api) return;
     let alive = true;
-    void api(botId).then((result) => alive && setRoutines(result.ok ? result.routines : []));
+    const refresh = () => {
+      void api
+        .list({ botId })
+        .then((result) => alive && setRoutines(result.ok ? result.routines : []))
+        .catch(() => alive && setRoutines([]));
+    };
+    refresh();
+    const unsubscribe = window.electronAPI.bots.onEvent((event) => {
+      if (event.kind === 'routine') refresh();
+    });
     return () => {
       alive = false;
+      unsubscribe();
     };
   }, [api, botId]);
 

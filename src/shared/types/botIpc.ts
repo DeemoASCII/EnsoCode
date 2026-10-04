@@ -1,5 +1,20 @@
 import type { AttachedImage, ConversationAuthority } from './agent';
-import type { BotChat, BotProfile, GroupEntry } from './bot';
+import type { BotChat, BotProfile, BotRoutine, Delegation, GroupEntry } from './bot';
+
+export type BotDelegationsResult =
+  | { ok: true; delegations: Delegation[]; enabled: boolean }
+  | BotIpcError;
+export type BotDelegationRetryResult =
+  | { ok: true; delegationId: string; warning?: string }
+  | BotIpcError;
+export type BotRoutinesResult =
+  | { ok: true; routines: BotRoutine[]; enabled: boolean }
+  | BotIpcError;
+export type BotRoutineSaveInput = Pick<
+  BotRoutine,
+  'botId' | 'title' | 'prompt' | 'schedule' | 'chatId'
+> & { id?: string; enabled?: boolean };
+export type BotRoutineSaveResult = { ok: true; routine: BotRoutine } | BotIpcError;
 
 /** renderer 可写的成员字段；engine:null = 跟随全局默认模型 */
 export type BotDraftInput = Partial<

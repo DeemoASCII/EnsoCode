@@ -76,6 +76,8 @@ export interface BotSessionHostDeps {
 export interface BotDeliverOptions {
   images?: AttachedImage[];
   deliveryId?: string;
+  queueIfBusy?: boolean;
+  onlyIfIdle?: boolean;
 }
 
 export type BotDeliverResult =
@@ -83,6 +85,7 @@ export type BotDeliverResult =
   | Fail;
 
 export interface BotTurnFinished {
+  deliveryId?: string;
   /** 委派会话为 null */
   chatId: string | null;
   botId: string;
@@ -123,6 +126,9 @@ export class BotSessionHost {
   private readonly locks = new Map<string, Promise<unknown>>();
   private readonly listeners = new Set<(event: BotTurnFinished) => void>();
   private readonly maxRunning: number;
+  private readonly independentSpecs = new Map<string, BotSpawnSpec>();
+  private readonly liveProfiles = new Map<string, BotProfile>();
+  private readonly activeDeliveries = new Map<string, string>();
 
   constructor(private readonly deps: BotSessionHostDeps) {
     this.maxRunning = deps.maxRunningTurns ?? BOT_MAX_RUNNING_TURNS;
@@ -139,6 +145,63 @@ export class BotSessionHost {
 
   runningCount(): number {
     return new Set([...this.slots.keys(), ...this.running]).size;
+  }
+
+  isBusy(conversationId: string): boolean {
+    return (
+      this.turnActive(conversationId) ||
+      this.queue.some((item) => item.conversationId === conversationId)
+    );
+  }
+
+  activeDeliveryId(conversationId: string): string | undefined {
+    return this.turnActive(conversationId) ? this.activeDeliveries.get(conversationId) : undefined;
+  }
+
+  registerDelegation(conversationId: string, bot: BotProfile): boolean {
+    const conversation = this.deps.authority.conversation(conversationId);
+    const project = conversation && this.deps.authority.project(conversation.projectId);
+    if (
+      !conversation?.bot?.delegationId ||
+      !project ||
+      project.state !== 'active' ||
+      project.kind === 'ssh'
+    )
+      return false;
+    this.independentSpecs.set(conversationId, {
+      conversationId,
+      projectId: project.projectId,
+      cwd: project.canonicalPath,
+      bot,
+      ...(conversation.sessionFile ? { resumeFile: conversation.sessionFile } : {}),
+      systemPrompt: buildBotSystemPrompt(bot, this.deps.bots.readPersona(bot.id)),
+      instructionText: buildBotModeInstruction({
+        self: bot,
+        kind: 'direct',
+        roster: this.deps.bots.list(),
+      }),
+    });
+    return true;
+  }
+
+  effectiveBot(conversationId: string): BotProfile | undefined {
+    return (
+      (this.live.has(conversationId) ? this.liveProfiles.get(conversationId) : undefined) ??
+      this.independentSpecs.get(conversationId)?.bot ??
+      this.deps.bots.get(this.binding(conversationId)?.botId ?? '')
+    );
+  }
+
+  async abortConversation(conversationId: string): Promise<void> {
+    this.queue = this.queue.filter((item) => item.conversationId !== conversationId);
+    await this.withLock(conversationId, async () => {
+      this.deps.runtime.abort?.(conversationId);
+      await this.deps.runtime.release(conversationId);
+      this.live.delete(conversationId);
+      this.running.delete(conversationId);
+      this.slots.delete(conversationId);
+    });
+    this.pump();
   }
 
   queueState(): BotQueueItem[] {
@@ -242,10 +305,28 @@ export class BotSessionHost {
     const session = this.ensureSession(chatId, botId);
     if (!session.ok) return session;
     const { conversationId } = session;
+    return this.deliverConversation(conversationId, text, options);
+  }
+
+  async deliverConversation(
+    conversationId: string,
+    text: string,
+    options: BotDeliverOptions = {}
+  ): Promise<BotDeliverResult> {
+    const binding = this.binding(conversationId);
+    if (!binding) return { ok: false, error: 'not-bot-session' };
+    const { botId } = binding;
+    const chatId = binding.chatId ?? '';
     const delivery: Delivery = { ...options, chatId, botId, conversationId, text };
     return this.withLock(conversationId, async (): Promise<BotDeliverResult> => {
-      if (this.turnActive(conversationId)) return this.steer(delivery);
       if (
+        options.onlyIfIdle &&
+        (this.isBusy(conversationId) || this.runningCount() >= this.maxRunning)
+      )
+        return { ok: false, error: 'session-busy' };
+      if (this.turnActive(conversationId) && !options.queueIfBusy) return this.steer(delivery);
+      if (
+        this.turnActive(conversationId) ||
         this.queue.some((item) => item.conversationId === conversationId) ||
         this.runningCount() >= this.maxRunning
       ) {
@@ -416,8 +497,25 @@ export class BotSessionHost {
 
   private async start(delivery: Delivery): Promise<BotDeliverResult> {
     const { conversationId } = delivery;
+    const conversation = this.deps.authority.conversation(conversationId);
+    const bot = this.deps.bots.get(delivery.botId);
+    const chat = conversation?.bot?.chatId
+      ? this.deps.chats.get(conversation.bot.chatId)
+      : undefined;
+    if (
+      !conversation ||
+      conversation.lifecycle === 'ended' ||
+      !bot ||
+      bot.archivedAt !== undefined ||
+      this.deps.authority.project(conversation.projectId)?.state !== 'active' ||
+      (conversation.bot?.chatId &&
+        (!chat || chat.archivedAt !== undefined || !chat.members.includes(bot.id)))
+    )
+      return { ok: false, error: 'session-unavailable' };
     this.slots.set(conversationId, { sawRunning: false });
     this.lastAssistant.delete(conversationId);
+    if (delivery.deliveryId) this.activeDeliveries.set(conversationId, delivery.deliveryId);
+    else this.activeDeliveries.delete(conversationId);
     const fail = (error: string): Fail => {
       this.slots.delete(conversationId);
       return { ok: false, error };
@@ -427,6 +525,7 @@ export class BotSessionHost {
       if (!spec.ok) return fail(spec.error);
       const spawned = await this.deps.runtime.spawn(spec.spec);
       if (!spawned.ok) return fail(spawned.error ?? 'spawn-failed');
+      this.liveProfiles.set(conversationId, spec.spec.bot);
       this.live.add(conversationId);
     }
     const sent = this.deps.runtime.prompt(
@@ -440,6 +539,8 @@ export class BotSessionHost {
   }
 
   private spawnSpec(delivery: Delivery): { ok: true; spec: BotSpawnSpec } | Fail {
+    const independent = this.independentSpecs.get(delivery.conversationId);
+    if (independent) return { ok: true, spec: independent };
     const chat = this.deps.chats.get(delivery.chatId);
     const bot = this.deps.bots.get(delivery.botId);
     const conversation = this.deps.authority.conversation(delivery.conversationId);
@@ -476,10 +577,14 @@ export class BotSessionHost {
   private pump(): void {
     const touched = new Set<string>();
     while (this.queue.length > 0) {
-      const next = this.queue[0];
+      const index = this.queue.findIndex(
+        (item) => !item.queueIfBusy || !this.turnActive(item.conversationId)
+      );
+      if (index < 0) break;
+      const next = this.queue[index];
       const active = this.turnActive(next.conversationId);
       if (!active && this.runningCount() >= this.maxRunning) break;
-      this.queue.shift();
+      this.queue.splice(index, 1);
       touched.add(next.chatId);
       if (active) {
         // 走同一把锁：同会话前一条可能还在 spawn
@@ -512,6 +617,9 @@ export class BotSessionHost {
     const binding = this.binding(conversationId);
     if (!binding) return;
     const event: BotTurnFinished = {
+      ...(this.activeDeliveries.has(conversationId)
+        ? { deliveryId: this.activeDeliveries.get(conversationId) }
+        : {}),
       chatId: binding.chatId,
       botId: binding.botId,
       conversationId,

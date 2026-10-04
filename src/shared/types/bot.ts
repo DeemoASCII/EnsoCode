@@ -69,6 +69,73 @@ export interface BotChat {
 export const DELEGATION_STATES = ['queued', 'running', 'completed', 'failed', 'canceled'] as const;
 export type DelegationState = (typeof DELEGATION_STATES)[number];
 
+export interface Delegation {
+  id: string;
+  parentConversationId: string;
+  parentBotId: BotId;
+  targetBotId: BotId;
+  chatId: BotChatId | null;
+  task: string;
+  context: string;
+  childConversationId: string;
+  state: DelegationState;
+  failure?: 'interrupted' | 'timeout' | 'denied' | 'error';
+  error?: string;
+  result?: string;
+  deliveredAt?: number;
+  depth: number;
+  createdAt: number;
+  finishedAt?: number;
+}
+
+export function parseDelegation(value: unknown): Delegation | undefined {
+  if (
+    !isObject(value) ||
+    !isBotId(value.id) ||
+    !isBotId(value.parentBotId) ||
+    !isBotId(value.targetBotId) ||
+    !isText(value.parentConversationId) ||
+    !isText(value.childConversationId) ||
+    (value.chatId !== null && !isBotChatId(value.chatId)) ||
+    !isText(value.task) ||
+    typeof value.context !== 'string' ||
+    value.context.length > 8000 ||
+    !DELEGATION_STATES.includes(value.state as DelegationState) ||
+    !Number.isInteger(value.depth) ||
+    Number(value.depth) < 1 ||
+    Number(value.depth) > 2 ||
+    !isTime(value.createdAt) ||
+    (value.deliveredAt !== undefined && !isTime(value.deliveredAt)) ||
+    (value.finishedAt !== undefined && !isTime(value.finishedAt))
+  )
+    return undefined;
+  const record: Delegation = {
+    id: value.id,
+    parentConversationId: value.parentConversationId,
+    parentBotId: value.parentBotId,
+    targetBotId: value.targetBotId,
+    chatId: value.chatId,
+    task: value.task,
+    context: value.context,
+    childConversationId: value.childConversationId,
+    state: value.state as DelegationState,
+    depth: Number(value.depth),
+    createdAt: value.createdAt,
+  };
+  if (
+    value.failure === 'interrupted' ||
+    value.failure === 'timeout' ||
+    value.failure === 'denied' ||
+    value.failure === 'error'
+  )
+    record.failure = value.failure;
+  if (typeof value.error === 'string') record.error = value.error;
+  if (typeof value.result === 'string') record.result = value.result;
+  if (isTime(value.deliveredAt)) record.deliveredAt = value.deliveredAt;
+  if (isTime(value.finishedAt)) record.finishedAt = value.finishedAt;
+  return record;
+}
+
 interface GroupEntryBase {
   seq: number;
   id: string;

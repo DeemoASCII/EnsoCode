@@ -95,6 +95,21 @@ function ev(event: Record<string, unknown>, sessionId: string): AgentWorkerEvent
 }
 
 describe('BotSessionHost.ensureSession', () => {
+  it('queues autonomous deliveries behind an active turn rather than steering', async () => {
+    const alice = bot('Alice');
+    const chat = direct(alice.id);
+    const first = await host.deliver(chat.id, alice.id, 'first');
+    if (!first.ok) throw new Error(first.error);
+    await host.deliver(chat.id, alice.id, 'routine', {
+      queueIfBusy: true,
+      deliveryId: 'routine-1',
+    });
+    expect(runtime.steers).toHaveLength(0);
+    expect(runtime.prompts).toHaveLength(1);
+    host.observe(ev({ type: 'turn-completed', turnId: 't1' }, first.conversationId));
+    await flush();
+    expect(runtime.prompts.map((item) => item.text)).toEqual(['first', 'routine']);
+  });
   it('成员 home：登记隐藏项目、写入 Main 绑定并记录 cursor；幂等；fresh 开新会话并结束旧会话', () => {
     const alice = bot('Alice');
     const chat = direct(alice.id);

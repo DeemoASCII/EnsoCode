@@ -10,6 +10,7 @@ import {
   ENSO_LOCKED_PROFILE,
   isReservedAgentTypeName,
   type SessionIdentity,
+  visibleMemberAgentTypes,
 } from '@shared/builtinAgents';
 import type { CapabilityExecutionEnvelope } from '@shared/capabilities/types';
 import {
@@ -92,6 +93,7 @@ import { ENSO_SYSTEM_PROMPT } from '../../agent/ensoPrompt';
 import agentWorkerPath from '../../agent/index?modulePath';
 import { readSettings } from '../ipc/settings';
 import { agentCommandDispatch } from './agentCommandDispatch';
+import { type MemberAgentType, memberSpawnDescription } from './bots/botAgentType';
 import type { ResolvedPlugins } from './claudePlugins';
 import { isComputerPlatformSupported } from './computer/support';
 import { resolveGlobalInstruction } from './instructionStore';
@@ -360,6 +362,13 @@ export function sendAgentCommand(command: AgentCommand): { ok: boolean; error?: 
   return { ok: true };
 }
 
+let memberAgentTypes: () => readonly MemberAgentType[] = () => [];
+
+/** Bot 模块注入在册成员（关闭 Bot 模式时返回空）；每次构造注册表/下发 worker 时现取 */
+export function setMemberAgentTypeSource(source: () => readonly MemberAgentType[]): void {
+  memberAgentTypes = source;
+}
+
 export function agentTypeRegistrySnapshot(): AgentTypeRegistrySnapshot {
   const state = readSettingsState();
   const disabledBuiltinAgentTypes = Array.isArray(state?.disabledBuiltinAgentTypes)
@@ -373,6 +382,7 @@ export function agentTypeRegistrySnapshot(): AgentTypeRegistrySnapshot {
     revision: settingsRevision(state),
     disabledBuiltinAgentTypes,
     customAgentTypes,
+    members: memberAgentTypes(),
   });
 }
 
@@ -586,6 +596,8 @@ export function resolveAgentTypeSpawnConfig(
   if (typeKey.startsWith('builtin:')) {
     const name = typeKey.slice('builtin:'.length);
     definition = BUILTIN_AGENT_TYPES.find((entry) => entry.name === name);
+  } else if (typeKey.startsWith('bot:')) {
+    definition = memberAgentTypes().find((entry) => entry.typeKey === typeKey);
   } else {
     const id = typeKey.slice('custom:'.length);
     definition = withPluginAgentTypes(
@@ -801,6 +813,7 @@ export function spawnSession(
     ...(remote ? { remote } : {}),
     ...(options?.rolePrompt ? { rolePrompt: options.rolePrompt } : {}),
     ...(systemPrompt.content ? { systemPrompt: systemPrompt.content } : {}),
+    ...(options?.bot ? { botMode: true } : {}),
   });
   if (sent.ok) {
     rememberParentToolProfile(identity.sessionId, {
@@ -941,6 +954,14 @@ export function sendMemoryResultToSession(
   outcome: { ok: true; result: unknown } | { ok: false; error: string }
 ): { ok: boolean; error?: string } {
   return sendAgentCommand({ type: 'memory-result', identity, requestId, ...outcome });
+}
+
+export function sendDelegationResultToSession(
+  identity: SessionIdentity,
+  requestId: string,
+  outcome: { ok: true; result: unknown } | { ok: false; error: string }
+): { ok: boolean; error?: string } {
+  return sendAgentCommand({ type: 'delegation-result', identity, requestId, ...outcome });
 }
 
 export function sendComputerResultToSession(
@@ -1290,7 +1311,7 @@ export function requestSnapshot(sessionId?: string): { ok: boolean; error?: stri
   return sendAgentCommand(sessionId ? { type: 'snapshot', sessionId } : { type: 'snapshot' });
 }
 
-function configuredAgentTypes(
+export function configuredAgentTypes(
   authenticatedAccountKeys: ReadonlySet<string>,
   hasSubagentModels = false,
   plugins?: ResolvedPlugins
@@ -1356,7 +1377,32 @@ function configuredAgentTypes(
         : {}),
     };
   });
-  return [...builtins, ...customs];
+  const members = visibleMemberAgentTypes(memberAgentTypes(), custom).map(
+    (entry): AgentTypeSpawnConfig => {
+      const resources = resolveAgentTypeResources(entry);
+      const bound =
+        entry.providerId && entry.modelId
+          ? resolveModelSelection(entry.providerId, entry.modelId, authenticatedAccountKeys)
+          : null;
+      return {
+        name: entry.typeKey,
+        description: memberSpawnDescription(entry),
+        systemPrompt: entry.systemPrompt,
+        tools: entry.tools,
+        allowModelOverride: false,
+        ...(resources.ok && resources.skillPaths.length > 0
+          ? { skillPaths: [...resources.skillPaths] }
+          : {}),
+        ...(resources.ok && resources.mcpServers.length > 0
+          ? { mcpServers: [...resources.mcpServers] }
+          : {}),
+        ...(bound?.ok ? { model: bound.selection.config } : {}),
+        ...(entry.reasoning ? { reasoning: entry.reasoning } : {}),
+        ...(entry.thinkingLevel ? { thinkingLevel: entry.thinkingLevel } : {}),
+      };
+    }
+  );
+  return [...builtins, ...customs, ...members];
 }
 
 /** 设置页「允许子代理指定模型」列表 → 解析凭证后随 spawn-parent 下发（开关关闭/不可用静默跳过） */

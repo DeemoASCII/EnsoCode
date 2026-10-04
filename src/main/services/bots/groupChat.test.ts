@@ -81,6 +81,32 @@ it('routes mentions in order, then uses the boss without mentions', async () => 
   expect(emit).toHaveBeenCalledWith({ kind: 'timeline', chatId: id, seq: 1 });
 });
 
+it('queues routine replies behind the group round and selects the requested member', async () => {
+  await group.send(id, 'hello');
+  const routine = group.runAs(id, b, '<routine title="check">check it</routine>', 'check', {
+    deliveryId: 'r1',
+  });
+  await group.settled(id);
+  expect(deliver).toHaveBeenCalledTimes(1);
+  await done(a, 'done');
+  expect(await routine).toMatchObject({ ok: true });
+  expect(deliver.mock.calls[1]).toEqual([
+    id,
+    b,
+    '<routine title="check">check it</routine>',
+    { deliveryId: 'r1', queueIfBusy: true },
+  ]);
+  expect(
+    entries().some((entry) => entry.kind === 'system' && entry.text === '例行任务：check')
+  ).toBe(true);
+  await done(b, 'routine reply');
+  expect(
+    entries().some(
+      (entry) => entry.kind === 'bot' && entry.botId === b && entry.text === 'routine reply'
+    )
+  ).toBe(true);
+});
+
 it('limits relay and does not publish skip replies', async () => {
   chats.update(id, (c) => ({ ...c, routing: { maxHops: 1, maxTurnsPerBot: 2 } }));
   await group.send(id, 'go');

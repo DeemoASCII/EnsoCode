@@ -733,6 +733,13 @@ export const IPC_PRODUCT_COVERAGE = {
   BOT_OPEN_WORKSPACE: excluded('Experimental Bot mode desktop UI; not an Enso capability.'),
   BOT_SESSION_HISTORY: excluded('Experimental Bot mode desktop UI; not an Enso capability.'),
   BOT_EVENT: excluded('Bot mode change notification transport.'),
+  BOT_DELEGATIONS_LIST: excluded('Bot mode delegation projection UI.'),
+  BOT_DELEGATION_CANCEL: excluded('Bot mode delegation UI action.'),
+  BOT_DELEGATION_RETRY: excluded('Bot mode delegation UI action.'),
+  BOT_ROUTINES_LIST: excluded('Bot mode routine UI.'),
+  BOT_ROUTINE_SAVE: excluded('Bot mode routine UI.'),
+  BOT_ROUTINE_DELETE: excluded('Bot mode routine UI.'),
+  BOT_ROUTINE_RUN_NOW: excluded('Bot mode routine UI.'),
   COMPUTER_CAPABILITIES: surfaces('coding-tools.computer'),
   COMPUTER_OPEN_PERMISSIONS: surfaces('coding-tools.computer'),
 } satisfies Record<keyof typeof IPC_CHANNELS, CoverageDisposition>;

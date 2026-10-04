@@ -132,10 +132,15 @@ import type {
   BotChatsListResult,
   BotChatUpdateInput,
   BotChatWriteResult,
+  BotDelegationRetryResult,
+  BotDelegationsResult,
   BotDraftInput,
   BotEvent,
   BotGetResult,
   BotNewSessionResult,
+  BotRoutineSaveInput,
+  BotRoutineSaveResult,
+  BotRoutinesResult,
   BotSendRequest,
   BotSendResult,
   BotsListResult,
@@ -1116,6 +1121,22 @@ const electronAPI = {
       ipcRenderer.invoke(IPC_CHANNELS.BTW_DISPOSE, request),
   },
   bots: {
+    delegations: (request: { chatId?: string } = {}): Promise<BotDelegationsResult> =>
+      ipcRenderer.invoke(IPC_CHANNELS.BOT_DELEGATIONS_LIST, request),
+    cancelDelegation: (id: string): Promise<BotActionResult> =>
+      ipcRenderer.invoke(IPC_CHANNELS.BOT_DELEGATION_CANCEL, { id }),
+    retryDelegation: (id: string): Promise<BotDelegationRetryResult> =>
+      ipcRenderer.invoke(IPC_CHANNELS.BOT_DELEGATION_RETRY, { id }),
+    routines: {
+      list: (request: { botId?: string } = {}): Promise<BotRoutinesResult> =>
+        ipcRenderer.invoke(IPC_CHANNELS.BOT_ROUTINES_LIST, request),
+      save: (request: BotRoutineSaveInput): Promise<BotRoutineSaveResult> =>
+        ipcRenderer.invoke(IPC_CHANNELS.BOT_ROUTINE_SAVE, request),
+      remove: (request: { botId: string; id: string }): Promise<BotActionResult> =>
+        ipcRenderer.invoke(IPC_CHANNELS.BOT_ROUTINE_DELETE, request),
+      runNow: (request: { botId: string; id: string }): Promise<BotActionResult> =>
+        ipcRenderer.invoke(IPC_CHANNELS.BOT_ROUTINE_RUN_NOW, request),
+    },
     list: (): Promise<BotsListResult> => ipcRenderer.invoke(IPC_CHANNELS.BOTS_LIST),
     get: (botId: string): Promise<BotGetResult> =>
       ipcRenderer.invoke(IPC_CHANNELS.BOT_GET, { botId }),

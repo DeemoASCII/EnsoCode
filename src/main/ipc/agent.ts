@@ -76,6 +76,7 @@ import {
   sendAgentCommand,
   sendBrowserResultToSession,
   sendComputerResultToSession,
+  sendDelegationResultToSession,
   sendMemoryResultToSession,
   setAgentEventListener,
   setPinnedSessions,
@@ -1086,6 +1087,53 @@ export function registerAgentHandlers(): void {
             error: error instanceof Error ? error.message : String(error),
           })
       );
+      return;
+    }
+    if (workerEvent.type === 'delegation-invoke') {
+      const { identity, requestId, op, params } = workerEvent;
+      try {
+        const conversation = sourceAuthority?.conversation(identity.sessionId);
+        const service =
+          botModeEnabled() && conversation?.bot && agentSessionIndex.isCurrent(identity)
+            ? getBotServices()?.delegations
+            : undefined;
+        if (!service || !params || typeof params !== 'object' || Array.isArray(params)) {
+          sendDelegationResultToSession(identity, requestId, {
+            ok: false,
+            error: 'Bot delegation unavailable or invalid arguments.',
+          });
+          return;
+        }
+        const input = params as Record<string, unknown>;
+        let result: unknown;
+        if (
+          op === 'delegate' &&
+          typeof input.to === 'string' &&
+          typeof input.task === 'string' &&
+          (input.context === undefined || typeof input.context === 'string')
+        ) {
+          result = service.delegate(identity.sessionId, {
+            to: input.to,
+            task: input.task,
+            ...(typeof input.context === 'string' ? { context: input.context } : {}),
+          });
+        } else if (
+          op === 'check_delegation' &&
+          (input.id === undefined || typeof input.id === 'string') &&
+          (input.cancel === undefined || typeof input.cancel === 'boolean')
+        ) {
+          result = service.check(identity.sessionId, {
+            ...(typeof input.id === 'string' ? { id: input.id } : {}),
+            ...(typeof input.cancel === 'boolean' ? { cancel: input.cancel } : {}),
+          });
+        } else result = { ok: false, error: 'Invalid delegation arguments.' };
+        sendDelegationResultToSession(identity, requestId, { ok: true, result });
+      } catch (error) {
+        sendDelegationResultToSession(identity, requestId, {
+          ok: false,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
       return;
     }
     if (workerEvent.type === 'computer-cancel') {

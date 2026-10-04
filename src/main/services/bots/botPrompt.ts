@@ -32,6 +32,7 @@ export function buildBotModeInstruction(input: {
     '- Reply like a chat message: concise and conversational. No headings or long reports unless asked.',
     '- Your final reply text of each turn is exactly the message that gets posted. Say it directly instead of describing what you would say.',
     '- You may still use tools to do real work in the workspace; tool activity stays in your own session and is not posted.',
+    '- Use delegate({to, task, context?}) to ask another member for work. It returns a delegationId immediately; the result arrives later in <delegation-result>. Use check_delegation({id?, cancel?}) to inspect or cancel. Do not poll repeatedly.',
   ];
   if (input.kind === 'group') {
     lines.push(

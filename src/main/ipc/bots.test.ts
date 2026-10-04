@@ -88,6 +88,54 @@ async function createBot(name: string): Promise<string> {
 }
 
 describe('bots IPC', () => {
+  it('validates routine ownership and cron; projects list/save/remove and disabled lists', async () => {
+    const alice = await createBot('Alice');
+    const bob = await createBot('Bob');
+    const created = await call(IPC_CHANNELS.BOT_CHAT_CREATE, {
+      kind: 'direct',
+      members: [alice],
+      workspace: { kind: 'member-home' },
+    });
+    const chatId = (created.chat as { id: string }).id;
+    const draft = {
+      botId: alice,
+      chatId,
+      title: 'Check',
+      prompt: 'check status',
+      schedule: '0 9 * * *',
+    };
+    expect(await call(IPC_CHANNELS.BOT_ROUTINE_SAVE, { ...draft, botId: bob })).toMatchObject({
+      ok: false,
+    });
+    expect(
+      await call(IPC_CHANNELS.BOT_ROUTINE_SAVE, { ...draft, schedule: 'invalid' })
+    ).toMatchObject({ ok: false });
+    const saved = await call(IPC_CHANNELS.BOT_ROUTINE_SAVE, draft);
+    expect(saved.ok).toBe(true);
+    expect(await call(IPC_CHANNELS.BOT_ROUTINES_LIST, { botId: alice })).toMatchObject({
+      routines: [saved.routine],
+    });
+    const id = (saved.routine as { id: string }).id;
+    expect(await call(IPC_CHANNELS.BOT_ROUTINE_DELETE, { botId: bob, id })).toMatchObject({
+      ok: false,
+    });
+    expect(await call(IPC_CHANNELS.BOT_ROUTINE_DELETE, { botId: alice, id })).toEqual({ ok: true });
+    mocks.settings.botModeEnabled = false;
+    expect(await call(IPC_CHANNELS.BOT_ROUTINES_LIST)).toEqual({
+      ok: true,
+      routines: [],
+      enabled: false,
+    });
+    expect(await call(IPC_CHANNELS.BOT_DELEGATIONS_LIST)).toEqual({
+      ok: true,
+      delegations: [],
+      enabled: false,
+    });
+    expect(await call(IPC_CHANNELS.BOT_DELEGATION_CANCEL, { id })).toMatchObject({
+      ok: false,
+      error: 'disabled',
+    });
+  });
   it('开关关闭：写返回 disabled，列表为空，不落任何 Bot 目录', async () => {
     mocks.settings.botModeEnabled = false;
     expect(await call(IPC_CHANNELS.BOT_CREATE, { name: 'Alice' })).toEqual({

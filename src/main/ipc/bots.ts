@@ -26,6 +26,7 @@ import {
   readSettingsState,
   releaseParentSession,
   resolveModelSelection,
+  respondApproval,
   spawnSession,
   steerSession,
 } from '../services/agentHost';
@@ -38,8 +39,13 @@ import {
 import { type BotRuntimePort, BotSessionHost } from '../services/bots/botSessionHost';
 import { BotStore } from '../services/bots/botStore';
 import { BotChatStore } from '../services/bots/chatStore';
+import { DelegationService } from '../services/bots/delegationService';
+import { DelegationStore } from '../services/bots/delegationStore';
 import { GroupChatService } from '../services/bots/groupChat';
 import { removeBotMemorySpace } from '../services/bots/memoryCleanup';
+import { RoutineRunner } from '../services/bots/routineRunner';
+import { RoutineScheduler } from '../services/bots/routineScheduler';
+import { BotRoutineStore } from '../services/bots/routineStore';
 import { resolveGlobalInstruction } from '../services/instructionStore';
 import { readStoredOauthCredentialKeys } from '../services/oauthProviders';
 import { removeConversationSessionFiles } from '../services/sessionFileCleanup';
@@ -69,6 +75,9 @@ interface BotServices {
   host: BotSessionHost;
   groups: GroupChatService;
   memory: BotMemoryService;
+  delegations: DelegationService;
+  routines: BotRoutineStore;
+  scheduler: RoutineScheduler;
 }
 
 type GroupSender = (
@@ -94,11 +103,27 @@ export function botModeEnabled(): boolean {
 }
 
 export function emitBotEvent(event: BotEvent): void {
+  if (event.kind === 'catalog' || event.kind === 'chat') services?.scheduler.refresh();
   try {
     sendToAllWindows(IPC_CHANNELS.BOT_EVENT, event);
   } catch {
     // renderer 已销毁
   }
+  for (const observer of botEventObservers) {
+    try {
+      observer(event);
+    } catch (error) {
+      console.warn('[bots] event observer failed', error);
+    }
+  }
+}
+
+const botEventObservers = new Set<(event: BotEvent) => void>();
+
+/** 窗口之外的 Bot 事件订阅方（手机转发） */
+export function observeBotEvents(observer: (event: BotEvent) => void): () => void {
+  botEventObservers.add(observer);
+  return () => botEventObservers.delete(observer);
 }
 
 const sessionDir = () => path.join(app.getPath('userData'), 'agent', 'sessions');
@@ -207,8 +232,58 @@ export function getBotServices(): BotServices | null {
     runtime: createRuntime(botsRoot),
     emit: emitBotEvent,
   });
-  setBotWorkerEventObserver((event) => host.observe(event));
   const groups = new GroupChatService({ bots, chats, host, emit: emitBotEvent });
+  const delegations = new DelegationService({
+    bots,
+    chats,
+    host,
+    authority,
+    store: new DelegationStore(path.join(userData, 'bot-chats', 'delegations.jsonl')),
+    emit: emitBotEvent,
+    deliverGroupResult: async (record, text, deliveryId) => {
+      if (
+        !record.chatId ||
+        chats.get(record.chatId)?.sessions[record.parentBotId]?.conversationId !==
+          record.parentConversationId
+      )
+        return { ok: false, error: 'parent-session-changed' };
+      return groups.runAs(record.chatId, record.parentBotId, text, undefined, {
+        onlyIfIdle: true,
+        deliveryId,
+      });
+    },
+  });
+  const routines = new BotRoutineStore(botsRoot);
+  const runner = new RoutineRunner({
+    host,
+    chats,
+    groups,
+    deny: (identity, requestId) => {
+      if (agentSessionIndex.isCurrent(identity)) respondApproval(identity, requestId, 'deny');
+    },
+  });
+  const scheduler = new RoutineScheduler({
+    store: routines,
+    eligible: (routine) => {
+      const bot = bots.get(routine.botId),
+        chat = chats.get(routine.chatId);
+      return Boolean(
+        bot &&
+          bot.archivedAt === undefined &&
+          chat &&
+          chat.archivedAt === undefined &&
+          chat.members.includes(routine.botId)
+      );
+    },
+    run: (routine) => runner.run(routine),
+    emit: emitBotEvent,
+  });
+  setBotWorkerEventObserver((event) => {
+    runner.observe(event);
+    host.observe(event);
+    if (event.type === 'status' && event.status === 'running')
+      delegations.observeRunning(event.identity.sessionId);
+  });
   const memory = new BotMemoryService({
     bots,
     chats,
@@ -220,14 +295,22 @@ export function getBotServices(): BotServices | null {
       (await import('../services/memoryHost')).scheduleMemoryDistill(payload),
   });
   setBotGroupSender((chat, text, options) => groups.send(chat.id, text, options));
-  services = { bots, chats, host, groups, memory };
+  services = { bots, chats, host, groups, memory, delegations, routines, scheduler };
+  if (botModeEnabled()) scheduler.start();
   return services;
+}
+
+export function syncBotModeServices(): void {
+  if (botModeEnabled()) getBotServices()?.scheduler.start();
+  else services?.scheduler.stop();
 }
 
 function reservedNames(): string[] {
   return [
     ...BUILTIN_AGENT_TYPES.map((type) => type.name),
-    ...agentTypeRegistrySnapshot().candidates.map((candidate) => candidate.displayName),
+    ...agentTypeRegistrySnapshot()
+      .candidates.filter((candidate) => candidate.source !== 'bot')
+      .map((candidate) => candidate.displayName),
   ];
 }
 
@@ -292,7 +375,150 @@ const chatIdOf = (request: unknown): string | null => {
   return isBotId(chatId) ? chatId : null;
 };
 
+/** 桌面 BOT_SEND 与手机 bot-send 共用 */
+export async function sendBotMessage(
+  { chats, host }: BotServices,
+  request: unknown
+): Promise<BotSendResult> {
+  const input = parseSendInput(request);
+  const chat = input ? chats.get(input.chatId) : undefined;
+  if (!input || !chat) return INVALID;
+  if (chat.archivedAt !== undefined) return { ok: false, error: 'chat-archived' };
+  const options = {
+    deliveryId: input.deliveryId,
+    ...(input.images ? { images: input.images } : {}),
+  };
+  if (chat.kind === 'group') {
+    return groupSender
+      ? groupSender(chat, input.text, options)
+      : { ok: false, error: 'group-not-ready' };
+  }
+  return host.deliver(chat.id, chat.members[0], input.text, options);
+}
+
+/** 桌面 BOT_CHAT_TIMELINE 与手机 bot-timeline 共用 */
+export function readBotTimeline({ chats }: BotServices, request: unknown): BotTimelineResult {
+  const input = parseTimelineInput(request);
+  if (!input || !chats.get(input.chatId)) return INVALID;
+  return {
+    ok: true,
+    entries: chats.readEntries(input.chatId, input),
+    lastSeq: chats.lastSeq(input.chatId),
+  };
+}
+
+const objectInput = (value: unknown): Record<string, unknown> | undefined =>
+  value && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+
 export function registerBotHandlers(): void {
+  syncBotModeServices();
+  handle(
+    IPC_CHANNELS.BOT_DELEGATIONS_LIST,
+    'read',
+    (_sender, request, { delegations }) => {
+      const input = objectInput(request ?? {});
+      if (!input || (input.chatId !== undefined && !isBotId(input.chatId))) return INVALID;
+      return {
+        ok: true,
+        delegations: delegations.list(typeof input.chatId === 'string' ? input.chatId : undefined),
+        enabled: true,
+      };
+    },
+    { ok: true, delegations: [], enabled: false }
+  );
+  handle(IPC_CHANNELS.BOT_DELEGATION_CANCEL, 'write', (_sender, request, { delegations }) => {
+    const input = objectInput(request);
+    return input && isBotId(input.id) ? delegations.cancel(input.id) : INVALID;
+  });
+  handle(IPC_CHANNELS.BOT_DELEGATION_RETRY, 'write', (_sender, request, { delegations }) => {
+    const input = objectInput(request);
+    return input && isBotId(input.id) ? delegations.retry(input.id) : INVALID;
+  });
+  handle(
+    IPC_CHANNELS.BOT_ROUTINES_LIST,
+    'read',
+    (_sender, request, { routines }) => {
+      const input = objectInput(request ?? {});
+      if (!input || (input.botId !== undefined && !isBotId(input.botId))) return INVALID;
+      return {
+        ok: true,
+        routines: typeof input.botId === 'string' ? routines.list(input.botId) : routines.listAll(),
+        enabled: true,
+      };
+    },
+    { ok: true, routines: [], enabled: false }
+  );
+  handle(
+    IPC_CHANNELS.BOT_ROUTINE_SAVE,
+    'write',
+    (_sender, request, { routines, chats, bots, scheduler }) => {
+      const input = objectInput(request);
+      if (
+        !input ||
+        !isBotId(input.botId) ||
+        !isBotId(input.chatId) ||
+        typeof input.title !== 'string' ||
+        typeof input.prompt !== 'string' ||
+        typeof input.schedule !== 'string' ||
+        (input.id !== undefined && !isBotId(input.id)) ||
+        (input.enabled !== undefined && typeof input.enabled !== 'boolean')
+      )
+        return INVALID;
+      if (!bots.get(input.botId) || !chats.get(input.chatId)?.members.includes(input.botId))
+        return INVALID;
+      const result = routines.save(input.botId, {
+        title: input.title,
+        prompt: input.prompt,
+        schedule: input.schedule,
+        chatId: input.chatId,
+        ...(typeof input.id === 'string' ? { id: input.id } : {}),
+        ...(typeof input.enabled === 'boolean' ? { enabled: input.enabled } : {}),
+      });
+      if (!result.ok) return { ok: false, error: result.reason };
+      scheduler.refresh();
+      emitBotEvent({ kind: 'routine' });
+      return result;
+    }
+  );
+  handle(IPC_CHANNELS.BOT_ROUTINE_DELETE, 'write', (_sender, request, { routines, scheduler }) => {
+    const input = objectInput(request);
+    if (
+      !input ||
+      !isBotId(input.botId) ||
+      !isBotId(input.id) ||
+      !routines.remove(input.botId, input.id)
+    )
+      return INVALID;
+    scheduler.refresh();
+    emitBotEvent({ kind: 'routine' });
+    return { ok: true };
+  });
+  handle(
+    IPC_CHANNELS.BOT_ROUTINE_RUN_NOW,
+    'write',
+    (_sender, request, { routines, scheduler, bots, chats }) => {
+      const input = objectInput(request);
+      if (!input || !isBotId(input.botId) || !isBotId(input.id)) return INVALID;
+      const routine = routines.list(input.botId).find((item) => item.id === input.id);
+      if (!routine) return INVALID;
+      const bot = bots.get(routine.botId),
+        chat = chats.get(routine.chatId);
+      if (
+        !bot ||
+        bot.archivedAt !== undefined ||
+        !chat ||
+        chat.archivedAt !== undefined ||
+        !chat.members.includes(bot.id)
+      )
+        return UNAVAILABLE;
+      void scheduler
+        .runNow(input.botId, input.id)
+        .catch((error) => console.warn('[bots] routine failed', error));
+      return { ok: true };
+    }
+  );
   handle(
     IPC_CHANNELS.BOTS_LIST,
     'read',
@@ -518,33 +744,12 @@ export function registerBotHandlers(): void {
   handle(
     IPC_CHANNELS.BOT_CHAT_TIMELINE,
     'read',
-    (_sender, request, { chats }): BotTimelineResult => {
-      const input = parseTimelineInput(request);
-      if (!input || !chats.get(input.chatId)) return INVALID;
-      return {
-        ok: true,
-        entries: chats.readEntries(input.chatId, input),
-        lastSeq: chats.lastSeq(input.chatId),
-      };
-    }
+    (_sender, request, services): BotTimelineResult => readBotTimeline(services, request)
   );
 
-  handle(IPC_CHANNELS.BOT_SEND, 'write', async (_sender, request, { chats, host }) => {
-    const input = parseSendInput(request);
-    const chat = input ? chats.get(input.chatId) : undefined;
-    if (!input || !chat) return INVALID;
-    if (chat.archivedAt !== undefined) return { ok: false, error: 'chat-archived' };
-    const options = {
-      deliveryId: input.deliveryId,
-      ...(input.images ? { images: input.images } : {}),
-    };
-    if (chat.kind === 'group') {
-      return groupSender
-        ? groupSender(chat, input.text, options)
-        : { ok: false, error: 'group-not-ready' };
-    }
-    return host.deliver(chat.id, chat.members[0], input.text, options);
-  });
+  handle(IPC_CHANNELS.BOT_SEND, 'write', (_sender, request, services) =>
+    sendBotMessage(services, request)
+  );
 
   handle(IPC_CHANNELS.BOT_OPEN_WORKSPACE, 'write', async (_sender, request, services) => {
     const input = parseOpenWorkspaceInput(request);

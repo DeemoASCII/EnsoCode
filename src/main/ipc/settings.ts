@@ -363,6 +363,11 @@ function scheduleWrite(
     notifyMemoryEmbeddingSettings(data);
     notifyTrayToggleShortcut(data);
     notifySpeechSettings(data);
+    if (settingsStateOf(previous).botModeEnabled !== settingsStateOf(data).botModeEnabled) {
+      void import('./bots')
+        .then(({ syncBotModeServices }) => syncBotModeServices())
+        .catch(() => {});
+    }
 
     // 普通 store 写排除 sender；Gateway 写显式选择 all-renderers。
     for (const win of BrowserWindow.getAllWindows()) {

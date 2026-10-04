@@ -35,6 +35,13 @@ interface Round {
   generation: number;
   stopping?: string;
 }
+interface AutonomousReply {
+  botId: string;
+  text: string;
+  title: string | undefined;
+  options: BotDeliverOptions;
+  resolve: (result: BotSendResult) => void;
+}
 interface GroupChatDeps {
   bots: BotStore;
   chats: BotChatStore;
@@ -54,6 +61,7 @@ const empty = (): RouterState => ({
 export class GroupChatService {
   private rounds = new Map<string, Round>();
   private locks = new Map<string, Promise<unknown>>();
+  private autonomous = new Map<string, AutonomousReply[]>();
 
   constructor(private readonly deps: GroupChatDeps) {
     for (const chat of deps.chats.list()) {
@@ -134,6 +142,32 @@ export class GroupChatService {
     });
   }
 
+  runAs(
+    chatId: string,
+    botId: string,
+    text: string,
+    title: string | undefined,
+    options: BotDeliverOptions = {}
+  ): Promise<BotSendResult> {
+    return new Promise((resolve) => {
+      void this.lock(chatId, async () => {
+        const chat = this.deps.chats.get(chatId);
+        if (
+          chat?.kind !== 'group' ||
+          chat.archivedAt !== undefined ||
+          !chat.members.includes(botId)
+        ) {
+          resolve({ ok: false, error: 'group-unavailable' });
+          return;
+        }
+        const jobs = this.autonomous.get(chatId) ?? [];
+        jobs.push({ botId, text, title, options, resolve });
+        this.autonomous.set(chatId, jobs);
+        if (!this.round(chatId).state.current) await this.dispatch(chatId);
+      }).catch((error) => resolve({ ok: false, error: String(error) }));
+    });
+  }
+
   stop(chatId: string): Promise<BotActionResult> {
     return this.lock(chatId, async () => {
       if (this.deps.chats.get(chatId)?.kind !== 'group')
@@ -143,6 +177,9 @@ export class GroupChatService {
       round.generation++;
       round.state = empty();
       round.pending = [];
+      for (const job of this.autonomous.get(chatId) ?? [])
+        job.resolve({ ok: false, error: 'chat-stopped' });
+      this.autonomous.delete(chatId);
       this.persist(chatId);
       if (current) {
         round.stopping = current;
@@ -205,6 +242,37 @@ export class GroupChatService {
 
   private async dispatch(chatId: string): Promise<void> {
     const round = this.round(chatId);
+    if (!round.state.current) {
+      const job = this.autonomous.get(chatId)?.shift();
+      if (job) {
+        const chat = this.deps.chats.get(chatId);
+        const bot = this.deps.bots.get(job.botId);
+        if (
+          !chat ||
+          chat.archivedAt !== undefined ||
+          !chat.members.includes(job.botId) ||
+          !bot ||
+          bot.archivedAt !== undefined
+        ) {
+          job.resolve({ ok: false, error: 'routine-target-unavailable' });
+          return this.dispatch(chatId);
+        }
+        if (job.title !== undefined) this.system(chatId, `例行任务：${job.title}`);
+        round.state = { ...empty(), current: job.botId, turnsByBot: { [job.botId]: 1 } };
+        round.options = { ...job.options, queueIfBusy: true };
+        round.generation++;
+        const sent = await this.deps.host
+          .deliver(chatId, job.botId, job.text, round.options)
+          .catch((error) => ({ ok: false as const, error: String(error) }));
+        job.resolve(sent);
+        if (sent.ok) {
+          this.persist(chatId);
+          return;
+        }
+        round.state = empty();
+        return this.dispatch(chatId);
+      }
+    }
     let unavailable = false;
     while (round.state.current) {
       const chat = this.deps.chats.get(chatId);
@@ -227,6 +295,7 @@ export class GroupChatService {
       this.advance(chat, '[skip]');
     }
     if (unavailable) this.system(chatId, '请先指定群主');
+    if (this.autonomous.get(chatId)?.length) await this.dispatch(chatId);
   }
 
   private async deliver(chat: BotChat, botId: string, options?: BotDeliverOptions) {

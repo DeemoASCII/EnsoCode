@@ -204,6 +204,7 @@ import { decorateSessionTools } from './toolDecorators';
 import { ToolOutputBudget } from './toolOutputBudget';
 import { BrowserInvoker, createBrowserTools, withNavigateApproval } from './tools/browser';
 import { ComputerInvoker, createComputerTool, withComputerApproval } from './tools/computer';
+import { createDelegationTools, type DelegationOp } from './tools/delegation';
 import { createEnsoAppTool, EnsoAppInvoker } from './tools/ensoApp';
 import { createEnsoCapabilitiesTool } from './tools/ensoCapabilities';
 import { createMemoryTools, MemoryInvoker } from './tools/memory';
@@ -274,6 +275,7 @@ interface ManagedSession {
   ensoApp?: EnsoAppInvoker;
   browser?: BrowserInvoker;
   memory?: MemoryInvoker;
+  delegation?: MemoryInvoker<DelegationOp>;
   agentControl?: AgentControlInvoker;
   /** 已因不支持 adaptive 降级过的模型（虚拟模型下每个成员各降一次） */
   adaptiveDowngraded: Set<string>;
@@ -847,6 +849,7 @@ export class SessionSupervisor {
     managed.ensoApp?.cancelAll('Session released');
     managed.browser?.cancelAll('Session released');
     managed.memory?.cancelAll('Session released');
+    managed.delegation?.cancelAll('Session released');
     managed.agentControl?.close('Session released');
     managed.computer?.cancelAll('Session released');
     try {
@@ -991,6 +994,7 @@ export class SessionSupervisor {
         ? command.child
         : command.type === 'browser-result' ||
             command.type === 'memory-result' ||
+            command.type === 'delegation-result' ||
             command.type === 'computer-result'
           ? command.identity
           : command.type === 'dismiss-child' ||
@@ -1095,7 +1099,8 @@ export class SessionSupervisor {
           command.planMode,
           command.trustedProjectCode,
           command.pluginCommands,
-          command.pluginHooks
+          command.pluginHooks,
+          command.botMode
         );
         return;
       case 'spawn-child':
@@ -1336,6 +1341,10 @@ export class SessionSupervisor {
         }
         return;
       }
+      case 'delegation-result': {
+        this.must(command.identity).delegation?.resolve(command);
+        return;
+      }
       case 'computer-result': {
         const managed = this.must(command.identity);
         if (!managed.computer?.resolve(command)) {
@@ -1522,6 +1531,7 @@ export class SessionSupervisor {
         managed.ensoApp?.cancelAll('Enso capability invocation aborted');
         managed.browser?.cancelAll('Browser action aborted');
         managed.memory?.cancelAll('Memory action aborted');
+        managed.delegation?.cancelAll('Delegation action aborted');
         managed.currentTurnId = undefined;
         managed.computer?.cancelAll('Computer action aborted');
         // 立即收口投影：不 await session.abort()（内部 waitForIdle 会一直等到工具/流
@@ -1574,7 +1584,8 @@ export class SessionSupervisor {
     planMode?: boolean,
     trustedProjectCode: readonly string[] = [],
     pluginCommands: readonly PluginCommandSpawn[] = [],
-    pluginHooks: readonly PluginHookSpawn[] = []
+    pluginHooks: readonly PluginHookSpawn[] = [],
+    botMode = false
   ): Promise<void> {
     const sessionId = identity.sessionId;
     const sessionEditMode = resolveEditMode(requestedEditMode, hashlineEditEnabled);
@@ -2158,6 +2169,20 @@ export class SessionSupervisor {
           });
         })
       : undefined;
+    const delegation = botMode
+      ? new MemoryInvoker<DelegationOp>(identity, (request) => {
+          const managed = managedRef ?? this.sessions.get(sessionId);
+          if (!managed) throw new Error('Session is not ready for delegations.');
+          this.options.emit({
+            type: 'delegation-invoke',
+            identity: managed.identity,
+            seq: ++managed.seq,
+            requestId: request.requestId,
+            op: request.op,
+            params: request.params,
+          });
+        })
+      : undefined;
     const workflowRoots = workflowPresetRoots(remote ? undefined : cwd, {
       customDir: this.options.workflowDir,
     });
@@ -2198,6 +2223,7 @@ export class SessionSupervisor {
         ? createBrowserTools(browser).map((tool) => withNavigateApproval(gate, tool))
         : []),
       ...(memory ? createMemoryTools(memory, { language: memoryLanguage }) : []),
+      ...(delegation ? createDelegationTools(delegation) : []),
       ...(toolEnabled('web') ? createWebTools() : []),
       ...(toolEnabled('todo') ? [createTodoTool((todos) => todoReminder.update(todos))] : []),
       ...(computer ? [withComputerApproval(gate, createComputerTool(computer))] : []),
@@ -2319,6 +2345,7 @@ export class SessionSupervisor {
       else this.emitPlanState(managed);
     }
     managedRef.computer = computer;
+    managedRef.delegation = delegation;
     this.options.emit({
       type: 'parent-ready',
       identity,
@@ -3819,6 +3846,7 @@ export class SessionSupervisor {
       managed.ensoApp?.cancelAll('Enso worker shutdown');
       managed.browser?.cancelAll('Enso worker shutdown');
       managed.memory?.cancelAll('Enso worker shutdown');
+      managed.delegation?.cancelAll('Enso worker shutdown');
       managed.agentControl?.close('Enso worker shutdown');
       managed.currentTurnId = undefined;
       managed.computer?.cancelAll('Enso worker shutdown');

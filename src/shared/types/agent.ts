@@ -1015,6 +1015,7 @@ export type AgentCommand =
       rolePrompt?: string;
       /** 仅普通 parent：替换 pi 默认提示词开头的角色段落，其余运行时内容保留 */
       systemPrompt?: string;
+      botMode?: boolean;
       /** 期望的 Plan 模式；与会话 jsonl 折叠结果不同时由 worker 追加切换条目 */
       planMode?: boolean;
     }
@@ -1114,7 +1115,7 @@ export type AgentCommand =
       error?: string;
     }
   | {
-      type: 'memory-result';
+      type: 'memory-result' | 'delegation-result';
       identity: SessionIdentity | ChildSessionIdentity;
       requestId: string;
       ok: boolean;
@@ -1603,6 +1604,14 @@ export type AgentWorkerEvent =
       seq: number;
       requestId: string;
       op: MemoryOp;
+      params: unknown;
+    }
+  | {
+      type: 'delegation-invoke';
+      identity: SessionIdentity;
+      seq: number;
+      requestId: string;
+      op: 'delegate' | 'check_delegation';
       params: unknown;
     }
   | {
@@ -2744,6 +2753,7 @@ export function parseAgentCommand(value: unknown): AgentCommand | null {
           'remote',
           'rolePrompt',
           'systemPrompt',
+          'botMode',
           'planMode',
         ]) ||
         !parseSessionIdentity(value.identity) ||
@@ -2788,7 +2798,8 @@ export function parseAgentCommand(value: unknown): AgentCommand | null {
         (value.approvalReviewer !== undefined &&
           parseSpawnModelConfig(value.approvalReviewer) === null) ||
         (value.rolePrompt !== undefined && !isNonEmptyString(value.rolePrompt)) ||
-        (value.systemPrompt !== undefined && !isNonEmptyString(value.systemPrompt))
+        (value.systemPrompt !== undefined && !isNonEmptyString(value.systemPrompt)) ||
+        (value.botMode !== undefined && typeof value.botMode !== 'boolean')
       ) {
         return null;
       }
@@ -2998,6 +3009,7 @@ export function parseAgentCommand(value: unknown): AgentCommand | null {
         : null;
     case 'browser-result':
     case 'memory-result':
+    case 'delegation-result':
     case 'computer-result': {
       if (
         !hasOnlyKeys(value, ['type', 'identity', 'requestId', 'ok', 'result', 'error']) ||
@@ -3313,6 +3325,13 @@ export function parseAgentWorkerEvent(value: unknown): AgentWorkerEvent | null {
       return hasExactKeys(value, ['type', 'identity', 'seq', 'requestId', 'op', 'params']) &&
         isNonEmptyString(value.requestId) &&
         MEMORY_OPS.includes(value.op as MemoryOp)
+        ? (value as unknown as AgentWorkerEvent)
+        : null;
+    case 'delegation-invoke':
+      return hasExactKeys(value, ['type', 'identity', 'seq', 'requestId', 'op', 'params']) &&
+        parseSessionIdentity(value.identity) &&
+        isNonEmptyString(value.requestId) &&
+        (value.op === 'delegate' || value.op === 'check_delegation')
         ? (value as unknown as AgentWorkerEvent)
         : null;
     case 'computer-invoke':

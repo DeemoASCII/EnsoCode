@@ -386,6 +386,13 @@ export const IPC_CHANNELS = {
   BOT_OPEN_WORKSPACE: 'bots:open-workspace',
   /** bot 会话正文（含已结束的历史会话），只接受 bot 会话 id */
   BOT_SESSION_HISTORY: 'bots:session-history',
+  BOT_DELEGATIONS_LIST: 'bots:delegations-list',
+  BOT_DELEGATION_CANCEL: 'bots:delegation-cancel',
+  BOT_DELEGATION_RETRY: 'bots:delegation-retry',
+  BOT_ROUTINES_LIST: 'bots:routines-list',
+  BOT_ROUTINE_SAVE: 'bots:routine-save',
+  BOT_ROUTINE_DELETE: 'bots:routine-delete',
+  BOT_ROUTINE_RUN_NOW: 'bots:routine-run-now',
   /** main → renderer：Bot 数据变化提示 */
   BOT_EVENT: 'bots:event',
 } as const;
