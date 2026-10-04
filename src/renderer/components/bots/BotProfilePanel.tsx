@@ -15,6 +15,7 @@ import { BotAvatar } from './BotAvatar';
 import { ColorPicker, EngineField, FieldLabel, nameError } from './BotFields';
 import { botErrorText, chatTitle } from './botText';
 import { MemorySpaceList } from './MemorySpaceList';
+import { PersonaSuggestButton } from './PersonaSuggest';
 import { RoutineList } from './RoutineList';
 
 interface FormState extends AbilityForm {
@@ -141,7 +142,7 @@ export function BotProfilePanel({ botId, chat, onOpenHistory }: BotProfilePanelP
   }
 
   const patch = (next: Partial<FormState>) => {
-    setForm({ ...form, ...next });
+    setForm((current) => (current ? { ...current, ...next } : current));
     setEdited(true);
   };
   const nameIssue = nameError(form.name, bots, t, bot.id);
@@ -259,7 +260,9 @@ export function BotProfilePanel({ botId, chat, onOpenHistory }: BotProfilePanelP
               />
             </div>
             <div>
-              <FieldLabel>{t('Persona')}</FieldLabel>
+              <FieldLabel action={<PersonaSuggestButton value={form} onApply={patch} />}>
+                {t('Persona')}
+              </FieldLabel>
               <Textarea
                 rows={8}
                 value={form.persona}

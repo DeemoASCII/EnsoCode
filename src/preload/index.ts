@@ -140,6 +140,8 @@ import type {
   BotEvent,
   BotGetResult,
   BotNewSessionResult,
+  BotPersonaSuggestRequest,
+  BotPersonaSuggestResult,
   BotRoutineSaveInput,
   BotRoutineSaveResult,
   BotRoutinesResult,
@@ -1170,6 +1172,8 @@ const electronAPI = {
       ipcRenderer.invoke(IPC_CHANNELS.BOT_CREATE, draft),
     suggestAbilities: (request: BotAbilitySuggestRequest): Promise<BotAbilitySuggestResult> =>
       ipcRenderer.invoke(IPC_CHANNELS.BOT_SUGGEST_ABILITIES, request),
+    suggestPersona: (request: BotPersonaSuggestRequest): Promise<BotPersonaSuggestResult> =>
+      ipcRenderer.invoke(IPC_CHANNELS.BOT_SUGGEST_PERSONA, request),
     update: (request: {
       botId: string;
       expectedVersion?: number;

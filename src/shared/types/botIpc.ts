@@ -1,4 +1,5 @@
 import type { AbilitySuggestion } from '../bots/abilitySuggest';
+import type { PersonaSuggestion } from '../bots/personaSuggest';
 import type { AttachedImage, ConversationAuthority } from './agent';
 import type { BotChat, BotProfile, BotRoutine, Delegation, GroupEntry, GroupTask } from './bot';
 
@@ -107,6 +108,19 @@ export interface BotAbilitySuggestRequest {
 /** error：no-model / timeout / invalid-reply / failed（detail 为原始错误）/ disabled / invalid */
 export type BotAbilitySuggestResult =
   | { ok: true; suggestion: AbilitySuggestion }
+  | (BotIpcError & { detail?: string });
+
+export interface BotPersonaSuggestRequest {
+  name: string;
+  title: string;
+  scope?: string;
+  persona?: string;
+  language?: 'zh' | 'en';
+}
+
+/** 职责为空时顺带给出 scope；error 同 BotAbilitySuggestResult */
+export type BotPersonaSuggestResult =
+  | { ok: true; suggestion: PersonaSuggestion }
   | (BotIpcError & { detail?: string });
 
 export interface BotQueueItem {

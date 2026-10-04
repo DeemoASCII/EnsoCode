@@ -108,10 +108,13 @@ export function BotAbilityFields({
   );
 }
 
-function suggestErrorText(result: Extract<BotAbilitySuggestResult, { ok: false }>, t: TFunction) {
+export function suggestErrorText(
+  result: Extract<BotAbilitySuggestResult, { ok: false }>,
+  t: TFunction
+) {
   switch (result.error) {
     case 'no-model':
-      return t('No model is available. Set a default model or a title summary model first.');
+      return t('No model is available. Set a default model or a Bot assistant model first.');
     case 'timeout':
       return t('The model did not answer in time. Try again.');
     case 'invalid-reply':

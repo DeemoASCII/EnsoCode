@@ -6,6 +6,7 @@ import {
   parseChatCreateInput,
   parseChatUpdateInput,
   parseOpenWorkspaceInput,
+  parsePersonaSuggestRequest,
   parseSendInput,
   parseSessionHistoryInput,
   parseTimelineInput,
@@ -182,5 +183,35 @@ describe('parseAbilitySuggestRequest', () => {
     expect(parseAbilitySuggestRequest({ name: 'x'.repeat(201) })).toBeNull();
     expect(parseAbilitySuggestRequest({ name: ' ', scope: '' })).toBeNull();
     expect(parseAbilitySuggestRequest(null)).toBeNull();
+  });
+});
+
+describe('parsePersonaSuggestRequest', () => {
+  it('名称和角色必填，其余缺省空串、语言缺省 en', () => {
+    expect(parsePersonaSuggestRequest({ name: '阿运', title: '运维' })).toEqual({
+      name: '阿运',
+      title: '运维',
+      scope: '',
+      persona: '',
+      language: 'en',
+    });
+    expect(
+      parsePersonaSuggestRequest({
+        name: 'a',
+        title: 'b',
+        scope: 's',
+        persona: 'p',
+        language: 'zh',
+      })
+    ).toMatchObject({ scope: 's', persona: 'p', language: 'zh' });
+  });
+
+  it('拒绝缺名称或角色、多余字段、超长和非法语言', () => {
+    expect(parsePersonaSuggestRequest({ name: '阿运', title: ' ' })).toBeNull();
+    expect(parsePersonaSuggestRequest({ title: '运维' })).toBeNull();
+    expect(parsePersonaSuggestRequest({ name: 'a', title: 'b', botId: A })).toBeNull();
+    expect(parsePersonaSuggestRequest({ name: 'a', title: 'x'.repeat(201) })).toBeNull();
+    expect(parsePersonaSuggestRequest({ name: 'a', title: 'b', language: 'fr' })).toBeNull();
+    expect(parsePersonaSuggestRequest(null)).toBeNull();
   });
 });

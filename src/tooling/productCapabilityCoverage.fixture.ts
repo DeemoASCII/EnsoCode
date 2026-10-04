@@ -753,6 +753,7 @@ export const IPC_PRODUCT_COVERAGE = {
   BOT_TASK_CANCEL: excluded('Bot mode group task board UI.'),
   BOT_TASK_DELETE: excluded('Bot mode group task board UI.'),
   BOT_SUGGEST_ABILITIES: excluded('Bot mode member editor helper; returns suggestions only.'),
+  BOT_SUGGEST_PERSONA: excluded('Bot mode member editor helper; returns suggestions only.'),
   COMPUTER_CAPABILITIES: surfaces('coding-tools.computer'),
   COMPUTER_OPEN_PERMISSIONS: surfaces('coding-tools.computer'),
 } satisfies Record<keyof typeof IPC_CHANNELS, CoverageDisposition>;

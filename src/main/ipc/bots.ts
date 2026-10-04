@@ -20,6 +20,7 @@ import type {
   BotEvent,
   BotGetResult,
   BotNewSessionResult,
+  BotPersonaSuggestResult,
   BotSendResult,
   BotsListResult,
   BotTimelineResult,
@@ -42,7 +43,11 @@ import {
   spawnSession,
   steerSession,
 } from '../services/agentHost';
-import { suggestAbilities } from '../services/bots/abilitySuggester';
+import {
+  type AbilityCompleter,
+  suggestAbilities,
+  suggestPersona,
+} from '../services/bots/abilitySuggester';
 import { BotMemoryService } from '../services/bots/botMemory';
 import {
   BOT_READONLY_DISABLED_TOOLS,
@@ -83,6 +88,7 @@ import {
   parseChatCreateInput,
   parseChatUpdateInput,
   parseOpenWorkspaceInput,
+  parsePersonaSuggestRequest,
   parseSendInput,
   parseSessionHistoryInput,
   parseTimelineInput,
@@ -492,6 +498,19 @@ function catalogItems(value: unknown): { id: string; name: string; description?:
   });
 }
 
+/** Bot 辅助任务的一次性补全：Bot 助理模型 → 默认模型 */
+function assistantCompleter(maxTokens: number): AbilityCompleter {
+  return async (completion, signal) => {
+    const state = readSettingsState();
+    if (!state || !isAgentWorkerReady()) return null;
+    const candidates = await resolveRemoteModels(botAssistantModelCandidates(state));
+    if (candidates.length === 0) return null;
+    const requestId = randomUUID();
+    signal.addEventListener('abort', () => abortCompleteText(requestId), { once: true });
+    return completeText({ requestId, ...completion, candidates, maxTokens });
+  };
+}
+
 /** 桌面 BOT_SEND 与手机 bot-send 共用 */
 export async function sendBotMessage(
   { chats, host }: BotServices,
@@ -763,15 +782,18 @@ export function registerBotHandlers(): void {
             .filter((bot) => bot.id !== parsed.botId && !bot.archivedAt)
             .map((bot) => ({ id: bot.id, name: bot.name, title: bot.title, scope: bot.scope })),
         },
-        async (completion, signal) => {
-          if (!state || !isAgentWorkerReady()) return null;
-          const candidates = await resolveRemoteModels(botAssistantModelCandidates(state));
-          if (candidates.length === 0) return null;
-          const requestId = randomUUID();
-          signal.addEventListener('abort', () => abortCompleteText(requestId), { once: true });
-          return completeText({ requestId, ...completion, candidates, maxTokens: 2048 });
-        }
+        assistantCompleter(2048)
       );
+    }
+  );
+
+  handle(
+    IPC_CHANNELS.BOT_SUGGEST_PERSONA,
+    'write',
+    (_sender, request): Promise<BotPersonaSuggestResult> | BotPersonaSuggestResult => {
+      const parsed = parsePersonaSuggestRequest(request);
+      if (!parsed) return INVALID;
+      return suggestPersona(parsed, assistantCompleter(4096));
     }
   );
 

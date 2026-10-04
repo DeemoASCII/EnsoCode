@@ -2232,8 +2232,13 @@ export const zhTranslations: Record<string, string> = {
   'Let a model suggest abilities from the name, title, responsibilities and persona.':
     '让模型根据名称、头衔、职责和人设推荐能力配置。',
   'Current abilities already match the suggestion.': '当前能力已与推荐一致。',
-  'No model is available. Set a default model or a title summary model first.':
-    '没有可用的模型，请先设置默认模型或标题总结模型。',
+  'No model is available. Set a default model or a Bot assistant model first.':
+    '没有可用的模型，请先设置默认模型或 Bot 助理模型。',
+  'Generate with AI': 'AI 生成',
+  'Fill in a name and title first.': '请先填写名称和头衔。',
+  'Persona generated': '人设已生成',
+  'Persona and responsibilities generated': '人设和职责已生成',
+  Undo: '撤销',
   'The model did not answer in time. Try again.': '模型未及时响应，请重试。',
   'The model reply could not be understood. Try again.': '无法理解模型的回复，请重试。',
   'Fill in a name, title or responsibilities first.': '请先填写名称、头衔或职责。',

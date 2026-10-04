@@ -23,6 +23,7 @@ import { type AbilityForm, BotAbilityFields, DEFAULT_ABILITIES } from './BotAbil
 import { BotAvatar } from './BotAvatar';
 import { AVATAR_PALETTE, ColorPicker, EngineField, FieldLabel, nameError } from './BotFields';
 import { botErrorText } from './botText';
+import { PersonaSuggestButton } from './PersonaSuggest';
 
 interface Draft extends AbilityForm {
   name: string;
@@ -267,7 +268,9 @@ export function NewBotDialog({
               />
             </div>
             <div className="col-span-2">
-              <FieldLabel>{t('Persona')}</FieldLabel>
+              <FieldLabel action={<PersonaSuggestButton value={draft} onApply={patch} />}>
+                {t('Persona')}
+              </FieldLabel>
               <Textarea
                 rows={4}
                 value={draft.persona}

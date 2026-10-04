@@ -1,3 +1,4 @@
+import type { PersonaSuggestInput } from '@shared/bots/personaSuggest';
 import {
   APPROVAL_MODES,
   type ApprovalMode,
@@ -360,6 +361,24 @@ export interface AbilitySuggestRequest {
   language: 'zh' | 'en';
   /** 已有成员：委派候选排除自己 */
   botId?: string;
+}
+
+export function parsePersonaSuggestRequest(value: unknown): PersonaSuggestInput | null {
+  const input = record(value);
+  if (!input || !onlyKeys(input, ['name', 'title', 'scope', 'persona', 'language'])) return null;
+  const field = (key: string, max: number): string | null => {
+    if (input[key] === undefined) return '';
+    return text(input[key], max) ? input[key] : null;
+  };
+  const name = field('name', MAX.short);
+  const title = field('title', MAX.short);
+  const scope = field('scope', MAX.scope);
+  const persona = field('persona', MAX.persona);
+  if (name === null || title === null || scope === null || persona === null) return null;
+  if (!name.trim() || !title.trim()) return null;
+  const language = input.language ?? 'en';
+  if (language !== 'zh' && language !== 'en') return null;
+  return { name, title, scope, persona, language };
 }
 
 export function parseAbilitySuggestRequest(value: unknown): AbilitySuggestRequest | null {

@@ -46,11 +46,20 @@ export function nameError(
   return result.ok ? null : botErrorText(result.reason, '', t);
 }
 
-export function FieldLabel({ children, hint }: { children: React.ReactNode; hint?: string }) {
+export function FieldLabel({
+  children,
+  hint,
+  action,
+}: {
+  children: React.ReactNode;
+  hint?: string;
+  action?: React.ReactNode;
+}) {
   return (
-    <div className="mb-1 flex items-baseline justify-between gap-2">
+    <div className="mb-1 flex items-center justify-between gap-2">
       <span className="text-muted-foreground text-xs">{children}</span>
       {hint && <span className="text-[11px] text-muted-foreground/70">{hint}</span>}
+      {action}
     </div>
   );
 }

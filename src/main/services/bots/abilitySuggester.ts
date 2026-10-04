@@ -3,9 +3,18 @@ import {
   abilitySuggestPrompt,
   parseAbilitySuggestion,
 } from '../../../shared/bots/abilitySuggest';
-import type { BotAbilitySuggestResult } from '../../../shared/types/botIpc';
+import {
+  type PersonaSuggestInput,
+  parsePersonaSuggestion,
+  personaSuggestPrompt,
+} from '../../../shared/bots/personaSuggest';
+import type {
+  BotAbilitySuggestResult,
+  BotPersonaSuggestResult,
+} from '../../../shared/types/botIpc';
 
 export const ABILITY_SUGGEST_TIMEOUT_MS = 20_000;
+export const PERSONA_SUGGEST_TIMEOUT_MS = 30_000;
 
 /** 便宜模型一次性补全；没有可用模型返回 null */
 export type AbilityCompleter = (
@@ -13,11 +22,15 @@ export type AbilityCompleter = (
   signal: AbortSignal
 ) => Promise<string | null>;
 
-export async function suggestAbilities(
-  input: AbilitySuggestInput,
+type Failure = { ok: false; error: string; detail?: string };
+
+/** 一次补全 + 超时 + 解析；解析失败报 invalid-reply */
+async function runSuggest<T>(
+  prompt: { systemPrompt: string; userText: string },
+  parse: (text: string) => T | null,
   complete: AbilityCompleter,
-  timeoutMs = ABILITY_SUGGEST_TIMEOUT_MS
-): Promise<BotAbilitySuggestResult> {
+  timeoutMs: number
+): Promise<{ ok: true; suggestion: T } | Failure> {
   const controller = new AbortController();
   let timer: ReturnType<typeof setTimeout> | undefined;
   const timeout = new Promise<'timeout'>((resolve) => {
@@ -28,14 +41,14 @@ export async function suggestAbilities(
   });
   try {
     const text = await Promise.race([
-      complete({ ...abilitySuggestPrompt(input), timeoutMs }, controller.signal),
+      complete({ ...prompt, timeoutMs }, controller.signal),
       timeout,
     ]);
     if (text === 'timeout') return { ok: false, error: 'timeout' };
     if (text === null) return { ok: false, error: 'no-model' };
-    const suggestion = parseAbilitySuggestion(text, input);
+    const suggestion = parse(text);
     if (!suggestion) {
-      console.warn('[bots] ability suggestion not understood:', text.slice(0, 120));
+      console.warn('[bots] suggestion not understood:', text.slice(0, 120));
       return { ok: false, error: 'invalid-reply' };
     }
     return { ok: true, suggestion };
@@ -49,4 +62,30 @@ export async function suggestAbilities(
   } finally {
     clearTimeout(timer);
   }
+}
+
+export function suggestAbilities(
+  input: AbilitySuggestInput,
+  complete: AbilityCompleter,
+  timeoutMs = ABILITY_SUGGEST_TIMEOUT_MS
+): Promise<BotAbilitySuggestResult> {
+  return runSuggest(
+    abilitySuggestPrompt(input),
+    (text) => parseAbilitySuggestion(text, input),
+    complete,
+    timeoutMs
+  ) as Promise<BotAbilitySuggestResult>;
+}
+
+export function suggestPersona(
+  input: PersonaSuggestInput,
+  complete: AbilityCompleter,
+  timeoutMs = PERSONA_SUGGEST_TIMEOUT_MS
+): Promise<BotPersonaSuggestResult> {
+  return runSuggest(
+    personaSuggestPrompt(input),
+    (text) => parsePersonaSuggestion(text, input),
+    complete,
+    timeoutMs
+  ) as Promise<BotPersonaSuggestResult>;
 }

@@ -298,6 +298,7 @@ Main 在 `spawnSession` 里根据 `ConversationAuthority.bot` 组装提示词，
 - `BOT_ROUTINE_SAVE / BOT_ROUTINE_DELETE / BOT_ROUTINE_RUN_NOW`
 - `BOT_TASKS_LIST(chatId) / BOT_TASK_SAVE(chatId, id?, title, detail?) / BOT_TASK_ASSIGN(chatId, id, botId) / BOT_TASK_COMPLETE(chatId, id, result?) / BOT_TASK_CANCEL(chatId, id) / BOT_TASK_DELETE(chatId, id)`：群任务看板，只接受 group 聊天
 - `BOT_SUGGEST_ABILITIES(name, title, scope, persona, language, botId?)`：「自动设置能力」。候选技能 / MCP / 成员由 Main 从设置与成员库取；模型链为设置里的「Bot 助理模型」→ 默认模型（不走标题模型），20s 超时；回复严格解析（未知 id 丢弃、枚举校验，没有其他成员时不给委派建议），只返回建议，renderer 逐项确认后写入表单，仍需保存 / 创建。
+- `BOT_SUGGEST_PERSONA(name, title, scope?, persona?, language)`：「AI 生成人设」。名称和头衔必填；模型链同上（Bot 助理模型 → 默认模型），30s 超时；输出第二人称人设，职责为空时顺带给出一句职责，已有人设则在其基础上改进。结果直接填进表单，toast 可撤销，仍需保存 / 创建。
 - 推送 `BOT_EVENT`：`{kind:'catalog'|'chat'|'timeline'|'delegation'|'routine'|'tasks', chatId?, seq}`，按 chatId 去重，过期 seq 丢弃；`tasks` 不转发到手机。
 
 所有入参都按 `unknown` 收窄。

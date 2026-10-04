@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { AbilitySuggestInput } from '../../../shared/bots/abilitySuggest';
-import { suggestAbilities } from './abilitySuggester';
+import { suggestAbilities, suggestPersona } from './abilitySuggester';
 
 const input: AbilitySuggestInput = {
   profile: { name: 'Rex', title: 'Reviewer', scope: 'Reviews PRs', persona: '' },
@@ -63,5 +63,32 @@ describe('suggestAbilities', () => {
         throw new Error('401 unauthorized');
       })
     ).toEqual({ ok: false, error: 'failed', detail: '401 unauthorized' });
+  });
+});
+
+describe('suggestPersona', () => {
+  const persona = { name: '阿运', title: '运维', scope: '', persona: '', language: 'zh' as const };
+  it('returns persona and scope from the reply', async () => {
+    expect(
+      await suggestPersona(persona, async () => '{"persona":"你是阿运","scope":"部署"}')
+    ).toEqual({
+      ok: true,
+      suggestion: { persona: '你是阿运', scope: '部署' },
+    });
+  });
+  it('maps no model, bad reply and timeout', async () => {
+    expect(await suggestPersona(persona, async () => null)).toEqual({
+      ok: false,
+      error: 'no-model',
+    });
+    expect(await suggestPersona(persona, async () => 'nope')).toEqual({
+      ok: false,
+      error: 'invalid-reply',
+    });
+    const hang = (_r: unknown, signal: AbortSignal) =>
+      new Promise<string>((_, reject) =>
+        signal.addEventListener('abort', () => reject(new Error('x')))
+      );
+    expect(await suggestPersona(persona, hang, 5)).toEqual({ ok: false, error: 'timeout' });
   });
 });
