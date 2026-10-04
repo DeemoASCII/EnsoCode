@@ -93,6 +93,7 @@ export const CONFIG_SYNC_FIELD_POLICY = {
   voiceInputEnabled: { mode: 'excluded', reason: 'speech model lives on this device' },
   botModeEnabled: { mode: 'excluded', reason: 'bot members and chats live on this device' },
   botRouteClassifier: { mode: 'excluded', reason: 'bot members and chats live on this device' },
+  botAssistantModel: { mode: 'excluded', reason: 'bot members and chats live on this device' },
   voiceInputDevice: { mode: 'excluded', reason: 'microphones belong to this device' },
   voiceModel: { mode: 'excluded', reason: 'speech model lives on this device' },
   voiceCorrectionEnabled: { mode: 'excluded', reason: 'voice input is configured per device' },

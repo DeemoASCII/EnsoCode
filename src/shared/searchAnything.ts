@@ -212,6 +212,12 @@ const STATIC_CATALOG: SettingsSearchEntry[] = [
     description:
       'When nobody is @-mentioned in a smart-routing group, this model picks which member replies.',
   },
+  {
+    id: 'bots.assistantModel',
+    category: 'bots',
+    title: 'Bot assistant model',
+    description: 'Used for helper tasks such as auto-configuring member abilities.',
+  },
   { id: 'shortcuts.root', category: 'shortcuts', title: 'Shortcuts' },
   { id: 'appearance.theme', category: 'appearance', title: 'Theme mode' },
   { id: 'providers.root', category: 'providers', title: 'Model Providers' },

@@ -52,6 +52,7 @@ export const SETTINGS_DATA_COVERAGE = {
   voiceInputEnabled: excluded('Voice input is a device-local composer preference.'),
   botModeEnabled: excluded('Experimental Bot mode toggle; device-local, not an Enso capability.'),
   botRouteClassifier: excluded('Bot group smart-routing model preference; not an Enso capability.'),
+  botAssistantModel: excluded('Bot helper-task model preference; not an Enso capability.'),
   voiceInputDevice: excluded('Voice input is a device-local composer preference.'),
   voiceModel: excluded('Voice input is a device-local composer preference.'),
   voiceCorrectionEnabled: excluded('Voice input is a device-local composer preference.'),
@@ -185,6 +186,7 @@ export const SETTINGS_ACTION_COVERAGE = {
   setBotRouteClassifier: excluded(
     'Bot group smart-routing model preference; not an Enso capability.'
   ),
+  setBotAssistantModel: excluded('Bot helper-task model preference; not an Enso capability.'),
   setVoiceInputDevice: excluded('Voice input is a device-local composer preference.'),
   setVoiceModel: excluded('Voice input is a device-local composer preference.'),
   setVoiceCorrectionEnabled: excluded('Voice input is a device-local composer preference.'),

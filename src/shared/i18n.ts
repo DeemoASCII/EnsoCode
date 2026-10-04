@@ -2218,6 +2218,9 @@ export const zhTranslations: Record<string, string> = {
   'Group workspace': '群工作区',
   'Missing project': '项目已不存在',
   'Group reply picker model': '群聊选人模型',
+  'Bot assistant model': 'Bot 助理模型',
+  'Used for helper tasks such as auto-configuring member abilities.':
+    '用于自动设置成员能力等辅助任务。',
   'Features still being tested. They may change or be removed.':
     '仍在测试中的功能，之后可能调整或移除。',
   'Bot mode settings': 'Bot 模式设置',

@@ -150,6 +150,8 @@ export interface SettingsState {
   botModeEnabled: boolean;
   /** Bot 群聊智能选人的分类来源；null 走标题模型回退链 judge */
   botRouteClassifier: VirtualClassifierConfig | null;
+  /** Bot 辅助任务（自动设置能力等）用的模型；null 跟随默认模型 */
+  botAssistantModel: DefaultModelRef | null;
   /** 桌面录音用的麦克风设备 id；SYSTEM_MICROPHONE 跟随系统 */
   voiceInputDevice: string;
   /** 本机语音识别模型 */
@@ -331,6 +333,7 @@ export interface SettingsState {
   setVoiceInputEnabled: (value: boolean) => void;
   setBotModeEnabled: (value: boolean) => void;
   setBotRouteClassifier: (value: VirtualClassifierConfig | null) => void;
+  setBotAssistantModel: (value: DefaultModelRef | null) => void;
   setVoiceInputDevice: (deviceId: string) => void;
   setVoiceModel: (model: SpeechModelId) => void;
   setVoiceCorrectionEnabled: (value: boolean) => void;

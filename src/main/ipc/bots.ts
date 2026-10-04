@@ -25,7 +25,6 @@ import type {
   BotTimelineResult,
   BotWriteIpcResult,
 } from '@shared/types/botIpc';
-import { parseVirtualClassifier } from '@shared/virtualModels';
 import { app, ipcMain, shell } from 'electron';
 import {
   abortCompleteText,
@@ -66,8 +65,9 @@ import { BotRoutineStore } from '../services/bots/routineStore';
 import { createSmartRouter } from '../services/bots/smartRouter';
 import { resolveGlobalInstruction } from '../services/instructionStore';
 import { readStoredOauthCredentialKeys } from '../services/oauthProviders';
-import { remoteCandidates } from '../services/remoteModels';
+import { remoteCandidates, resolveRemoteModels } from '../services/remoteModels';
 import { removeConversationSessionFiles } from '../services/sessionFileCleanup';
+import { botAssistantModelCandidates } from '../services/titleSummary';
 import { sendToAllWindows } from '../windows/createAppWindow';
 import { isMainWebContents } from '../windows/MainWindow';
 import {
@@ -753,7 +753,6 @@ export function registerBotHandlers(): void {
       const parsed = parseAbilitySuggestRequest(request);
       if (!parsed) return INVALID;
       const state = readSettingsState();
-      const route = parseVirtualClassifier(state?.botRouteClassifier);
       return suggestAbilities(
         {
           ...parsed,
@@ -766,11 +765,7 @@ export function registerBotHandlers(): void {
         },
         async (completion, signal) => {
           if (!state || !isAgentWorkerReady()) return null;
-          // 群聊选人配的是快聊天模型（judge）时优先用它，其后是标题模型回退链
-          const candidates = await remoteCandidates(
-            state,
-            route?.source === 'judge' ? route.model : undefined
-          );
+          const candidates = await resolveRemoteModels(botAssistantModelCandidates(state));
           if (candidates.length === 0) return null;
           const requestId = randomUUID();
           signal.addEventListener('abort', () => abortCompleteText(requestId), { once: true });
