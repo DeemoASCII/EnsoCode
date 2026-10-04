@@ -1,4 +1,12 @@
-import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  appendFileSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -227,6 +235,42 @@ describe('BotSessionHost.ensureSession', () => {
     expect(
       await host.deliver(chat.id, alice.id, 'do not replay', { deliveryId: 'persisted' })
     ).toMatchObject({ ok: true, duplicate: true });
+  });
+  it('after a crash a fresh host still refuses to replay results the session already received', async () => {
+    const alice = bot('Alice');
+    const chat = direct(alice.id);
+    const sent = await host.deliver(chat.id, alice.id, 'first', { deliveryId: 'first' });
+    if (!sent.ok) throw new Error(sent.error);
+    const file = join(root, 'crash-session.jsonl');
+    const persisted = (id: string) =>
+      `${JSON.stringify({
+        type: 'message',
+        message: {
+          role: 'user',
+          content: [{ type: 'text', text: `<delegation-result id="${id}">ok</delegation-result>` }],
+        },
+      })}\n`;
+    writeFileSync(file, persisted('before'));
+    const conversation = registry.conversation(sent.conversationId)!;
+    const original = registry.conversation.bind(registry);
+    registry.conversation = (id) =>
+      id === sent.conversationId ? { ...conversation, sessionFile: file } : original(id);
+    expect(host.hasStartedDelivery(sent.conversationId, 'after')).toBe(false);
+    // worker 已把结果写进 jsonl，但 Main 在收到确认前崩溃
+    appendFileSync(file, persisted('after'));
+    const restarted = new BotSessionHost({
+      bots,
+      chats,
+      authority: registry,
+      runtime: new FakeRuntime(),
+      emit: () => {},
+    });
+    for (const id of ['before', 'after'])
+      expect(
+        await restarted.deliver(chat.id, alice.id, 'replay', { deliveryId: id })
+      ).toMatchObject({ ok: true, duplicate: true });
+    expect(host.hasStartedDelivery(sent.conversationId, 'after')).toBe(true);
+    restarted.dispose();
   });
   it('gives each host-started turn a fresh key reported on its finish event', async () => {
     const alice = bot('Alice');

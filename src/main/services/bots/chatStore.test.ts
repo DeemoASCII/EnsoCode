@@ -232,10 +232,15 @@ describe('BotChatStore timeline', () => {
     expect(
       reloaded.appendEntry(chat.id, { id: 'new', at: 1, kind: 'system', text: 'x' })?.seq
     ).toBe(50_001);
-    expect(performance.now() - started).toBeLessThan(50);
+    const tail = performance.now() - started;
+    const fullStarted = performance.now();
     expect(reloaded.readEntries(chat.id, { beforeSeq: 3, limit: 5 }).map((e) => e.seq)).toEqual([
       1, 2,
     ]);
+    const full = performance.now() - fullStarted;
+    // 绝对上界留给负载较高的 CI；相对上界确认尾部读取不随文件大小增长
+    expect(tail).toBeLessThan(500);
+    expect(tail * 5).toBeLessThan(full);
     expect(reloaded.findEntry(chat.id, 'e123')).toMatchObject({ seq: 123 });
   });
 });

@@ -1,6 +1,4 @@
 import { randomUUID } from 'node:crypto';
-import { readFileSync } from 'node:fs';
-import { stripBotNotesUpdate } from '../../../shared/bots/notes';
 import type {
   AgentWorkerEvent,
   AttachedImage,
@@ -15,6 +13,7 @@ import type { BotNotesSnapshot } from './botNotes';
 import { buildBotModeInstruction, buildBotSystemPrompt } from './botPrompt';
 import type { BotStore } from './botStore';
 import type { BotChatStore } from './chatStore';
+import { StartedDeliveryIndex } from './startedDeliveries';
 
 /** bot 会话同时在跑的轮次上限（私聊、群聊、委派、例行合计，Code 会话不计） */
 export const BOT_MAX_RUNNING_TURNS = 4;
@@ -159,6 +158,8 @@ export class BotSessionHost {
   /** 会话已看到的笔记版本（spawn 时进系统提示词，之后变化在投递前追加一次） */
   private readonly notesSeen = new Map<string, string>();
   private readonly deliveries = new Map<string, Map<string, 'sent' | 'started'>>();
+  /** jsonl 里已开始处理的委派结果：首次全量、之后只读追加部分 */
+  private readonly persistedStarts = new StartedDeliveryIndex();
   private readonly startedListeners = new Set<
     (event: { conversationId: string; deliveryId: string }) => void
   >();
@@ -173,41 +174,9 @@ export class BotSessionHost {
   hasStartedDelivery(conversationId: string, deliveryId: string): boolean {
     if (this.deliveries.get(conversationId)?.get(deliveryId) === 'started') return true;
     const file = this.deps.authority.conversation(conversationId)?.sessionFile;
-    if (!file) return false;
-    try {
-      for (const line of readFileSync(file, 'utf8').split('\n')) {
-        try {
-          const entry = JSON.parse(line);
-          if (entry?.type !== 'message' || entry.message?.role !== 'user') continue;
-          const content = entry.message.content;
-          const texts =
-            typeof content === 'string'
-              ? [content]
-              : Array.isArray(content)
-                ? content.flatMap((part: { type?: string; text?: unknown }) =>
-                    part?.type === 'text' && typeof part.text === 'string' ? [part.text] : []
-                  )
-                : [];
-          if (
-            texts.some((text: string) => {
-              const head = stripBotNotesUpdate(text).trimStart();
-              return (
-                head.startsWith(`<delegation-result id="${deliveryId}"`) ||
-                head.startsWith(`<delegation-results id="${deliveryId}"`)
-              );
-            })
-          ) {
-            this.rememberDelivery(conversationId, deliveryId, 'started');
-            return true;
-          }
-        } catch {
-          /* torn line */
-        }
-      }
-    } catch {
-      /* no persisted session yet */
-    }
-    return false;
+    if (!file || !this.persistedStarts.has(file, deliveryId)) return false;
+    this.rememberDelivery(conversationId, deliveryId, 'started');
+    return true;
   }
   private readonly sentListeners = new Set<
     (event: { conversationId: string; deliveryId: string }) => void
@@ -994,6 +963,7 @@ export class BotSessionHost {
     this.retireSession(conversation.conversationId);
     const removed = this.deps.authority.removeBotConversation(conversation.conversationId);
     if (removed) this.deps.runtime.removeSessionFiles(removed);
+    if (removed?.sessionFile) this.persistedStarts.forget(removed.sessionFile);
   }
 
   private resolveWorkspace(chat: BotChat, botId: string | undefined): Workspace {
