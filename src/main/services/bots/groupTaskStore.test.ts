@@ -1,4 +1,4 @@
-import { appendFileSync, existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, expect, it } from 'vitest';
@@ -54,4 +54,34 @@ it('forget drops the cache so a removed chat directory reads empty', () => {
   store.forget(CHAT);
   expect(store.list(CHAT)).toEqual([]);
   expect(store.create(CHAT, { title: 'b', createdBy: 'human' }, 1)?.seq).toBe(1);
+});
+
+const taskLines = () =>
+  readFileSync(join(root, CHAT, 'tasks.jsonl'), 'utf8')
+    .split('\n')
+    .filter(Boolean);
+
+it('rewrites tasks.jsonl to the latest snapshot and keeps the deleted seq floor', () => {
+  const compacting = new GroupTaskStore(root, { minRedundant: 4 });
+  const a = compacting.create(CHAT, { title: 'a', createdBy: 'human' }, 1)!;
+  const b = compacting.create(CHAT, { title: 'b', createdBy: 'human' }, 1)!;
+  compacting.remove(CHAT, b.id);
+  for (let i = 0; i < 3; i++) compacting.save(CHAT, { ...a, detail: `v${i}`, updatedAt: 2 + i });
+  expect(taskLines().length).toBeLessThan(6);
+  const reloaded = new GroupTaskStore(root);
+  expect(reloaded.list(CHAT)).toEqual([{ ...a, detail: 'v2', updatedAt: 4 }]);
+  expect(reloaded.create(CHAT, { title: 'c', createdBy: 'human' }, 5)?.seq).toBe(3);
+});
+
+it('compacts a bloated log on load and survives a failed rewrite', () => {
+  const a = store.create(CHAT, { title: 'a', createdBy: 'human' }, 1)!;
+  for (let i = 0; i < 6; i++) store.save(CHAT, { ...a, updatedAt: 2 + i });
+  mkdirSync(join(root, CHAT, `tasks.jsonl.${process.pid}.tmp`));
+  const blocked = new GroupTaskStore(root, { minRedundant: 3 });
+  expect(blocked.list(CHAT)).toEqual([{ ...a, updatedAt: 7 }]);
+  expect(taskLines()).toHaveLength(7);
+  rmSync(join(root, CHAT, `tasks.jsonl.${process.pid}.tmp`), { recursive: true });
+  const compacted = new GroupTaskStore(root, { minRedundant: 3 });
+  expect(compacted.list(CHAT)).toEqual([{ ...a, updatedAt: 7 }]);
+  expect(taskLines()).toHaveLength(1);
 });

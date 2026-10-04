@@ -8,20 +8,30 @@ import {
   isBotChatId,
   parseGroupTask,
 } from '../../../shared/types/bot';
+import { writeAtomic } from './files';
 
 interface ChatTasks {
   tasks: Map<string, GroupTask>;
   maxSeq: number;
+  /** 文件中的非空行数，用于判断冗余度 */
+  lines: number;
 }
 
 /**
  * 群任务看板：userData/bot-chats/<chatId>/tasks.jsonl，append-only 整条快照（后写覆盖），
  * 删除写墓碑 `{id, seq, deleted:true}`；坏行 / 截断行跳过。seq 取历史最大值 +1，删除后不复用。
  * 读写都是同步的：Main 单线程下「读-判-写」天然原子，并发认领由调用方在一次同步调用里完成。
+ * 冗余行达到 max(minRedundant, 任务数) 时原子重写为最新快照；被删的最大 seq 以一条墓碑保留。
  */
 export class GroupTaskStore {
   private readonly cache = new Map<string, ChatTasks>();
-  constructor(private readonly root: string) {}
+  private readonly minRedundant: number;
+  constructor(
+    private readonly root: string,
+    options: { minRedundant?: number } = {}
+  ) {
+    this.minRedundant = options.minRedundant ?? 200;
+  }
 
   list(chatId: string): GroupTask[] {
     if (!isBotChatId(chatId)) return [];
@@ -72,6 +82,7 @@ export class GroupTaskStore {
     this.append(chatId, parsed);
     state.tasks.set(parsed.id, parsed);
     state.maxSeq = Math.max(state.maxSeq, parsed.seq);
+    this.compactIfRedundant(chatId, state);
     return { ...parsed };
   }
 
@@ -82,6 +93,7 @@ export class GroupTaskStore {
     if (!task) return false;
     this.append(chatId, { id, seq: task.seq, deleted: true });
     state.tasks.delete(id);
+    this.compactIfRedundant(chatId, state);
     return true;
   }
 
@@ -98,12 +110,30 @@ export class GroupTaskStore {
     mkdirSync(join(this.root, chatId), { recursive: true });
     // 前导换行把上次可能撕裂的末行隔开
     appendFileSync(this.file(chatId), `\n${JSON.stringify(record)}\n`, 'utf8');
+    const state = this.cache.get(chatId);
+    if (state) state.lines++;
+  }
+
+  private compactIfRedundant(chatId: string, state: ChatTasks): void {
+    if (state.lines - state.tasks.size < Math.max(this.minRedundant, state.tasks.size)) return;
+    const records: unknown[] = [...state.tasks.values()].sort((a, b) => a.seq - b.seq);
+    const top = Math.max(0, ...[...state.tasks.values()].map((task) => task.seq));
+    if (state.maxSeq > top) records.push({ id: 'seq-floor', seq: state.maxSeq, deleted: true });
+    try {
+      writeAtomic(
+        this.file(chatId),
+        `${records.map((record) => JSON.stringify(record)).join('\n')}\n`
+      );
+      state.lines = records.length;
+    } catch (error) {
+      console.warn('[bots] tasks compaction failed', chatId, error);
+    }
   }
 
   private load(chatId: string): ChatTasks {
     const cached = this.cache.get(chatId);
     if (cached) return cached;
-    const state: ChatTasks = { tasks: new Map(), maxSeq: 0 };
+    const state: ChatTasks = { tasks: new Map(), maxSeq: 0, lines: 0 };
     let text = '';
     try {
       text = readFileSync(this.file(chatId), 'utf8');
@@ -112,6 +142,7 @@ export class GroupTaskStore {
     }
     for (const line of text.split('\n')) {
       if (!line.trim()) continue;
+      state.lines++;
       try {
         const value = JSON.parse(line) as Record<string, unknown>;
         if (value?.deleted === true && typeof value.id === 'string') {
@@ -129,6 +160,7 @@ export class GroupTaskStore {
       }
     }
     this.cache.set(chatId, state);
+    this.compactIfRedundant(chatId, state);
     return state;
   }
 }
