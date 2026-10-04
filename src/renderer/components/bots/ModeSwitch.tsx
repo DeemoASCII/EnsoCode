@@ -2,10 +2,12 @@ import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
 import { BotMessageSquare, SquareTerminal } from 'lucide-react';
 import { type KeyboardEvent, useId, useRef } from 'react';
 import { useI18n } from '@/i18n';
+import { effectiveKeybindings, formatBinding } from '@/lib/keybindings';
 import { springStandard } from '@/lib/motion';
 import { cn } from '@/lib/utils';
 import { useBotPendingCount } from '@/stores/bots';
 import { type AppMode, useAppModeStore } from '@/stores/bots/mode';
+import { useSettingsStore } from '@/stores/settings';
 import { CountBadge } from './BotSidebar';
 
 const OPTIONS: readonly { value: AppMode; label: string; Icon: typeof SquareTerminal }[] = [
@@ -31,6 +33,10 @@ export function ModeSwitch({ className }: { className?: string }) {
   const mode = useAppModeStore((s) => s.mode);
   const setMode = useAppModeStore((s) => s.setMode);
   const pending = useBotPendingCount();
+  const binding = effectiveKeybindings(useSettingsStore((s) => s.keybindings))['toggle-app-mode'];
+  const hint = binding
+    ? `${t('Switch between Code and Bot')} (${formatBinding(binding)})`
+    : undefined;
   const reduceMotion = useReducedMotion() ?? false;
   const pillId = useId();
   const refs = useRef<Partial<Record<AppMode, HTMLButtonElement | null>>>({});
@@ -65,6 +71,7 @@ export function ModeSwitch({ className }: { className?: string }) {
             role="radio"
             aria-checked={active}
             tabIndex={active ? 0 : -1}
+            title={hint}
             onClick={() => setMode(value)}
             className={cn(
               'relative flex items-center gap-1.5 rounded-md px-2.5 font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',

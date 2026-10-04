@@ -2194,6 +2194,8 @@ export const zhTranslations: Record<string, string> = {
   'New member': '新建成员',
   'No members yet': '还没有成员',
   'Nothing archived': '没有已归档的内容',
+  'Switch between Code and Bot': '切换 Code / Bot 模式',
+  'Only when Bot mode is enabled in Experimental settings': '需先在实验设置中开启 Bot 模式',
   'Search Code projects or recent folders...': '搜索 Code 项目或最近打开的目录...',
   'Chat threads': '聊天',
   'Delete group chat?': '删除群聊？',

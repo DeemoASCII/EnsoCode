@@ -218,6 +218,15 @@ export default function App() {
     const onKeyDown = (e: KeyboardEvent) => {
       const pressed = eventToBinding(e);
       if (!pressed) return;
+      if (pressed === bindings['toggle-app-mode']) {
+        const settings = useSettingsStore.getState();
+        if (!settings.botModeEnabled || useRemoteNodesStore.getState().activeNodeId !== 'local')
+          return;
+        e.preventDefault();
+        const modes = useAppModeStore.getState();
+        modes.setMode(modes.mode === 'bot' ? 'code' : 'bot');
+        return;
+      }
       // 远程节点 / Bot 模式：本机 Code 会话相关的快捷键不响应（新对话/tab 切换/右侧面板/查找）
       const remote = useRemoteNodesStore.getState().activeNodeId !== 'local' || isBotModeActive();
       if (isBotModeActive() && pressed === bindings['toggle-side-panel']) {
