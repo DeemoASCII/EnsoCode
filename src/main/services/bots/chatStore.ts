@@ -34,6 +34,8 @@ export interface BotChatDraft {
 
 const TIMELINE = 'timeline.jsonl';
 const NEWLINE = 0x0a;
+/** 倒读时每隔这么多 seq 记一个行首偏移，深翻页直接从附近开始读 */
+const CHECKPOINT_EVERY = 128;
 /** `{"seq":N,"id":"…"` 是 appendEntry 写出的固定前缀；建索引时免整行解析 */
 const ENTRY_HEAD = /^\{"seq":(\d+),"id":("(?:[^"\\]|\\.)*")/u;
 
@@ -71,6 +73,8 @@ export class BotChatStore {
   private seqs = new Map<string, number>();
   /** id → 行位置；按需构建，append 时增量维护 */
   private indexes = new Map<string, Map<string, IndexedEntry>>();
+  /** seq（CHECKPOINT_EVERY 的倍数）→ 该行起始偏移；文件只追加，偏移长期有效 */
+  private checkpoints = new Map<string, Map<number, number>>();
   private readonly chunkSize: number;
 
   constructor(
@@ -145,6 +149,7 @@ export class BotChatStore {
     this.chats.delete(id);
     this.seqs.delete(id);
     this.indexes.delete(id);
+    this.checkpoints.delete(id);
     return true;
   }
 
@@ -189,7 +194,7 @@ export class BotChatStore {
     const { beforeSeq = Number.POSITIVE_INFINITY, limit = 100 } = options;
     const entries: GroupEntry[] = [];
     if (limit <= 0) return entries;
-    for (const entry of this.backward(chatId)) {
+    for (const entry of this.backward(chatId, beforeSeq)) {
       if (entry.seq >= beforeSeq) continue;
       entries.push(entry);
       if (entries.length >= limit) break;
@@ -207,8 +212,8 @@ export class BotChatStore {
     return entries.reverse();
   }
 
-  /** 从新到旧逐条产出；提前 break 即停止读盘 */
-  *backward(chatId: string): Generator<GroupEntry> {
+  /** 从新到旧逐条产出；提前 break 即停止读盘。给 beforeSeq 时可从已知检查点开始读 */
+  *backward(chatId: string, beforeSeq = Number.POSITIVE_INFINITY): Generator<GroupEntry> {
     if (!isBotChatId(chatId)) return;
     let fd: number;
     try {
@@ -217,32 +222,52 @@ export class BotChatStore {
       return;
     }
     try {
-      let position = fstatSync(fd).size;
-      let carry = Buffer.alloc(0);
+      const size = fstatSync(fd).size;
+      let marks = this.checkpoints.get(chatId);
+      if (!marks) {
+        marks = new Map();
+        this.checkpoints.set(chatId, marks);
+      }
+      let position = size;
       let floor = Number.POSITIVE_INFINITY;
-      const emit = (line: Buffer) => {
+      for (const [seq, offset] of marks) {
+        if (offset > size) {
+          marks.clear();
+          position = size;
+          floor = Number.POSITIVE_INFINITY;
+          break;
+        }
+        // 该行之前的行 seq 都更小；挑 ≥ beforeSeq 的最近检查点
+        if (seq >= beforeSeq && seq < floor) {
+          floor = seq;
+          position = offset;
+        }
+      }
+      let carry = Buffer.alloc(0);
+      const emit = (line: Buffer, offset: number) => {
         const entry = parseLine(line);
         if (!entry || entry.seq >= floor) return undefined;
         floor = entry.seq;
+        if (entry.seq % CHECKPOINT_EVERY === 0) marks.set(entry.seq, offset);
         return entry;
       };
       while (position > 0) {
-        const size = Math.min(this.chunkSize, position);
-        position -= size;
-        const chunk = Buffer.allocUnsafe(size);
-        readSync(fd, chunk, 0, size, position);
+        const length = Math.min(this.chunkSize, position);
+        position -= length;
+        const chunk = Buffer.allocUnsafe(length);
+        readSync(fd, chunk, 0, length, position);
         const data = carry.length > 0 ? Buffer.concat([chunk, carry]) : chunk;
         let end = data.length;
         while (end > 0) {
           const at = data.lastIndexOf(NEWLINE, end - 1);
           if (at < 0) break;
-          const entry = emit(data.subarray(at + 1, end));
+          const entry = emit(data.subarray(at + 1, end), position + at + 1);
           if (entry) yield entry;
           end = at;
         }
         carry = Buffer.from(data.subarray(0, end));
       }
-      const entry = emit(carry);
+      const entry = emit(carry, 0);
       if (entry) yield entry;
     } finally {
       closeSync(fd);

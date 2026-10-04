@@ -204,6 +204,29 @@ describe('BotChatStore timeline', () => {
     expect(seqs).toEqual([1, 2, 3, 4, 5]);
   });
 
+  it('deep pages stay identical once seq checkpoints are learned', () => {
+    const small = new BotChatStore(root, now, { chunkSize: 97 });
+    const chat = small.create({
+      kind: 'group',
+      title: 't',
+      members: [BOT_A, BOT_B],
+      bossBotId: BOT_A,
+      workspace: { kind: 'project', projectId: 'p' },
+    });
+    if (!chat) throw new Error('create failed');
+    for (let i = 1; i <= 700; i++)
+      small.appendEntry(chat.id, { id: `e${i}`, at: i, kind: 'system', text: `第${i}条` });
+    const page = (store: BotChatStore, beforeSeq: number) =>
+      store.readEntries(chat.id, { beforeSeq, limit: 7 }).map((entry) => entry.seq);
+    // 先整段倒读一遍，学到检查点
+    expect(small.readEntries(chat.id, { limit: 1000 })).toHaveLength(700);
+    for (const before of [701, 700, 513, 512, 511, 257, 256, 129, 128, 8, 2, 1])
+      expect(page(small, before)).toEqual(page(new BotChatStore(root, now), before));
+    small.appendEntry(chat.id, { id: 'tail', at: 1, kind: 'system', text: 'x' });
+    expect(page(small, 702)).toEqual([695, 696, 697, 698, 699, 700, 701]);
+    expect(page(small, 300)).toEqual([293, 294, 295, 296, 297, 298, 299]);
+  });
+
   it('tail-reads a 50k-entry timeline without loading it all', () => {
     const chat = group();
     const file = join(root, chat.id, 'timeline.jsonl');
