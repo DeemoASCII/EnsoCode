@@ -2249,6 +2249,16 @@ describe('spawn-parent system prompt 协议', () => {
 });
 
 describe('受保护动作底线协议', () => {
+  it('spawn-parent 携 botWriteLock：名字与祖先会话列表齐全才通过', () => {
+    const base = { type: 'spawn-parent', identity: parent, cwd: '/repo', model };
+    expect(
+      parseAgentCommand({ ...base, botWriteLock: { label: 'alice', ancestors: ['p'] } })
+    ).toMatchObject({ botWriteLock: { label: 'alice', ancestors: ['p'] } });
+    expect(parseAgentCommand({ ...base, botWriteLock: { label: 'alice' } })).toBeNull();
+    expect(parseAgentCommand({ ...base, botWriteLock: { label: '', ancestors: [] } })).toBeNull();
+    expect(parseAgentCommand({ ...base, botWriteLock: { label: 'a', ancestors: [1] } })).toBeNull();
+  });
+
   it('spawn-parent 携 protectedActions：布尔通过，脏值拒绝', () => {
     const base = { type: 'spawn-parent', identity: parent, cwd: '/repo', model };
     expect(parseAgentCommand({ ...base, protectedActions: true })).not.toBeNull();

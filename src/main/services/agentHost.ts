@@ -701,6 +701,8 @@ export function spawnSession(
       groupTasks?: boolean;
       /** 私聊 / 群聊成员会话（非委派）：worker 挂 routine_propose */
       routines?: boolean;
+      /** 写成员同工作区写协调 */
+      writeLock?: { label: string; ancestors: string[] };
     };
   }
 ): { ok: boolean; error?: string } {
@@ -827,6 +829,7 @@ export function spawnSession(
     ...(options?.bot ? { botMode: true } : {}),
     ...(options?.bot?.groupTasks ? { botGroupTasks: true } : {}),
     ...(options?.bot?.routines ? { botRoutines: true } : {}),
+    ...(options?.bot?.writeLock ? { botWriteLock: options.bot.writeLock } : {}),
     ...(options?.bot || state?.protectedActionsInCode === true ? { protectedActions: true } : {}),
   });
   if (sent.ok) {

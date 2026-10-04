@@ -2245,7 +2245,6 @@ export const zhTranslations: Record<string, string> = {
   'Calling tools': '调用工具',
   Retrying: '重试中',
   Denied: '已拒绝',
-  'Queued · waiting for {{name}} to free the workspace': '排队中 · 等待 {{name}} 释放工作目录',
   'Queued · concurrency limit reached': '排队中 · 并发已满',
   'Queued · waiting for the current turn to finish': '排队中 · 等上一轮结束',
   Delegation: '委派',

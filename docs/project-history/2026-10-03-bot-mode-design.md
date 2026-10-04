@@ -657,6 +657,8 @@ Main 在 `spawnSession` 里根据 `ConversationAuthority.bot` 组装提示词，
 
 ## 正在回复行内嵌进度与排队原因（2026-10 补充）
 
+> 2026-10 起「工作区写锁」改为下文「同工作区写协调」：整轮锁已移除，排队原因不再有 `workspace`。
+
 **行为**：群时间线「XX 正在回复」行（点击仍打开实时会话弹窗）与私聊输入框上方的状态条直接显示：状态（排队中 / 思考中 / 输出中 / 调用工具 / 重试中）、本轮已运行时长（每秒刷新）、本轮最近 3 个工具步骤（工具名 + 单行参数摘要 ≤80 字 + 运行中 / 完成 / 出错 / 已拒绝 + 耗时，运行中按 `toolStartedAt` 实时计），更早的折成「+N」。
 
 **数据**：不新增快照推送。运行态全部来自 renderer 已订阅的成员会话投影（`stores/bots/liveActivity.ts` 纯函数）：本轮 = 最后一条 user 消息之后；`retry` → 重试中，有未收口工具 → 调用工具，末条 assistant 以正文结尾 → 输出中，其余思考中；拒绝只认精确文本 `User denied this operation`。排队原因由 Main 的 `queueState()` 按项计算并随 `BOT_CHATS_LIST` 返回：`BotQueueItem.reason` = `turn`（同会话上一轮未结束 / 前面已有同会话投递）> `workspace`（带 `holderBotId`，只发成员标识不发路径）> `capacity`（并发名额满）。`pump()` 结束时比较各聊天排队原因签名，出队之外原因变化（如并发位让出后改等工作目录）也补发 `queue` 事件。预算超限是直接拒绝不排队，没有对应原因。私聊排队时不再显示「等有空闲会话名额」的输入框提示（与状态条原因冲突）。手机协议不变。
@@ -678,3 +680,22 @@ Main 在 `spawnSession` 里根据 `ConversationAuthority.bot` 组装提示词，
 **测试**：`cardPng.test`（CRC 标准值、tEXt 写在 IEND 前且 CRC 正确、替换不重复并删除 ccv3、坏输入、base64 UTF-8 往返、魔数与大小上限），`characterCard.test`（导出字段映射与排除、自导出卡还原、非法专有字段逐项忽略），`botStore.test`（写入 / 版本 / 编辑与归档保留 / 移除），`bots.test`（入参收窄、协议按 botId 寻址、删除成员清理文件）。
 
 **真机**（隔离 userData，fake provider）：上传 800×600 图拖动 + 缩放裁切后创建成员，侧栏、私聊头部与空态、资料面板、私聊回复头、群头像、群时间线、群信息均显示图片，`avatar.png` 为 512×512；导出 PNG 的各 chunk CRC 正确，再导入得到相同的头衔 / 职责 / 人设 / 颜色 / 工具 / 审批 / 记忆与头像；300×450 SillyTavern 卡导入后人设按拼接规则生成、头像为居中 512 方图；移除头像后文件删除、回落颜色；SVG 与超 2MB 被拒；归档成员头像仍可加载，彻底删除后 404，`..%2F` 路径 404。
+
+## 同工作区写协调：文件级占用 + 全局命令短独占（2026-10 替换整轮写锁）
+
+**动机**：整轮写锁让同目录里改不同文件的写成员也只能排队。
+
+**行为**（`src/agent/workspaceClaims.ts`，在 agent worker 进程内，全部会话共享一个 `WorkspaceClaims`）：
+- 写工具（edit / write / apply_patch）在审批通过后、执行前按目标文件（真实路径，不存在的文件按最近存在的祖先目录取 realpath）登记占用，持有到本轮结束（turn-completed / turn-failed；会话释放时一并清掉）。别人占着同一文件时在工具调用内等待，最长 2 分钟，超时以工具错误告诉模型「X 正在改这个文件，本轮结束释放；先做别的文件或协调后重试」。
+- bash 里影响整个仓库的命令（git commit/checkout/switch/reset/rebase/merge/pull/stash/cherry-pick/revert/restore/clean/am/apply/mv/rm，npm/pnpm/yarn/bun 的 install/add/remove/update 等，`rm -r`，含 `sh -c` 嵌套与 `&&`/`;` 串联）只在命令执行期间独占工作区：等其他会话的文件占用全部释放才开始，执行期间别人的写工具等待，命令结束立即释放。普通 bash、读工具、只读成员不参与。
+- 等待开始时经工具的流式更新推一句 `Waiting: …`，工具卡片与实时会话里可见。
+- 委派链上的祖先与后代互不阻塞（父轮常在等子委派结果）；兄弟委派、链外会话之间按文件 / 全局命令互斥。
+- 远程（ssh）工作区不参与。
+
+**Main 侧**：`BotSessionHost` 删除整轮写锁（`workspaceHolder` / 等待提示 / `onlyIfIdle` 与重试按忙），写成员（`tools = 'all'`）spawn 时带 `writeLock = { label: 成员名, ancestors: 委派链祖先会话 }`，经 `spawn-parent.botWriteLock` 下发（协议校验 label 非空、ancestors 为非空字符串数组）。`BotQueueReason` 只剩 `turn` / `capacity`。
+
+**已知取舍**：两人互相等待对方持有的文件或「一人占文件、另一人要跑全局命令且自己也占着文件」会互等到超时，由超时打破；后台运行的全局命令只在前台启动阶段独占。
+
+**测试**：`workspaceClaims.test`（不同文件并行、同文件等待释放、委派链不互阻、超时信息与只提示一次、中止、不同工作区、全局命令等文件释放且执行期间阻塞写、命令识别正反例、两种工具包装），`botSessionHost.lock.test`（同目录写成员直接开跑、spawn 带名字与祖先、只读不带、`onlyIfIdle` 与重试不再按忙、排队原因 turn / capacity），`agent.test`（`botWriteLock` 协议校验）。
+
+**真机**（隔离 userData，同一 git 项目，alice = Max claude-opus-5-5，bob = Grok grok-4.7-build-fast，两个私聊并发）：alice 写 shared.txt 后 `sleep 40`；bob 同时写 b.txt 立即完成（不排队），随后改 shared.txt 的 apply_patch 在 17:52:40 发出、等到 alice 本轮结束 17:52:51 才落盘。alice 新建 c.txt 后 `sleep 30` 期间，bob 的 `git commit` 在 17:53:52 发出、17:54:16 才执行（alice 17:54:15 结束）。

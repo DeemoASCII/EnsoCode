@@ -47,9 +47,6 @@ export function BotLiveStatus({
   const queued = useBotsStore((s) =>
     conversationId ? s.queue.find((item) => item.conversationId === conversationId) : undefined
   );
-  const holder = useBotsStore(
-    (s) => s.bots.find((bot) => bot.id === queued?.holderBotId)?.name ?? '?'
-  );
   const activity = useMemo(() => liveActivity(session, Boolean(queued)), [session, queued]);
   const ticking = Boolean(activity && activity.state !== 'queued');
   const [now, setNow] = useState(() => Date.now());
@@ -64,13 +61,11 @@ export function BotLiveStatus({
     ? null
     : activity.state !== 'queued'
       ? t(STATE_LABELS[activity.state])
-      : queued?.reason === 'workspace'
-        ? t('Queued · waiting for {{name}} to free the workspace', { name: holder })
-        : queued?.reason === 'capacity'
-          ? t('Queued · concurrency limit reached')
-          : queued?.reason === 'turn'
-            ? t('Queued · waiting for the current turn to finish')
-            : t('Queued');
+      : queued?.reason === 'capacity'
+        ? t('Queued · concurrency limit reached')
+        : queued?.reason === 'turn'
+          ? t('Queued · waiting for the current turn to finish')
+          : t('Queued');
 
   return (
     <div className={cn('min-w-0 text-muted-foreground text-xs', className)}>

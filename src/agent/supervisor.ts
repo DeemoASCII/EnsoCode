@@ -216,6 +216,7 @@ import { createVirtualChooser, resolveClassifierModel } from './virtualClassifie
 import { registerVirtualModel } from './virtualModels';
 import { createWorkflowTool, WORKFLOW_STOPPED_BY_USER } from './workflow';
 import { listWorkflowPresets, loadWorkflowPreset, workflowPresetRoots } from './workflowPresets';
+import { WorkspaceClaims, withExclusiveCommand, withFileClaims } from './workspaceClaims';
 import { WorkspaceSwitchGate, workspaceBranchContextExtension } from './workspaceSwitch';
 import { withWritePreflight, withWriteScope } from './writeScope';
 
@@ -676,6 +677,8 @@ export class SessionSupervisor {
   private readonly pendingCommands = new Map<string, number>();
   private readonly mcp = new McpManager({ emit: (event) => this.options.emit(event) });
   private readonly bgTasks: BackgroundTaskManager;
+  /** Bot 写成员在同一工作区的文件占用 / 全局命令独占（全部会话同进程共享） */
+  private readonly workspaceClaims = new WorkspaceClaims();
   private runtimePromise: Promise<ModelRuntime> | null = null;
   /** 不可回收的会话（桌面正在查看 / 手机订阅），由 Main 全量下发 */
   private pinned: ReadonlySet<string> = new Set();
@@ -828,6 +831,7 @@ export class SessionSupervisor {
    *  清回 false，之后可携新 cwd + resumeFile 重新 spawn（Move to worktree / 闲置回收后再点开）。 */
   private async releaseParent(managed: ManagedSession, reason: string): Promise<void> {
     const parentId = managed.identity.sessionId;
+    this.workspaceClaims.forget(parentId);
     // 先收掉整棵子会话（coworker/child 都以 `${parentId}::` 为键前缀）
     for (const [id, child] of [...this.sessions]) {
       if (!id.startsWith(`${parentId}::`)) continue;
@@ -1124,7 +1128,8 @@ export class SessionSupervisor {
           command.botMode,
           command.botGroupTasks,
           command.protectedActions,
-          command.botRoutines
+          command.botRoutines,
+          command.botWriteLock
         );
         return;
       case 'spawn-child':
@@ -1612,7 +1617,8 @@ export class SessionSupervisor {
     botMode = false,
     botGroupTasks = false,
     protectedActions = false,
-    botRoutines = false
+    botRoutines = false,
+    botWriteLock?: { label: string; ancestors: string[] }
   ): Promise<void> {
     const sessionId = identity.sessionId;
     const sessionEditMode = resolveEditMode(requestedEditMode, hashlineEditEnabled);
@@ -1811,6 +1817,9 @@ export class SessionSupervisor {
             createLsToolDefinition(cwd) as unknown as Def,
           ];
     };
+    // Bot 写成员（本地工作区）参与同工作区写协调
+    const writeLock = botWriteLock && !remote ? botWriteLock : undefined;
+    if (writeLock) this.workspaceClaims.register({ id: sessionId, ...writeLock });
     // 后台任务 manager 本体始终本地 spawn:远程会话把命令变换成本地 ssh 命令
     const backgroundTransform = remote
       ? (command: string, taskCwd: string) => {
@@ -1842,13 +1851,20 @@ export class SessionSupervisor {
       writeScope?: readonly string[]
     ): Def[] => {
       const guarded = (definition: Def): Def => (cp ? withCheckpoint(definition, cp) : definition);
+      const claimContext = { owner: sessionId, cwd };
+      const claimFiles = (definition: Def): Def =>
+        writeLock ? withFileClaims(definition, this.workspaceClaims, claimContext) : definition;
+      const exclusive = (definition: Def): Def =>
+        writeLock
+          ? withExclusiveCommand(definition, this.workspaceClaims, claimContext)
+          : definition;
       // scope 与完整只读预检都在审批之外；checkpoint 仅在批准后触发。
       const scoped = (
         kind: 'file-edit' | 'file-write',
         definition: Def,
         preflight?: (params: unknown, signal: AbortSignal | undefined) => Promise<unknown>
       ): Def => {
-        const approved = withApproval(toolGate, kind, guarded(definition));
+        const approved = withApproval(toolGate, kind, claimFiles(guarded(definition)));
         return withWriteScope(
           preflight ? withWritePreflight(approved, preflight) : approved,
           cwd,
@@ -1883,27 +1899,29 @@ export class SessionSupervisor {
         withApproval(
           toolGate,
           'command',
-          guarded(
-            withBackground(
-              withRtkOptimization(
-                createSessionCommandTool({
-                  cwd,
-                  remote: Boolean(remoteOps),
-                  preference: windowsLocalShell,
-                  operations: remoteOps?.bash,
-                }) as unknown as Def,
-                {
-                  binaryPath: process.env.ENSO_RTK_PATH,
-                  dataDir: path.join(this.options.agentDir, 'rtk'),
-                  cwd,
-                  remote: Boolean(remoteOps),
-                  enabled: rtkEnabled,
-                }
-              ),
-              this.bgTasks,
-              sessionId,
-              cwd,
-              backgroundTransform
+          exclusive(
+            guarded(
+              withBackground(
+                withRtkOptimization(
+                  createSessionCommandTool({
+                    cwd,
+                    remote: Boolean(remoteOps),
+                    preference: windowsLocalShell,
+                    operations: remoteOps?.bash,
+                  }) as unknown as Def,
+                  {
+                    binaryPath: process.env.ENSO_RTK_PATH,
+                    dataDir: path.join(this.options.agentDir, 'rtk'),
+                    cwd,
+                    remote: Boolean(remoteOps),
+                    enabled: rtkEnabled,
+                  }
+                ),
+                this.bgTasks,
+                sessionId,
+                cwd,
+                backgroundTransform
+              )
             )
           )
         ),
@@ -3235,6 +3253,7 @@ export class SessionSupervisor {
         // 本轮摘要随 turn-completed 下发：renderer 冷会话没有正文，只能由 worker 切
         const digest = buildTurnDigest(managed.messages, managed.turnStartIndex);
         managed.turnStartIndex = managed.messages.length;
+        this.workspaceClaims.release(managed.identity.sessionId);
         this.options.emit({
           type: 'turn-completed',
           identity: managed.identity,
@@ -3601,6 +3620,7 @@ export class SessionSupervisor {
       });
     }
     this.emitStatus(managed, error);
+    this.workspaceClaims.release(managed.identity.sessionId);
     this.options.emit({
       type: 'turn-failed',
       identity: managed.identity,

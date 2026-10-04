@@ -24,7 +24,9 @@ let host: BotSessionHost;
 class FakeRuntime implements BotRuntimePort {
   prompts: Array<{ id: string; text: string }> = [];
   steers: Array<{ id: string; text: string }> = [];
-  async spawn(_spec: BotSpawnSpec) {
+  specs: BotSpawnSpec[] = [];
+  async spawn(spec: BotSpawnSpec) {
+    this.specs.push(spec);
     return { ok: true };
   }
   prompt(id: string, text: string) {
@@ -117,133 +119,45 @@ function delegate(parentId: string, botId: string, delegationId: string) {
   return child.conversationId;
 }
 
-describe('BotSessionHost 工作区写锁', () => {
-  it('同一工作区只有一个写成员在跑轮，锁释放时只唤醒一个等待者', async () => {
+describe('BotSessionHost 同工作区写协调（交给 worker 按文件占用）', () => {
+  it('同一工作区的写成员不再整轮排队，各自直接开跑', async () => {
     const projectId = project();
     const [a, b, c] = ['A', 'B', 'C'].map((name) => bot(name));
-    const first = await send(chat([a.id], projectId).id, a.id, 'a');
-    const second = await send(chat([b.id], projectId).id, b.id, 'b');
-    const third = await send(chat([c.id], projectId).id, c.id, 'c');
-    expect(second.queued).toBe(true);
-    expect(third.queued).toBe(true);
-    expect(prompted()).toEqual(['a']);
-    complete(first.conversationId);
-    await flush();
-    expect(prompted()).toEqual(['a', 'b']);
-    complete(second.conversationId);
-    await flush();
+    for (const [member, text] of [
+      [a, 'a'],
+      [b, 'b'],
+      [c, 'c'],
+    ] as const)
+      expect((await send(chat([member.id], projectId).id, member.id, text)).queued).toBeUndefined();
     expect(prompted()).toEqual(['a', 'b', 'c']);
-  });
-
-  it('不同工作区、只读成员互不阻塞；同一会话多次投递照常 steer', async () => {
-    const a = bot('A');
-    const reader = bot('R', 'readonly');
-    const other = bot('O');
-    const projectId = project();
-    const first = await send(chat([a.id], projectId).id, a.id, 'a');
-    expect((await send(chat([reader.id], projectId).id, reader.id, 'r')).queued).toBeUndefined();
-    expect(
-      (await send(chat([other.id], project('elsewhere')).id, other.id, 'o')).queued
-    ).toBeUndefined();
-    await send(
-      chats.get(registry.conversation(first.conversationId)!.bot!.chatId!)!.id,
-      a.id,
-      'more'
-    );
-    expect(runtime.steers).toEqual([{ id: first.conversationId, text: 'more' }]);
-    expect(prompted()).toEqual(['a', 'r', 'o']);
-  });
-
-  it('只读成员在跑时不占锁', async () => {
-    const projectId = project();
-    const reader = bot('R', 'readonly');
-    const a = bot('A');
-    await send(chat([reader.id], projectId).id, reader.id, 'r');
-    expect((await send(chat([a.id], projectId).id, a.id, 'a')).queued).toBeUndefined();
-  });
-
-  it('worker 退出清空锁，等待者随即开跑', async () => {
-    const projectId = project();
-    const a = bot('A');
-    const b = bot('B');
-    await send(chat([a.id], projectId).id, a.id, 'a');
-    await send(chat([b.id], projectId).id, b.id, 'b');
-    host.observe({ type: 'worker-exited' });
-    await flush();
-    expect(prompted()).toEqual(['a', 'b']);
-  });
-
-  it('onlyIfIdle 的投递遇到被占的工作区按忙拒绝，不排队', async () => {
-    const projectId = project();
-    const a = bot('A');
-    const b = bot('B');
-    await send(chat([a.id], projectId).id, a.id, 'a');
-    expect(
-      await host.deliver(chat([b.id], projectId).id, b.id, 'result', { onlyIfIdle: true })
-    ).toEqual({ ok: false, error: 'session-busy' });
     expect(host.queueState()).toEqual([]);
   });
 
-  it('群聊成员等待时在时间线写一次「等待 X 释放工作目录」', async () => {
+  it('写成员 spawn 时带名字与委派链祖先；只读成员不带', async () => {
     const projectId = project();
     const a = bot('Alice');
     const b = bot('Bob');
-    const d = bot('Dave');
-    const alice = await send(chat([a.id], projectId).id, a.id, 'a');
-    const group = chat([b.id, d.id], projectId, 'group');
-    await send(group.id, b.id, 'b');
-    const dave = await send(chat([d.id], project('other')).id, d.id, 'd');
-    complete(dave.conversationId);
-    await flush();
-    expect(prompted()).toEqual(['a', 'd']);
-    complete(alice.conversationId);
-    await flush();
-    expect(prompted()).toEqual(['a', 'd', 'b']);
-    const notes = chats
-      .readAfter(group.id, 0)
-      .filter((entry) => entry.kind === 'system')
-      .map((entry) => (entry.kind === 'system' ? entry.text : ''));
-    expect(notes).toEqual(['等待 Alice 释放工作目录']);
-  });
-
-  it('委派子会话借用祖先的锁：父轮仍在跑时子委派照常开跑，不死锁', async () => {
-    const projectId = project();
-    const a = bot('A');
-    const b = bot('B');
-    const c = bot('C');
+    const c = bot('Carol');
+    const reader = bot('Reader', 'readonly');
     const parent = await send(chat([a.id], projectId).id, a.id, 'a');
+    await send(chat([reader.id], projectId).id, reader.id, 'r');
     const child = delegate(parent.conversationId, b.id, 'd1');
-    const sent = await host.deliverConversation(child, 'task', { queueIfBusy: true });
-    expect(sent).toMatchObject({ ok: true });
-    expect(sent.ok && sent.queued).toBeFalsy();
+    await host.deliverConversation(child, 'task', { queueIfBusy: true });
     const grandchild = delegate(child, c.id, 'd2');
-    expect((await host.deliverConversation(grandchild, 'sub', { queueIfBusy: true })).ok).toBe(
-      true
-    );
-    expect(prompted()).toEqual(['a', 'task', 'sub']);
+    await host.deliverConversation(grandchild, 'sub', { queueIfBusy: true });
+    const lockOf = (id: string) =>
+      runtime.specs.find((spec) => spec.conversationId === id)?.writeLock;
+    expect(lockOf(parent.conversationId)).toEqual({ label: 'Alice', ancestors: [] });
+    expect(runtime.specs.find((spec) => spec.bot.id === reader.id)?.writeLock).toBeUndefined();
+    expect(lockOf(child)).toEqual({ label: 'Bob', ancestors: [parent.conversationId] });
+    expect(lockOf(grandchild)).toEqual({
+      label: 'Carol',
+      ancestors: [child, parent.conversationId],
+    });
+    expect(prompted()).toEqual(['a', 'r', 'task', 'sub']);
   });
 
-  it('兄弟委派之间仍互斥；父轮结束后的新投递等子委派写完', async () => {
-    const projectId = project();
-    const a = bot('A');
-    const b = bot('B');
-    const c = bot('C');
-    const parentChat = chat([a.id], projectId);
-    const parent = await send(parentChat.id, a.id, 'a');
-    const first = delegate(parent.conversationId, b.id, 'd1');
-    const second = delegate(parent.conversationId, c.id, 'd2');
-    await host.deliverConversation(first, 'one', { queueIfBusy: true });
-    expect((await host.deliverConversation(second, 'two', { queueIfBusy: true })).ok).toBe(true);
-    expect(prompted()).toEqual(['a', 'one']);
-    complete(parent.conversationId);
-    await flush();
-    expect(prompted()).toEqual(['a', 'one']);
-    complete(first);
-    await flush();
-    expect(prompted()).toEqual(['a', 'one', 'two']);
-  });
-
-  it('私聊重试在工作区被占时按忙拒绝', async () => {
+  it('onlyIfIdle 投递与私聊重试不因别的写成员在跑而拒绝', async () => {
     const retries: string[] = [];
     runtime = Object.assign(new FakeRuntime(), {
       retry: (id: string) => {
@@ -255,49 +169,42 @@ describe('BotSessionHost 工作区写锁', () => {
     const projectId = project();
     const a = bot('A');
     const b = bot('B');
+    const c = bot('C');
     await send(chat([a.id], projectId).id, a.id, 'a');
-    const session = host.ensureSession(chat([b.id], projectId).id, b.id);
+    expect(
+      await host.deliver(chat([b.id], projectId).id, b.id, 'result', { onlyIfIdle: true })
+    ).toMatchObject({ ok: true });
+    const session = host.ensureSession(chat([c.id], projectId).id, c.id);
     if (!session.ok) throw new Error(session.error);
-    expect(await host.retryConversation(session.conversationId)).toEqual({
-      ok: false,
-      error: 'session-busy',
-    });
-    expect(retries).toEqual([]);
+    expect(await host.retryConversation(session.conversationId)).toMatchObject({ ok: true });
+    expect(retries).toEqual([session.conversationId]);
   });
 });
 
 describe('BotSessionHost 排队原因', () => {
-  it('等工作目录时带持锁成员，等同会话上一轮时为 turn', async () => {
+  it('等同会话上一轮时为 turn', async () => {
     const projectId = project();
     const a = bot('A');
-    const b = bot('B');
     const direct = chat([a.id], projectId);
     await send(direct.id, a.id, 'a');
-    await send(chat([b.id], projectId).id, b.id, 'b');
     await host.deliver(direct.id, a.id, 'next', { queueIfBusy: true });
-    expect(
-      host.queueState().map(({ botId, reason, holderBotId }) => [botId, reason, holderBotId])
-    ).toEqual([
-      [b.id, 'workspace', a.id],
-      [a.id, 'turn', undefined],
-    ]);
+    expect(host.queueState().map(({ botId, reason }) => [botId, reason])).toEqual([[a.id, 'turn']]);
   });
 
-  it('并发名额满时为 capacity；原因变化时补发 queue 事件', async () => {
+  it('并发名额满时为 capacity；出队后补发 queue 事件', async () => {
     const events: Array<{ kind: string; chatId?: string }> = [];
     make({ maxRunningTurns: 1, emit: (event) => events.push(event as never) });
     const projectId = project();
-    const [a, b, c] = ['A', 'B', 'C'].map((name) => bot(name));
+    const [a, b] = ['A', 'B'].map((name) => bot(name));
     const first = await send(chat([a.id], projectId).id, a.id, 'a');
-    await send(chat([b.id], project('other')).id, b.id, 'b');
-    const third = chat([c.id], projectId);
-    await send(third.id, c.id, 'c');
-    expect(host.queueState().map((item) => item.reason)).toEqual(['capacity', 'workspace']);
+    const second = chat([b.id], projectId);
+    await send(second.id, b.id, 'b');
+    expect(host.queueState().map((item) => item.reason)).toEqual(['capacity']);
     events.length = 0;
     complete(first.conversationId);
     await flush();
     expect(prompted()).toEqual(['a', 'b']);
-    expect(host.queueState()).toMatchObject([{ botId: c.id, reason: 'capacity' }]);
-    expect(events).toContainEqual({ kind: 'queue', chatId: third.id });
+    expect(host.queueState()).toEqual([]);
+    expect(events).toContainEqual({ kind: 'queue', chatId: second.id });
   });
 });

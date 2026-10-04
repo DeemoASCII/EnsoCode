@@ -91,7 +91,7 @@ function unquote(token: string): string {
 }
 
 /** 把一段命令拆成去引号的 token，并剥掉 env 赋值与 sudo/xargs 之类的包装程序 */
-function programTokens(segment: string): string[] {
+export function programTokens(segment: string): string[] {
   let tokens = segment.trim().split(/\s+/).map(unquote).filter(Boolean);
   for (;;) {
     while (tokens.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[0])) tokens = tokens.slice(1);

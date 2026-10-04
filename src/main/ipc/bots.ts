@@ -283,6 +283,7 @@ function createRuntime(botsRoot: string): BotRuntimePort {
             mcpServerIds: spec.bot.mcpServerIds,
             ...(spec.groupTasks ? { groupTasks: true } : {}),
             ...(spec.routines ? { routines: true } : {}),
+            ...(spec.writeLock ? { writeLock: spec.writeLock } : {}),
           },
         }
       );

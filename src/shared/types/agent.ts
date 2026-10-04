@@ -1039,6 +1039,8 @@ export type AgentCommand =
       botGroupTasks?: boolean;
       /** Bot 私聊 / 群聊成员会话（非委派）：挂 routine_propose 工具 */
       botRoutines?: boolean;
+      /** Bot 写成员：同工作区按文件占用、全局命令短独占；祖先会话（委派链）互不阻塞 */
+      botWriteLock?: { label: string; ancestors: string[] };
       /** 受保护动作底线（Bot 会话恒开；Code 会话由设置项决定） */
       protectedActions?: boolean;
       /** 期望的 Plan 模式；与会话 jsonl 折叠结果不同时由 worker 追加切换条目 */
@@ -2797,6 +2799,7 @@ export function parseAgentCommand(value: unknown): AgentCommand | null {
           'botMode',
           'botGroupTasks',
           'botRoutines',
+          'botWriteLock',
           'protectedActions',
           'planMode',
         ]) ||
@@ -2846,6 +2849,11 @@ export function parseAgentCommand(value: unknown): AgentCommand | null {
         (value.botMode !== undefined && typeof value.botMode !== 'boolean') ||
         (value.botGroupTasks !== undefined && typeof value.botGroupTasks !== 'boolean') ||
         (value.botRoutines !== undefined && typeof value.botRoutines !== 'boolean') ||
+        (value.botWriteLock !== undefined &&
+          (!isRecord(value.botWriteLock) ||
+            !isNonEmptyString(value.botWriteLock.label) ||
+            !Array.isArray(value.botWriteLock.ancestors) ||
+            !value.botWriteLock.ancestors.every(isNonEmptyString))) ||
         (value.protectedActions !== undefined && typeof value.protectedActions !== 'boolean')
       ) {
         return null;

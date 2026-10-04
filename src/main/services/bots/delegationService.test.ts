@@ -734,7 +734,7 @@ describe('stopping the parent turn', () => {
     await vi.advanceTimersByTimeAsync(0);
     expect([f.store.get(ids.kept)?.state, f.store.get(ids.drop)?.state]).toEqual([
       'running',
-      'queued',
+      'running',
     ]);
     // 下一轮被停止只影响下一轮自己发起的委派
     await f.host.deliverConversation(f.parent, 'again');
@@ -743,7 +743,7 @@ describe('stopping the parent turn', () => {
     await vi.advanceTimersByTimeAsync(0);
     expect([f.store.get(ids.kept)?.state, f.store.get(ids.drop)?.state]).toEqual([
       'running',
-      'queued',
+      'running',
     ]);
     f.service.dispose();
   });

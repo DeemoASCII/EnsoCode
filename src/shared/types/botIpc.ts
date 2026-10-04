@@ -252,12 +252,10 @@ export interface BotQueueItem {
   /** 0 = 下一个补位 */
   position: number;
   reason?: BotQueueReason;
-  /** reason 为 workspace 时持有工作目录写锁的成员 */
-  holderBotId?: string;
 }
 
-/** turn：同会话上一轮未结束；workspace：等工作目录写锁；capacity：并发名额已满 */
-export type BotQueueReason = 'turn' | 'workspace' | 'capacity';
+/** turn：同会话上一轮未结束；capacity：并发名额已满（同工作区写冲突在工具调用内等待） */
+export type BotQueueReason = 'turn' | 'capacity';
 
 export interface BotSessionRecord {
   conversationId: string;
