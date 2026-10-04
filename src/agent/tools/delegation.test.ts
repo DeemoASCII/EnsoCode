@@ -18,9 +18,16 @@ it('normalizes optional nulls and boolean text before full typed schema validati
     task: 't',
     deadlineMinutes: 30,
   });
-  expect(normalizeDelegationParams({ to: 'Bob', task: 't', deadlineMinutes: null })).toEqual({
+  expect(
+    normalizeDelegationParams({ to: 'Bob', task: 't', deadlineMinutes: null, keep: null })
+  ).toEqual({
     to: 'Bob',
     task: 't',
+  });
+  expect(normalizeDelegationParams({ to: 'Bob', task: 't', keep: 'true' })).toEqual({
+    to: 'Bob',
+    task: 't',
+    keep: true,
   });
   expect(normalizeDelegationParams({ deadlineMinutes: 'soon' })).toEqual({
     deadlineMinutes: 'soon',
@@ -34,6 +41,7 @@ it('normalizes optional nulls and boolean text before full typed schema validati
     'task',
     'context',
     'deadlineMinutes',
+    'keep',
   ]);
   for (const tool of tools) {
     const schema = tool.parameters as unknown as {

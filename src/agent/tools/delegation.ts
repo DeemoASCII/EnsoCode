@@ -11,10 +11,12 @@ export type DelegationOp =
 export function normalizeDelegationParams(raw: unknown): unknown {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return raw;
   const params = { ...raw } as Record<string, unknown>;
-  for (const key of ['id', 'context', 'cancel', 'taskId', 'deadlineMinutes'])
+  for (const key of ['id', 'context', 'cancel', 'taskId', 'deadlineMinutes', 'keep'])
     if (params[key] === null) delete params[key];
-  if (params.cancel === 'true') params.cancel = true;
-  if (params.cancel === 'false') params.cancel = false;
+  for (const key of ['cancel', 'keep']) {
+    if (params[key] === 'true') params[key] = true;
+    if (params[key] === 'false') params[key] = false;
+  }
   if (typeof params.taskId === 'number') params.taskId = String(params.taskId);
   if (typeof params.deadlineMinutes === 'string' && params.deadlineMinutes.trim()) {
     const minutes = Number(params.deadlineMinutes);
@@ -59,7 +61,7 @@ export function createDelegationTools(
   return [
     define(
       'delegate',
-      "Delegate a task to another member by name or id. Returns immediately; results arrive asynchronously. Context is truncated to 8000 characters. The delegation fails with a timeout after deadlineMinutes (capped by the member's own limit, 240 minutes by default)." +
+      "Delegate a task to another member by name or id. Returns immediately; results arrive asynchronously. Context is truncated to 8000 characters. The delegation fails with a timeout after deadlineMinutes (capped by the member's own limit, 240 minutes by default). If the user stops or interrupts your current turn, delegations started in it are canceled unless keep is true." +
         (options.groupTasks
           ? ' Pass taskId (e.g. "#3") to hand a group board task to the member: the task becomes doing with them as assignee, and is marked done (or returned to todo on failure/cancel) when the delegation ends.'
           : ''),
@@ -69,6 +71,7 @@ export function createDelegationTools(
         context: { type: 'string' },
         ...(options.groupTasks ? { taskId: { type: 'string', minLength: 1 } } : {}),
         deadlineMinutes: { type: 'number', minimum: 1 },
+        keep: { type: 'boolean' },
       },
       ['to', 'task']
     ),

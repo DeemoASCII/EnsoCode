@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { SourceAuthorityRegistry } from '../sourceAuthorityRegistry';
 import { BotSessionHost } from './botSessionHost';
 import { BotStore } from './botStore';
@@ -535,4 +535,143 @@ it('retry is bound by the per-parent concurrency cap', async () => {
   expect(f.service.retry(first.delegationId)).toMatchObject({ ok: false });
   expect(f.store.list().some((item) => item.retryOf === first.delegationId)).toBe(false);
   f.service.dispose();
+});
+
+describe('stopping the parent turn', () => {
+  const results = (f: ReturnType<typeof fixture>) =>
+    f.prompts.filter((p) => p.id === f.parent && p.text.includes('<delegation-result'));
+  async function started(f: ReturnType<typeof fixture>) {
+    await f.host.deliverConversation(f.parent, 'go');
+    await vi.advanceTimersByTimeAsync(0);
+    const drop = f.service.delegate(f.parent, { to: 'Bob', task: 'drop' });
+    const kept = f.service.delegate(f.parent, { to: 'Bob', task: 'kept', keep: true });
+    if (!drop.ok || !kept.ok) throw new Error('delegate');
+    await vi.advanceTimersByTimeAsync(0);
+    return { drop: drop.delegationId, kept: kept.delegationId };
+  }
+
+  it.each([
+    [
+      'stopTurn',
+      (f: ReturnType<typeof fixture>, chatId: string, botId: string) =>
+        f.host.stopTurn(chatId, botId),
+    ],
+    ['abortConversation', (f: ReturnType<typeof fixture>) => f.host.abortConversation(f.parent)],
+  ] as const)('%s cancels the turn’s delegations except keep', async (_name, stop) => {
+    const f = fixture();
+    const ids = await started(f);
+    const drop = f.store.get(ids.drop)!;
+    expect(drop.batchId).toBeDefined();
+    expect(f.store.get(ids.kept)).toMatchObject({ keep: true, batchId: drop.batchId });
+    await stop(f, drop.chatId!, drop.parentBotId);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(f.store.get(ids.drop)?.state).toBe('canceled');
+    expect(f.abort).toHaveBeenCalledWith(drop.childConversationId);
+    expect(f.store.get(ids.kept)?.state).toBe('running');
+    expect(results(f)).toHaveLength(0);
+    // keep 的结果回来后整批（含被取消的）照常合并回传
+    f.finish(f.store.get(ids.kept)!.childConversationId);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(results(f)).toHaveLength(1);
+    expect(results(f)[0].text).toContain(ids.drop);
+    f.service.dispose();
+  });
+
+  it('a user abort reported by the worker (stopReason aborted) cascades too', async () => {
+    const f = fixture();
+    const ids = await started(f);
+    f.host.observe({
+      type: 'message-upsert',
+      identity: { sessionId: f.parent, generation: 'g' },
+      seq: 2,
+      index: 1,
+      message: { role: 'assistant', content: [], stopReason: 'aborted' },
+    });
+    f.finish(f.parent);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(f.store.get(ids.drop)?.state).toBe('canceled');
+    expect(f.store.get(ids.kept)?.state).toBe('running');
+    f.service.dispose();
+  });
+
+  it('a stopped turn whose batch has nothing left running is closed without waking the parent', async () => {
+    const f = fixture();
+    await f.host.deliverConversation(f.parent, 'go');
+    await vi.advanceTimersByTimeAsync(0);
+    const done = f.service.delegate(f.parent, { to: 'Bob', task: 'quick' });
+    const drop = f.service.delegate(f.parent, { to: 'Bob', task: 'slow' });
+    if (!done.ok || !drop.ok) throw new Error('delegate');
+    await vi.advanceTimersByTimeAsync(0);
+    f.finish(f.store.get(done.delegationId)!.childConversationId);
+    await vi.advanceTimersByTimeAsync(0);
+    await f.host.abortConversation(f.parent);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(f.store.get(drop.delegationId)?.state).toBe('canceled');
+    expect(f.store.get(done.delegationId)?.deliveredAt).toBeDefined();
+    expect(f.store.get(drop.delegationId)?.deliveredAt).toBeDefined();
+    expect(results(f)).toHaveLength(0);
+    f.service.dispose();
+  });
+
+  it('normal completion, errors and other turns leave delegations running', async () => {
+    const f = fixture();
+    const ids = await started(f);
+    f.host.observe({
+      type: 'message-upsert',
+      identity: { sessionId: f.parent, generation: 'g' },
+      seq: 2,
+      index: 1,
+      message: { role: 'assistant', content: [], stopReason: 'error', errorMessage: 'boom' },
+    });
+    f.finish(f.parent);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(f.store.get(ids.drop)?.state).toBe('running');
+    // 下一轮被停止只影响下一轮自己发起的委派
+    await f.host.deliverConversation(f.parent, 'again');
+    await vi.advanceTimersByTimeAsync(0);
+    await f.host.abortConversation(f.parent);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(f.store.get(ids.drop)?.state).toBe('running');
+    f.service.dispose();
+  });
+
+  it('cascades down: a canceled child stops its own delegations', async () => {
+    const f = fixture();
+    const carol = f.deps.bots.create({ name: 'Carol' }, []);
+    if (!carol.ok) throw new Error('carol');
+    await f.host.deliverConversation(f.parent, 'go');
+    await vi.advanceTimersByTimeAsync(0);
+    const sent = f.service.delegate(f.parent, { to: 'Bob', task: 'lead' });
+    if (!sent.ok) throw new Error(sent.error);
+    await vi.advanceTimersByTimeAsync(0);
+    const child = f.store.get(sent.delegationId)!.childConversationId;
+    const nested = f.service.delegate(child, { to: 'Carol', task: 'sub' });
+    if (!nested.ok) throw new Error(nested.error);
+    await vi.advanceTimersByTimeAsync(0);
+    await f.host.abortConversation(f.parent);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(f.store.get(sent.delegationId)?.state).toBe('canceled');
+    expect(f.store.get(nested.delegationId)?.state).toBe('canceled');
+    f.service.dispose();
+  });
+
+  it('returns cascaded board tasks to todo while kept ones stay assigned', async () => {
+    const f = fixture();
+    f.service.dispose();
+    const tasks = { gate: vi.fn(), sync: vi.fn() };
+    const service = new DelegationService({ ...f.deps, tasks });
+    await f.host.deliverConversation(f.parent, 'go');
+    await vi.advanceTimersByTimeAsync(0);
+    const drop = service.delegate(f.parent, { to: 'Bob', task: 'drop' });
+    const kept = service.delegate(f.parent, { to: 'Bob', task: 'kept', keep: true });
+    if (!drop.ok || !kept.ok) throw new Error('delegate');
+    await vi.advanceTimersByTimeAsync(0);
+    tasks.sync.mockClear();
+    await f.host.abortConversation(f.parent);
+    expect(tasks.sync).toHaveBeenCalledWith(
+      expect.objectContaining({ id: drop.delegationId, state: 'canceled' })
+    );
+    expect(tasks.sync).not.toHaveBeenCalledWith(expect.objectContaining({ id: kept.delegationId }));
+    service.dispose();
+  });
 });

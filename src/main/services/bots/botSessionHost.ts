@@ -129,6 +129,8 @@ export interface BotTurnFinished {
   delegationId?: string;
   /** 本宿主发起该轮时分配的键；委派记录的 batchId 与之相同 */
   turnKey?: string;
+  /** 进行中的轮次被用户停止或中断（不含预算 / 出错）；委派据此级联取消该轮发起的子委派 */
+  stopped?: true;
 }
 
 interface Delivery extends BotDeliverOptions {
@@ -546,7 +548,8 @@ export class BotSessionHost {
       this.lastAssistant.clear();
       this.waiting.clear();
       for (const id of [...this.lastOutput.keys()]) this.quiet(id);
-      for (const id of interrupted) this.finish(id, undefined, false, 'worker-exited');
+      for (const id of interrupted)
+        this.finish(id, undefined, false, 'worker-exited', '', undefined, true);
       this.pump();
       return;
     }
@@ -606,7 +609,9 @@ export class BotSessionHost {
           event.turnId,
           !failed,
           failed ? (last?.errorMessage ?? last?.stopReason) : undefined,
-          last?.text ?? event.digest?.assistantText ?? ''
+          last?.text ?? event.digest?.assistantText ?? '',
+          undefined,
+          last?.stopReason === 'aborted'
         );
         this.lastAssistant.delete(id);
         this.release(id);
@@ -899,7 +904,15 @@ export class BotSessionHost {
     const timer = setTimeout(() => {
       this.settleTimers.delete(id);
       if (this.disposed || this.slots.get(id) !== slot || this.running.has(id)) return;
-      this.finish(id, undefined, false, error ?? 'interrupted', this.lastAssistant.get(id)?.text);
+      this.finish(
+        id,
+        undefined,
+        false,
+        error ?? 'interrupted',
+        this.lastAssistant.get(id)?.text,
+        undefined,
+        error === undefined
+      );
       this.lastAssistant.delete(id);
       this.release(id);
     }, this.settleGraceMs);
@@ -970,7 +983,8 @@ export class BotSessionHost {
     ok: boolean,
     error?: string,
     text = '',
-    deliveryId: string | null | undefined = this.activeDeliveries.get(conversationId)
+    deliveryId: string | null | undefined = this.activeDeliveries.get(conversationId),
+    stopped = false
   ): void {
     const binding = this.binding(conversationId);
     if (!binding) return;
@@ -986,6 +1000,7 @@ export class BotSessionHost {
       ...(error ? { error } : {}),
       ...(binding.delegationId ? { delegationId: binding.delegationId } : {}),
       ...(turnKey ? { turnKey } : {}),
+      ...(stopped ? { stopped: true as const } : {}),
     };
     if (deliveryId === this.activeDeliveries.get(conversationId))
       this.activeDeliveries.delete(conversationId);
@@ -1049,7 +1064,8 @@ export class BotSessionHost {
 
   private cancelActive(id: string, reason = 'canceled'): void {
     this.cancelSettle(id);
-    if (this.turnActive(id)) this.finish(id, undefined, false, reason);
+    if (this.turnActive(id))
+      this.finish(id, undefined, false, reason, '', undefined, reason !== BOT_BUDGET_ERROR);
     this.running.delete(id);
     this.slots.delete(id);
     this.lastAssistant.delete(id);

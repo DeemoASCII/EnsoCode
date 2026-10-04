@@ -125,6 +125,8 @@ export interface Delegation {
   retryOf?: string;
   /** 本次委派的时限（分钟）：发起方 deadlineMinutes 与目标上限取小 */
   timeoutMinutes?: number;
+  /** 发起方要求父回合被停止 / 中断后仍继续 */
+  keep?: true;
 }
 
 export function parseDelegation(value: unknown): Delegation | undefined {
@@ -177,6 +179,7 @@ export function parseDelegation(value: unknown): Delegation | undefined {
   if (isText(value.retryOf)) record.retryOf = value.retryOf;
   if (typeof value.timeoutMinutes === 'number' && value.timeoutMinutes > 0)
     record.timeoutMinutes = value.timeoutMinutes;
+  if (value.keep === true) record.keep = true;
   if (value.effectivePermissions !== undefined) {
     const permissions = value.effectivePermissions;
     if (

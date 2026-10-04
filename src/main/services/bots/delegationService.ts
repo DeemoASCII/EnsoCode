@@ -48,6 +48,8 @@ export interface DelegateInput {
   taskId?: string;
   /** 期望时限（分钟），不超过目标成员的委派时限 */
   deadlineMinutes?: number;
+  /** 父回合被停止 / 中断后仍继续 */
+  keep?: boolean;
 }
 export type DelegateResult =
   | { ok: true; delegationId: string; warning?: string }
@@ -91,6 +93,7 @@ export class DelegationService {
         this.save({ ...record, state: 'failed', failure: 'interrupted', finishedAt: Date.now() });
     }
     this.unsubscribe = deps.host.onTurnFinished((event) => {
+      if (event.stopped && event.turnKey) this.stopBatch(event.conversationId, event.turnKey);
       if (event.delegationId) {
         const record = deps.store.get(event.delegationId);
         if (record && active(record) && record.childConversationId === event.conversationId) {
@@ -219,6 +222,7 @@ export class DelegationService {
       ...(batchId ? { batchId } : {}),
       ...(taskId ? { taskId } : {}),
       ...(options.retryOf ? { retryOf: options.retryOf } : {}),
+      ...(input.keep ? { keep: true } : {}),
       timeoutMinutes,
     };
     this.save(record);
@@ -315,6 +319,25 @@ export class DelegationService {
       },
       { standalone: true, retryOf: id }
     );
+  }
+
+  /** 父回合被停止：取消该轮发起且未 keep 的委派；整批都已结束则只落时间线，不再唤醒父会话 */
+  private stopBatch(parentConversationId: string, batchId: string): void {
+    const batch = () =>
+      this.deps.store
+        .list()
+        .filter(
+          (record) =>
+            record.parentConversationId === parentConversationId && record.batchId === batchId
+        );
+    this.discarding = true;
+    try {
+      for (const record of batch()) if (active(record) && !record.keep) this.cancel(record.id);
+    } finally {
+      this.discarding = false;
+    }
+    const rest = batch();
+    if (rest.length && !rest.some(active)) this.delivered(rest);
   }
 
   observeRunning(conversationId: string): void {

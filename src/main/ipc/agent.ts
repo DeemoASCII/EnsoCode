@@ -1164,7 +1164,8 @@ export function registerAgentHandlers(): void {
           typeof input.task === 'string' &&
           (input.context === undefined || typeof input.context === 'string') &&
           (input.taskId === undefined || typeof input.taskId === 'string') &&
-          (input.deadlineMinutes === undefined || typeof input.deadlineMinutes === 'number')
+          (input.deadlineMinutes === undefined || typeof input.deadlineMinutes === 'number') &&
+          (input.keep === undefined || typeof input.keep === 'boolean')
         ) {
           result = service.delegate(identity.sessionId, {
             to: input.to,
@@ -1174,6 +1175,7 @@ export function registerAgentHandlers(): void {
             ...(typeof input.deadlineMinutes === 'number'
               ? { deadlineMinutes: input.deadlineMinutes }
               : {}),
+            ...(input.keep === true ? { keep: true } : {}),
           });
         } else if (
           op === 'check_delegation' &&

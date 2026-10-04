@@ -38,6 +38,11 @@ describe('delegation policy', () => {
     expect(parseDelegation({ ...record, retryOf: 3 })).not.toHaveProperty('retryOf');
     expect(parseDelegation({ ...record, retryOf: '' })).not.toHaveProperty('retryOf');
   });
+  it('keeps keep only when it is literally true', () => {
+    expect(parseDelegation({ ...record, keep: true })?.keep).toBe(true);
+    expect(parseDelegation({ ...record, keep: 'true' })).not.toHaveProperty('keep');
+    expect(parseDelegation({ ...record, keep: false })).not.toHaveProperty('keep');
+  });
   it('rejects self, archived, denied, out-of-group, depth and concurrency', () => {
     const parent = profile(a),
       target = profile(b);
