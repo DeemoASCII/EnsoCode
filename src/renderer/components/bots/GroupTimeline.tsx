@@ -8,6 +8,7 @@ import { toolLabel } from '@/lib/toolLabels';
 import { cn } from '@/lib/utils';
 import { type ChatRuntime, type TimelineState, useBotsStore } from '@/stores/bots';
 import { isRetried } from '@/stores/bots/delegations';
+import { focusStep } from '@/stores/bots/focus';
 import {
   anchorDelegations,
   buildRows,
@@ -15,6 +16,7 @@ import {
   type TurnStep,
   turnSteps,
 } from '@/stores/bots/groupTimeline';
+import { ArtifactCards } from './ArtifactCards';
 import { BotAvatar } from './BotAvatar';
 import { DelegationCard } from './DelegationCard';
 
@@ -28,6 +30,9 @@ interface GroupTimelineProps {
   runtime: ChatRuntime | undefined;
   /** 本群全部委派记录；进行中的接在时间线末尾 */
   delegations: Delegation[];
+  /** 搜索跳转：滚到该条并短暂高亮 */
+  focus?: { seq: number; query: string; nonce: number };
+  onFocusDone?: (nonce: number) => void;
   onLoadOlder: () => void;
   onOpenConversation: (conversationId: string, title: string) => void;
   /** 实时查看正在回复成员的群会话 */
@@ -40,6 +45,8 @@ export function GroupTimeline({
   timeline,
   runtime,
   delegations,
+  focus,
+  onFocusDone,
   onLoadOlder,
   onOpenConversation,
   onOpenLive,
@@ -117,6 +124,39 @@ export function GroupTimeline({
     }
   };
 
+  const [flashSeq, setFlashSeq] = useState<number | null>(null);
+  const handledFocus = useRef<number | null>(null);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: 条目加载与翻页状态是推进信号
+  useEffect(() => {
+    if (!focus || handledFocus.current === focus.nonce) return;
+    const step = focusStep({
+      target: focus.seq,
+      earliest: timeline ? (entries[0]?.seq ?? Number.POSITIVE_INFINITY) : undefined,
+      hasOlder: Boolean(timeline?.hasOlder),
+      loading: Boolean(timeline?.loading),
+    });
+    if (step === 'wait') return;
+    if (step === 'load') {
+      onLoadOlder();
+      return;
+    }
+    handledFocus.current = focus.nonce;
+    onFocusDone?.(focus.nonce);
+    if (step !== 'scroll') return;
+    atBottomRef.current = false;
+    setFlashSeq(focus.seq);
+    requestAnimationFrame(() =>
+      scrollRef.current
+        ?.querySelector(`[data-seq="${focus.seq}"]`)
+        ?.scrollIntoView({ block: 'center' })
+    );
+  }, [focus, entries, timeline?.hasOlder, timeline?.loading]);
+  useEffect(() => {
+    if (flashSeq === null) return;
+    const timer = window.setTimeout(() => setFlashSeq(null), 2500);
+    return () => window.clearTimeout(timer);
+  }, [flashSeq]);
+
   return (
     <div ref={scrollRef} onScroll={onScroll} className="min-h-0 flex-1 overflow-y-auto">
       <div className="mx-auto flex w-full max-w-3xl flex-col gap-3 px-6 py-4">
@@ -148,13 +188,22 @@ export function GroupTimeline({
             </div>
           ) : (
             <Fragment key={row.key}>
-              <EntryRow
-                entry={row.entry}
-                continued={row.continued}
-                bots={bots}
-                records={records}
-                onOpenConversation={onOpenConversation}
-              />
+              <div
+                data-seq={row.entry.seq}
+                className={cn(
+                  '-mx-2 flex flex-col rounded-lg px-2 transition-colors duration-500',
+                  flashSeq === row.entry.seq && 'bg-brand/10'
+                )}
+              >
+                <EntryRow
+                  chatId={chat.id}
+                  entry={row.entry}
+                  continued={row.continued}
+                  bots={bots}
+                  records={records}
+                  onOpenConversation={onOpenConversation}
+                />
+              </div>
               {placed.after.get(row.entry.id)?.map(card)}
             </Fragment>
           )
@@ -219,12 +268,14 @@ function TypingDots() {
 }
 
 function EntryRow({
+  chatId,
   entry,
   continued,
   bots,
   records,
   onOpenConversation,
 }: {
+  chatId: string;
   entry: GroupEntry;
   continued: boolean;
   bots: Map<string, BotProfile>;
@@ -286,6 +337,7 @@ function EntryRow({
             <div className="rounded-xl rounded-tl-sm bg-muted px-3 py-2 text-sm">
               <Markdown text={entry.text} />
             </div>
+            <ArtifactCards target={{ chatId, entryId: entry.id }} />
             <TurnProcess
               entry={entry}
               onOpen={() => onOpenConversation(entry.conversationId, bot?.name ?? '')}

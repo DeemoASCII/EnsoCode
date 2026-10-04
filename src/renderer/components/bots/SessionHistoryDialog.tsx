@@ -1,10 +1,11 @@
 import type { ProjectedMessage } from '@shared/types/agent';
-import { useEffect, useMemo, useState } from 'react';
+import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ChatHostContext } from '@/components/chat/chatHost';
-import { MessageTimeline } from '@/components/chat/MessageTimeline';
+import { MessageTimeline, type MessageTimelineHandle } from '@/components/chat/MessageTimeline';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { useI18n } from '@/i18n';
 import { buildTimeline } from '@/stores/sessions/timeline';
+import { type MessageFocus, useMessageFocus } from './LiveSessionTimeline';
 
 interface SessionHistoryDialogProps {
   /** null = 关闭 */
@@ -12,6 +13,10 @@ interface SessionHistoryDialogProps {
   title: string;
   /** 回复头显示的成员 */
   speaker?: { name: string; color: string };
+  /** 搜索跳转到该会话的某条消息 */
+  focus?: MessageFocus;
+  /** 一轮最终回复下方的附加内容（私聊产物卡片） */
+  turnFooter?: (messageIndex: number) => ReactNode;
   onClose: () => void;
 }
 
@@ -20,6 +25,8 @@ export function SessionHistoryDialog({
   conversationId,
   title,
   speaker,
+  focus,
+  turnFooter,
   onClose,
 }: SessionHistoryDialogProps) {
   const { t } = useI18n();
@@ -28,6 +35,8 @@ export function SessionHistoryDialog({
   );
   const [error, setError] = useState<string | undefined>();
   const [loadingOlder, setLoadingOlder] = useState(false);
+  const loadingRef = useRef(false);
+  const timelineRef = useRef<MessageTimelineHandle>(null);
 
   useEffect(() => {
     setPage(null);
@@ -47,8 +56,9 @@ export function SessionHistoryDialog({
     };
   }, [conversationId, t]);
 
-  const loadOlder = async () => {
-    if (!conversationId || !page || page.baseIndex <= 0 || loadingOlder) return;
+  const loadOlder = useCallback(async () => {
+    if (!conversationId || !page || page.baseIndex <= 0 || loadingRef.current) return;
+    loadingRef.current = true;
     setLoadingOlder(true);
     try {
       const result = await window.electronAPI.bots.sessionHistory({
@@ -59,9 +69,10 @@ export function SessionHistoryDialog({
         setPage({ messages: [...result.messages, ...page.messages], baseIndex: result.baseIndex });
       }
     } finally {
+      loadingRef.current = false;
       setLoadingOlder(false);
     }
-  };
+  }, [conversationId, page]);
 
   const items = useMemo(
     () =>
@@ -70,6 +81,16 @@ export function SessionHistoryDialog({
         : [],
     [page]
   );
+  const loadOlderPage = useCallback(() => void loadOlder(), [loadOlder]);
+  const highlight = useMessageFocus({
+    focus,
+    timelineRef,
+    items,
+    baseIndex: page?.baseIndex ?? 0,
+    hasMessages: Boolean(page?.messages.length),
+    loading: loadingOlder || page === null,
+    loadOlder: loadOlderPage,
+  });
   const speakerName = speaker?.name;
   const speakerColor = speaker?.color;
   const host = useMemo(
@@ -79,8 +100,9 @@ export function SessionHistoryDialog({
       canRetry: false,
       botSession: true,
       speaker: speakerName && speakerColor ? { name: speakerName, color: speakerColor } : undefined,
+      turnFooter,
     }),
-    [conversationId, speakerName, speakerColor]
+    [conversationId, speakerName, speakerColor, turnFooter]
   );
 
   return (
@@ -95,6 +117,7 @@ export function SessionHistoryDialog({
               <p className="p-6 text-muted-foreground text-sm">{error}</p>
             ) : (
               <MessageTimeline
+                ref={timelineRef}
                 items={items}
                 busy={page === null}
                 loading={page === null}
@@ -104,6 +127,8 @@ export function SessionHistoryDialog({
                 historyLoading={loadingOlder}
                 olderCursor={page?.baseIndex}
                 onStartReached={page && page.baseIndex > 0 ? () => void loadOlder() : undefined}
+                searchQuery={highlight.searchQuery}
+                activeHit={highlight.activeHit}
               />
             )}
           </div>

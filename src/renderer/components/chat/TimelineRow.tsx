@@ -1138,6 +1138,7 @@ function TextRow({
   activeNth?: number;
 }) {
   const { t } = useI18n();
+  const host = useChatHost();
   const perfStr = item.perf ? formatPerf(item.perf, t, item.turnDurationMs !== undefined) : '';
   return (
     <div className="group text-sm">
@@ -1147,6 +1148,7 @@ function TextRow({
         searchQuery={searchQuery}
         activeNth={activeNth}
       />
+      {item.turnEnd && !item.streaming && host?.turnFooter?.(Number(item.key.split('-')[0]))}
       {!item.streaming && (
         <div className="mt-1 flex items-center gap-2 text-[11px] text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100">
           <CopyButton text={item.text} />

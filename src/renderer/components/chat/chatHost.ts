@@ -1,4 +1,4 @@
-import { createContext, useContext } from 'react';
+import { createContext, type ReactNode, useContext } from 'react';
 
 /**
  * 时间线的宿主上下文：告诉 TimelineRow 里少数「越过 props 直接读 store」的组件
@@ -16,6 +16,8 @@ export interface ChatHost {
   /** 回复头的发言人；缺省显示 Enso（Bot 模式显示成员名与头像色） */
   speaker?: { name: string; color: string };
   botSession?: boolean;
+  /** 一轮最终回复正文下方的附加内容（Bot 私聊的产物卡片）；参数为该消息绝对下标 */
+  turnFooter?: (messageIndex: number) => ReactNode;
 }
 
 export const ChatHostContext = createContext<ChatHost | null>(null);

@@ -81,6 +81,7 @@ import {
   readSessionHistoryFile,
   setBotWorkerEventObserver,
 } from './agent';
+import { listArtifacts, openArtifact, readArtifact, searchChats } from './botsContent';
 import {
   type ChatWorkspaceInput,
   parseAbilitySuggestRequest,
@@ -1074,4 +1075,17 @@ export function registerBotHandlers(): void {
     }
     return readSessionHistoryFile(conversation.sessionFile, input.beforeIndex);
   });
+
+  handle(IPC_CHANNELS.BOT_SEARCH, 'read', (_sender, request, services) =>
+    searchChats(services, request)
+  );
+  handle(IPC_CHANNELS.BOT_ARTIFACTS_LIST, 'read', (_sender, request, services) =>
+    listArtifacts(services, request)
+  );
+  handle(IPC_CHANNELS.BOT_ARTIFACT_READ, 'read', (_sender, request, services) =>
+    readArtifact(services, request)
+  );
+  handle(IPC_CHANNELS.BOT_ARTIFACT_OPEN, 'write', (_sender, request, services) =>
+    openArtifact(services, request)
+  );
 }

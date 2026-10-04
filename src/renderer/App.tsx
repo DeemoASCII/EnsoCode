@@ -225,6 +225,11 @@ export default function App() {
         useBotsStore.getState().togglePanel();
         return;
       }
+      if (isBotModeActive() && pressed === bindings['search-workspace']) {
+        e.preventDefault();
+        useBotsStore.getState().setSearchOpen(true);
+        return;
+      }
       if (
         remote &&
         [

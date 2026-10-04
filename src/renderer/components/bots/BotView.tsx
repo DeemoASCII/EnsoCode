@@ -7,6 +7,7 @@ import { cn } from '@/lib/utils';
 import { useBotPendingCount, useBotsStore } from '@/stores/bots';
 import { BotChatView } from './BotChatView';
 import { BotInbox } from './BotInbox';
+import { BotSearchButton, BotSearchDialog } from './BotSearchDialog';
 import { BotSidebar, CountBadge } from './BotSidebar';
 import { NewBotDialog } from './NewBotDialog';
 import { NewGroupDialog } from './NewGroupDialog';
@@ -44,6 +45,7 @@ export function BotView({ sidebarWidth, collapsed, onToggleCollapse, onResize }:
     <>
       {collapsed ? (
         <aside className="flex w-12 shrink-0 flex-col items-center gap-1 border-r bg-background py-2">
+          <BotSearchButton className={RAIL_BUTTON} />
           <button
             type="button"
             className={RAIL_BUTTON}
@@ -135,6 +137,7 @@ export function BotView({ sidebarWidth, collapsed, onToggleCollapse, onResize }:
 
       <NewBotDialog open={newMember} onOpenChange={setNewMember} />
       <NewGroupDialog open={newGroup} onOpenChange={setNewGroup} />
+      <BotSearchDialog />
     </>
   );
 }

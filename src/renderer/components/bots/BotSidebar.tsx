@@ -31,6 +31,7 @@ import { pendingOwners } from '@/stores/bots/delegations';
 import { type ChatSummary, chatSummary, pendingItems, sortChats } from '@/stores/bots/selectors';
 import { isUnread } from '@/stores/bots/unread';
 import { BotAvatar, GroupAvatar } from './BotAvatar';
+import { BotSearchButton } from './BotSearchDialog';
 import { chatErrorText, chatTitle } from './botText';
 
 const ICON_BUTTON_CLASS =
@@ -235,6 +236,7 @@ export function BotSidebar({ width, onCollapse, onNewMember, onNewGroup }: BotSi
           <PanelLeftClose className="h-4 w-4" />
         </button>
         <div className="flex items-center">
+          <BotSearchButton className={ICON_BUTTON_CLASS} />
           <button
             type="button"
             className={ICON_BUTTON_CLASS}

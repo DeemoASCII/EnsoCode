@@ -377,3 +377,22 @@ Main 在 `spawnSession` 里根据 `ConversationAuthority.bot` 组装提示词，
 - 两人群聊数轮后对两位成员手动压缩：各自下一次投递带 `<group-state>`（分工、群主、待回应、看板 #1 进行中、当前 seq），之后的投递不再带。
 - GLM 成员压缩后调用 `group_history {limit:20}` 找回 seq 1 暗号原话与 seq 9 文案原句；Claude 成员调用 `group_history {query:"按钮颜色"}` 找回 seq 10 原话。
 - 压缩后各生成一个蒸馏任务（带 chatId，群约定落 chat 空间）；新增若干轮后再压缩，新任务 `fromEntryId` = 上次 `toEntryId`；紧接着再压缩（Already compacted）不产生任务。
+
+## 聊天全文搜索与产物卡片（2026-10 补充）
+
+参考 opengrokbot-z4 的 ⌘K 搜索（Search.tsx）与产物预览（server/files.ts、Preview.tsx）。
+
+**全文搜索**
+
+- 入口：Bot 模式下 `search-workspace` 绑定（默认 ⌘K，与 Code 模式同一键，按模式分流，Bot 模式打开 `BotSearchDialog`）+ 侧栏 / 折叠栏搜索按钮。
+- `BOT_SEARCH({query, limit?})`：query 去空白后 1–200 字符，limit 缺省 50、上限 100。Main 扫描群 `timeline.jsonl` 的 human / bot 条目，以及私聊当前与历史会话（`sessionsOf` → 会话权威里的 `sessionFile`，必须落在 sessions 目录内）的用户 / 助手 text part；大小写不敏感字面子串，空白折叠后围绕首个命中裁 160 字片段并返回片段内全部命中区间；按时间倒序截断并返回 `truncated`。单个时间线 / 会话读取失败只 `console.warn` 跳过。会话全量投影（`projectParentHistoryAll`，下标与历史分页同一编号）按 mtime+size 缓存 16 份，与产物卡片共用。
+- 命中定位：群为 `{timeline, seq}`；私聊为 `{session, conversationId, messageIndex, current}`。选中后 store 写 `focus`（带 nonce），目标聊天消费：群时间线不够早就 `loadOlder` 直到包含该 seq，滚到 `[data-seq]` 并底色高亮 2.5s；私聊当前会话按需 `loadOlderSession`，用 `messageItemKey`（`${i}` / `${i}-n`）`scrollToKey` 并复用会话内查找的高亮；历史会话或已换新会话则打开只读历史弹窗做同样定位。
+
+**产物卡片**
+
+- 群 bot 条目下方、私聊（含只读历史）每轮最终回复下方（`ChatHost.turnFooter`，Code 模式不提供即无变化）。
+- `BOT_ARTIFACTS_LIST`：renderer 只传 `{chatId, entryId}`（群）或 `{chatId, conversationId, messageIndex}`（私聊）。Main 校验会话 `bot.chatId` 属于该聊天，取该轮消息（群按回复正文定位最近一轮，私聊按下标取两条用户消息之间），候选 = `write` / `edit` 的 `path` + `apply_patch` 已落盘的非删除路径 + 助手正文里的路径（绝对、相对、带扩展名的文件名，`file://` 转路径，网址忽略，`:行:列` 去掉）；工作区根 = 该会话项目的 `canonicalPath`（成员 home / 群目录 / 绑定的 Code 项目，ssh 拒绝）。`realpath` 后必须仍在根内且是普通文件，按真实路径去重，每条最多 8 张。
+- `BOT_ARTIFACT_READ` / `BOT_ARTIFACT_OPEN` 同样只收上述标识 + `rel`，Main 重新推导清单，`rel` 必须在清单里，再按根二次 `realpath` 校验。预览：图片 data URL（≤20MB）、Markdown（复用聊天 Markdown）、文本 / 代码、HTML 用 `sandbox=""` 的 `srcdoc` iframe（不执行脚本、拿不到宿主）；PDF 由 Main 开独立窗口（无 preload、sandbox、`plugins` 开内置查看器、禁新窗口与跳转）；其余类型只有「在访达中显示 / 用默认应用打开」。默认应用打开拒绝带执行位或脚本 / 可执行扩展名的文件（只能在访达中显示）。
+- 不做：群成员会话里的委派子会话产物、轮次进行中的实时卡片（轮次结束后出现）、搜索委派子会话与系统条目。
+
+真机（隔离 userData，Claude opus-4-6 + 阿里云 qwen3.8-max）：群里两位成员分别写 `notes.md` / `demo.html` / `docs/report.md`，卡片出现，Markdown 与 HTML（含 `<script>`，未执行）预览正常，越界 `rel` 被拒；私聊 qwen 写 `mango.txt` / `logo.svg`（SVG 图片预览）、Claude 用 bash 生成 `sample.pdf`（独立窗口内置查看器）；⌘K 搜到群消息、私聊当前会话与「新对话」后的历史会话，跳转、滚动定位与高亮正常。

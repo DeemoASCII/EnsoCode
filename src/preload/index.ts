@@ -128,6 +128,10 @@ import type {
   BotAbilitySuggestRequest,
   BotAbilitySuggestResult,
   BotActionResult,
+  BotArtifactOpenAction,
+  BotArtifactReadResult,
+  BotArtifactsResult,
+  BotArtifactTarget,
   BotChatCreateInput,
   BotChatSessionsResult,
   BotChatStateResult,
@@ -145,6 +149,8 @@ import type {
   BotRoutineSaveInput,
   BotRoutineSaveResult,
   BotRoutinesResult,
+  BotSearchRequest,
+  BotSearchResult,
   BotSendRequest,
   BotSendResult,
   BotsListResult,
@@ -1212,6 +1218,17 @@ const electronAPI = {
       beforeIndex?: number;
     }): Promise<ParentHistoryTailResult> =>
       ipcRenderer.invoke(IPC_CHANNELS.BOT_SESSION_HISTORY, request),
+    search: (request: BotSearchRequest): Promise<BotSearchResult> =>
+      ipcRenderer.invoke(IPC_CHANNELS.BOT_SEARCH, request),
+    artifacts: {
+      list: (target: BotArtifactTarget): Promise<BotArtifactsResult> =>
+        ipcRenderer.invoke(IPC_CHANNELS.BOT_ARTIFACTS_LIST, target),
+      read: (request: BotArtifactTarget & { rel: string }): Promise<BotArtifactReadResult> =>
+        ipcRenderer.invoke(IPC_CHANNELS.BOT_ARTIFACT_READ, request),
+      open: (
+        request: BotArtifactTarget & { rel: string; action: BotArtifactOpenAction }
+      ): Promise<BotActionResult> => ipcRenderer.invoke(IPC_CHANNELS.BOT_ARTIFACT_OPEN, request),
+    },
     onEvent: (callback: (event: BotEvent) => void): (() => void) => {
       const listener = (_: unknown, event: BotEvent) => callback(event);
       ipcRenderer.on(IPC_CHANNELS.BOT_EVENT, listener);

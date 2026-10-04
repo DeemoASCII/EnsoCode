@@ -21,6 +21,7 @@ import {
   resolveSidePanelWidth,
   SIDE_PANEL_HANDLE_WIDTH,
 } from '@/stores/sidePanel/width';
+import { ArtifactCards } from './ArtifactCards';
 import { BotAvatar, GroupAvatar } from './BotAvatar';
 import { BotComposer } from './BotComposer';
 import { BotProfilePanel } from './BotProfilePanel';
@@ -28,7 +29,7 @@ import { chatErrorText, chatTitle } from './botText';
 import { DelegationCard } from './DelegationCard';
 import { GroupInfoPanel } from './GroupInfoPanel';
 import { GroupTimeline } from './GroupTimeline';
-import { LiveSessionDialog, LiveSessionTimeline } from './LiveSessionTimeline';
+import { LiveSessionDialog, LiveSessionTimeline, type MessageFocus } from './LiveSessionTimeline';
 import { SessionHistoryDialog } from './SessionHistoryDialog';
 import { WorkspaceMenu } from './WorkspaceMenu';
 
@@ -75,7 +76,10 @@ export function BotChatView({ chat }: { chat: BotChat }) {
     if (parent) useBotsStore.getState().nudgePanelWidth(-deltaX, parent.clientWidth);
   }, []);
   const [history, setHistory] = useState<{ id: string; title: string } | null>(null);
+  const [historyFocus, setHistoryFocus] = useState<MessageFocus | undefined>();
   const [live, setLive] = useState<{ id: string; botId: string } | null>(null);
+  const focus = useBotsStore((s) => (s.focus?.chatId === chat.id ? s.focus : null));
+  const clearFocus = useBotsStore((s) => s.clearFocus);
 
   const byId = useMemo(() => new Map(bots.map((bot) => [bot.id, bot])), [bots]);
   const names = useMemo(() => Object.fromEntries(bots.map((bot) => [bot.id, bot.name])), [bots]);
@@ -120,6 +124,37 @@ export function BotChatView({ chat }: { chat: BotChat }) {
   }, [chat.id, chat.kind]);
 
   const direct = chat.kind === 'direct' ? members[0] : undefined;
+  const directConversationId = direct ? chat.sessions[direct.id]?.conversationId : undefined;
+  const locator = focus?.locator;
+  const directFocus =
+    focus && locator?.kind === 'session' && locator.conversationId === directConversationId
+      ? { messageIndex: locator.messageIndex, query: focus.query, nonce: focus.nonce }
+      : undefined;
+  const groupFocus =
+    focus && locator?.kind === 'timeline'
+      ? { seq: locator.seq, query: focus.query, nonce: focus.nonce }
+      : undefined;
+
+  // 命中私聊的历史会话（或已换新会话）：在只读历史弹窗里定位
+  useEffect(() => {
+    if (focus?.locator.kind !== 'session') return;
+    if (focus.locator.conversationId === directConversationId) return;
+    setHistory({ id: focus.locator.conversationId, title: t('History') });
+    setHistoryFocus({
+      messageIndex: focus.locator.messageIndex,
+      query: focus.query,
+      nonce: focus.nonce,
+    });
+    clearFocus(focus.nonce);
+  }, [focus, directConversationId, clearFocus, t]);
+  const historyId = history?.id;
+  const historyFooter = useCallback(
+    (messageIndex: number) =>
+      chat.kind === 'direct' && historyId ? (
+        <ArtifactCards target={{ chatId: chat.id, conversationId: historyId, messageIndex }} />
+      ) : null,
+    [chat.id, chat.kind, historyId]
+  );
   const archived = chat.archivedAt !== undefined;
   const replying = runtime?.current ? byId.get(runtime.current) : undefined;
 
@@ -212,7 +247,7 @@ export function BotChatView({ chat }: { chat: BotChat }) {
               bots={byId}
               onOpenConversation={(id, title) => setHistory({ id, title })}
             />
-            <DirectTimeline chat={chat} bot={direct} />
+            <DirectTimeline chat={chat} bot={direct} focus={directFocus} onFocusDone={clearFocus} />
           </>
         ) : (
           <GroupTimeline
@@ -221,6 +256,8 @@ export function BotChatView({ chat }: { chat: BotChat }) {
             timeline={timeline}
             runtime={runtime}
             delegations={chatDelegations}
+            focus={groupFocus}
+            onFocusDone={clearFocus}
             onLoadOlder={() => void useBotsStore.getState().loadOlder(chat.id)}
             onOpenConversation={(id, title) => setHistory({ id, title })}
             onOpenLive={(id, botId) => setLive({ id, botId })}
@@ -286,7 +323,12 @@ export function BotChatView({ chat }: { chat: BotChat }) {
             ? { name: historySpeaker.name, color: historySpeaker.avatar.color }
             : undefined
         }
-        onClose={() => setHistory(null)}
+        focus={historyFocus}
+        turnFooter={historyFooter}
+        onClose={() => {
+          setHistory(null);
+          setHistoryFocus(undefined);
+        }}
       />
       <LiveSessionDialog
         conversationId={live?.id ?? null}
@@ -372,9 +414,26 @@ function DirectChips({ bot }: { bot: BotProfile }) {
   );
 }
 
-function DirectTimeline({ chat, bot }: { chat: BotChat; bot: BotProfile }) {
+function DirectTimeline({
+  chat,
+  bot,
+  focus,
+  onFocusDone,
+}: {
+  chat: BotChat;
+  bot: BotProfile;
+  focus?: MessageFocus;
+  onFocusDone: (nonce: number) => void;
+}) {
   const { t } = useI18n();
   const conversationId = chat.sessions[bot.id]?.conversationId;
+  const turnFooter = useCallback(
+    (messageIndex: number) =>
+      conversationId ? (
+        <ArtifactCards target={{ chatId: chat.id, conversationId, messageIndex }} />
+      ) : null,
+    [chat.id, conversationId]
+  );
   if (!conversationId) {
     return (
       <div className="flex flex-1 flex-col items-center justify-center gap-2 px-6 text-center">
@@ -389,6 +448,9 @@ function DirectTimeline({ chat, bot }: { chat: BotChat; bot: BotProfile }) {
       conversationId={conversationId}
       speaker={{ name: bot.name, color: bot.avatar.color }}
       emptyTitle={t('Say hi to {{name}}', { name: bot.name })}
+      focus={focus}
+      onFocusDone={onFocusDone}
+      turnFooter={turnFooter}
     />
   );
 }

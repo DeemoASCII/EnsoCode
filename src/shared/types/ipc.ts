@@ -405,6 +405,12 @@ export const IPC_CHANNELS = {
   BOT_SUGGEST_PERSONA: 'bots:suggest-persona',
   /** main → renderer：Bot 数据变化提示 */
   BOT_EVENT: 'bots:event',
+  /** Bot 聊天全文搜索：群时间线 + 私聊当前 / 历史会话 */
+  BOT_SEARCH: 'bots:search',
+  /** 产物卡片：只收聊天 + 条目 / 会话消息标识，路径由 Main 推导并校验在工作区根内 */
+  BOT_ARTIFACTS_LIST: 'bots:artifacts-list',
+  BOT_ARTIFACT_READ: 'bots:artifact-read',
+  BOT_ARTIFACT_OPEN: 'bots:artifact-open',
 } as const;
 
 export type IpcChannel = (typeof IPC_CHANNELS)[keyof typeof IPC_CHANNELS];

@@ -1,6 +1,6 @@
 import type { AttachedImage } from '@shared/types/agent';
 import type { BotChat, BotProfile, Delegation, GroupEntry, GroupTask } from '@shared/types/bot';
-import type { BotEvent, BotQueueItem, BotSendResult } from '@shared/types/botIpc';
+import type { BotEvent, BotQueueItem, BotSearchHit, BotSendResult } from '@shared/types/botIpc';
 import { create } from 'zustand';
 import { applyHistoryPage, emptyProjection } from '@/stores/sessions/reducer';
 import { resizeSidePanelWidth, SIDE_PANEL_DEFAULT_WIDTH } from '@/stores/sidePanel/width';
@@ -33,6 +33,14 @@ export interface ChatRuntime {
 }
 
 export type BotView = { kind: 'chat'; chatId: string } | { kind: 'inbox' } | null;
+
+/** 搜索结果跳转：目标聊天的时间线消费后清掉（按 nonce 防止清掉更新的一次） */
+export interface BotFocus {
+  chatId: string;
+  locator: BotSearchHit['locator'];
+  query: string;
+  nonce: number;
+}
 
 const TIMELINE_PAGE = 50;
 const READS_KEY = 'enso-bot-reads';
@@ -87,6 +95,8 @@ interface BotsState {
   /** 聊天右侧的成员资料 / 群信息面板 */
   panelOpen: boolean;
   panelWidth: number;
+  searchOpen: boolean;
+  focus: BotFocus | null;
 
   /** 订阅 Bot 事件与 agent 事件流并拉一次全量；引用计数，重复 bind 共用一份订阅；返回清理函数 */
   bind: () => () => void;
@@ -112,6 +122,10 @@ interface BotsState {
   openDirect: (botId: string) => Promise<string | null>;
   upsertChat: (chat: BotChat) => void;
   upsertBot: (bot: BotProfile) => void;
+  setSearchOpen: (open: boolean) => void;
+  /** 打开命中所在聊天并请求滚动定位、短暂高亮 */
+  focusHit: (hit: BotSearchHit, query: string) => void;
+  clearFocus: (nonce: number) => void;
 }
 
 export const useBotsStore = create<BotsState>()((set, get) => {
@@ -250,6 +264,8 @@ export const useBotsStore = create<BotsState>()((set, get) => {
     view: loadView(),
     panelOpen: localStorage.getItem(PANEL_KEY) !== '0',
     panelWidth: Number(localStorage.getItem(PANEL_WIDTH_KEY)) || SIDE_PANEL_DEFAULT_WIDTH,
+    searchOpen: false,
+    focus: null,
 
     bind: () => {
       bindings += 1;
@@ -508,6 +524,20 @@ export const useBotsStore = create<BotsState>()((set, get) => {
         const index = state.bots.findIndex((item) => item.id === bot.id);
         return { bots: index === -1 ? [...state.bots, bot] : state.bots.toSpliced(index, 1, bot) };
       });
+    },
+
+    setSearchOpen: (searchOpen) => set({ searchOpen }),
+
+    focusHit: (hit, query) => {
+      get().setView({ kind: 'chat', chatId: hit.chatId });
+      set({
+        searchOpen: false,
+        focus: { chatId: hit.chatId, locator: hit.locator, query, nonce: Date.now() },
+      });
+    },
+
+    clearFocus: (nonce) => {
+      if (get().focus?.nonce === nonce) set({ focus: null });
     },
   };
 });

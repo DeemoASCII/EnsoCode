@@ -172,3 +172,57 @@ export interface BotSendRequest {
   images?: AttachedImage[];
   deliveryId: string;
 }
+
+/** 全文搜索：query 去首尾空白后 1..200 字符；limit 缺省 50，上限 100 */
+export const BOT_SEARCH_QUERY_MAX = 200;
+export const BOT_SEARCH_LIMIT_DEFAULT = 50;
+export const BOT_SEARCH_LIMIT_MAX = 100;
+
+export interface BotSearchRequest {
+  query: string;
+  limit?: number;
+}
+
+/** 命中定位：群按时间线 seq；私聊按会话内消息绝对下标（与历史投影同一编号） */
+export type BotSearchLocator =
+  | { kind: 'timeline'; seq: number }
+  | { kind: 'session'; conversationId: string; messageIndex: number; current: boolean };
+
+export interface BotSearchHit {
+  chatId: string;
+  chatKind: BotChat['kind'];
+  speaker: { kind: 'human' } | { kind: 'bot'; botId: string };
+  at: number;
+  /** 空白已折叠的片段，裁剪处带「…」 */
+  snippet: string;
+  /** snippet 内的命中区间 [start, end) */
+  ranges: Array<[number, number]>;
+  locator: BotSearchLocator;
+}
+
+export type BotSearchResult = { ok: true; hits: BotSearchHit[]; truncated: boolean } | BotIpcError;
+
+/** 产物卡片挂在哪条消息：群 bot 条目按 entryId；私聊按会话 + 该轮任一助手消息下标 */
+export type BotArtifactTarget =
+  | { chatId: string; entryId: string }
+  | { chatId: string; conversationId: string; messageIndex: number };
+
+export type BotArtifactKind = 'image' | 'markdown' | 'html' | 'pdf' | 'text' | 'other';
+
+export interface BotArtifact {
+  /** 相对工作区根的路径，同时是后续预览 / 打开的标识（Main 会重新推导并比对） */
+  rel: string;
+  name: string;
+  size: number;
+  kind: BotArtifactKind;
+}
+
+export type BotArtifactsResult = { ok: true; artifacts: BotArtifact[] } | BotIpcError;
+
+export type BotArtifactReadResult =
+  | { ok: true; kind: 'image'; dataUrl: string }
+  | { ok: true; kind: 'markdown' | 'html' | 'text'; text: string }
+  | BotIpcError;
+
+/** reveal：在访达中显示；open：默认应用打开（可执行文件拒绝）；preview：PDF 独立预览窗口 */
+export type BotArtifactOpenAction = 'reveal' | 'open' | 'preview';
