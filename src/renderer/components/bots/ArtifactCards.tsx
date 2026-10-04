@@ -194,7 +194,7 @@ function ArtifactPreviewDialog({
 function PreviewBody({ name, content }: { name: string; content: BotArtifactReadResult | null }) {
   const { t } = useI18n();
   return (
-    <div className="min-h-0 flex-1 overflow-auto border-t" data-bot-artifact-preview="">
+    <div className="min-h-0 flex-1 select-text overflow-auto border-t" data-bot-artifact-preview="">
       {!content && (
         <div className="flex justify-center p-6 text-muted-foreground">
           <Loader2 className="h-4 w-4 animate-spin" />

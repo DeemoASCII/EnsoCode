@@ -257,7 +257,11 @@ export function GroupTimeline({
 
   return (
     <div className="relative flex min-h-0 flex-1 flex-col">
-      <div ref={scrollRef} onScroll={onScroll} className="min-h-0 flex-1 overflow-y-auto">
+      <div
+        ref={scrollRef}
+        onScroll={onScroll}
+        className="min-h-0 flex-1 select-text overflow-y-auto"
+      >
         <div className="mx-auto flex w-full max-w-3xl flex-col gap-3 px-6 py-4">
           {timeline?.loading && (
             <div className="flex justify-center py-1 text-muted-foreground">
