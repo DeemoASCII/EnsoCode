@@ -520,3 +520,79 @@ describe('history 分页切片', () => {
     expect(sliceHistory([], 10).messages).toHaveLength(0);
   });
 });
+
+describe('Bot 模式上行命令', () => {
+  const chatId = '11111111-1111-4111-8111-111111111111';
+
+  it('放行 bot 命令并收窄成只含已知字段的新对象', () => {
+    const send = parsePhoneCommand({
+      type: 'bot-send',
+      chatId,
+      text: 'hi @阿后',
+      deliveryId: 'd-1',
+      extra: 'drop-me',
+    });
+    expect(send).toEqual({
+      ok: true,
+      command: { type: 'bot-send', chatId, text: 'hi @阿后', deliveryId: 'd-1' },
+    });
+    const image = { data: 'AAAA', mimeType: 'image/png' };
+    expect(
+      parsePhoneCommand({ type: 'bot-send', chatId, text: '', images: [image], deliveryId: 'd' })
+    ).toEqual({
+      ok: true,
+      command: { type: 'bot-send', chatId, text: '', images: [image], deliveryId: 'd' },
+    });
+    expect(parsePhoneCommand({ type: 'bot-catalog-request', x: 1 })).toEqual({
+      ok: true,
+      command: { type: 'bot-catalog-request' },
+    });
+    expect(parsePhoneCommand({ type: 'bot-chat-open', chatId })).toEqual({
+      ok: true,
+      command: { type: 'bot-chat-open', chatId },
+    });
+    expect(parsePhoneCommand({ type: 'bot-stop', chatId })).toEqual({
+      ok: true,
+      command: { type: 'bot-stop', chatId },
+    });
+    expect(parsePhoneCommand({ type: 'bot-timeline', chatId })).toEqual({
+      ok: true,
+      command: { type: 'bot-timeline', chatId },
+    });
+    expect(parsePhoneCommand({ type: 'bot-timeline', chatId, beforeSeq: 12 })).toEqual({
+      ok: true,
+      command: { type: 'bot-timeline', chatId, beforeSeq: 12 },
+    });
+  });
+
+  it('坏输入被拒', () => {
+    const bad = [
+      { type: 'bot-send', chatId, text: 'hi' },
+      { type: 'bot-send', chatId, text: '   ', deliveryId: 'd' },
+      { type: 'bot-send', chatId, text: 1, deliveryId: 'd' },
+      { type: 'bot-send', chatId: '', text: 'hi', deliveryId: 'd' },
+      { type: 'bot-send', chatId, text: 'hi', deliveryId: 'd', images: [{ data: 1 }] },
+      { type: 'bot-send', chatId, text: 'hi', deliveryId: 'd', images: 'x' },
+      { type: 'bot-send', chatId, text: 'x'.repeat(200_001), deliveryId: 'd' },
+      { type: 'bot-send', chatId, text: 'hi', deliveryId: 'd'.repeat(300) },
+      { type: 'bot-chat-open' },
+      { type: 'bot-chat-open', chatId: 'x'.repeat(300) },
+      { type: 'bot-stop', chatId: 3 },
+      { type: 'bot-timeline', chatId, beforeSeq: -1 },
+      { type: 'bot-timeline', chatId, beforeSeq: 1.5 },
+      { type: 'bot-timeline', chatId, beforeSeq: '3' },
+    ];
+    for (const cmd of bad) {
+      expect(parsePhoneCommand(cmd).ok, JSON.stringify(cmd).slice(0, 120)).toBe(false);
+    }
+  });
+});
+
+describe('审批/提问收束事件跨会话转发', () => {
+  it('approval-resolved / ask-resolved 与 request 同样不受订阅限制', () => {
+    for (const type of ['approval-resolved', 'ask-resolved']) {
+      expect(shouldForward({ type, sessionId: 'bot-session' }, null), type).toBe(true);
+      expect(shouldForward({ type, sessionId: 'bot-session' }, 'other'), type).toBe(true);
+    }
+  });
+});

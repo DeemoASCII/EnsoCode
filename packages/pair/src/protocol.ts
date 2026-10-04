@@ -128,7 +128,15 @@ export type PhoneToHost =
    */
   | { type: 'voice-chunk'; requestId: string; index: number; data: string; last?: true }
   /** 放弃录音：host 丢弃该 requestId 的识别会话，不再回 voice-result */
-  | { type: 'voice-cancel'; requestId: string };
+  | { type: 'voice-cancel'; requestId: string }
+  /** Bot 模式：仅桌面开启 Bot 模式时响应；旧桌面在白名单处拒绝，不影响其它帧 */
+  | { type: 'bot-catalog-request' }
+  | { type: 'bot-send'; chatId: string; text: string; images?: AttachedImage[]; deliveryId: string }
+  /** 打开聊天：群聊回最新一页时间线 + 运行态 */
+  | { type: 'bot-chat-open'; chatId: string }
+  /** 群时间线分页：缺省 beforeSeq = 最新一页 */
+  | { type: 'bot-timeline'; chatId: string; beforeSeq?: number }
+  | { type: 'bot-stop'; chatId: string };
 
 /** 手机命令白名单：main 只接受这些 type，其余（set-approval-mode、设置写入等）拒绝 */
 export const PHONE_COMMAND_TYPES = [
@@ -167,6 +175,11 @@ export const PHONE_COMMAND_TYPES = [
   'probe',
   'voice-chunk',
   'voice-cancel',
+  'bot-catalog-request',
+  'bot-send',
+  'bot-chat-open',
+  'bot-timeline',
+  'bot-stop',
 ] as const satisfies readonly PhoneToHost['type'][];
 
 export function isPhoneCommand(value: unknown): value is PhoneToHost {
@@ -255,6 +268,77 @@ export interface ProviderEntry {
   id: string;
   name: string;
   models: { id: string; label?: string }[];
+}
+
+// ── Bot 模式（与 @shared/types/bot 对齐的最小投影，不含人设/模型/权限配置）──
+
+export type PairBotRunState = 'idle' | 'running' | 'queued';
+
+export interface PairBotMember {
+  id: string;
+  name: string;
+  title: string;
+  avatarColor: string;
+  archived?: true;
+  status: PairBotRunState;
+}
+
+export interface PairBotChatSummary {
+  id: string;
+  kind: 'direct' | 'group';
+  title: string;
+  members: string[];
+  bossBotId: string | null;
+  pinned?: true;
+  archived?: true;
+  updatedAt: number;
+  lastSeq: number;
+  /** 时间线末条摘要（私聊无时间线时缺省） */
+  last?: { kind: PairGroupEntry['kind']; text: string; botId?: string; at: number };
+  /** 各成员当前在用会话：手机打开私聊 / 查看过程时订阅它 */
+  sessions: Record<string, { conversationId: string }>;
+  status: PairBotRunState;
+}
+
+export type PairDelegationState = 'queued' | 'running' | 'completed' | 'failed' | 'canceled';
+
+interface PairGroupEntryBase {
+  seq: number;
+  id: string;
+  at: number;
+}
+
+export type PairGroupEntry =
+  | (PairGroupEntryBase & { kind: 'human'; text: string; mentions: string[] })
+  | (PairGroupEntryBase & {
+      kind: 'bot';
+      botId: string;
+      text: string;
+      conversationId: string;
+      turnId: string;
+    })
+  | (PairGroupEntryBase & {
+      kind: 'delegation';
+      delegationId: string;
+      from: string;
+      to: string;
+      state: PairDelegationState;
+      summary?: string;
+    })
+  | (PairGroupEntryBase & { kind: 'system'; text: string });
+
+export interface PairBotEvent {
+  kind: 'catalog' | 'chat' | 'timeline' | 'queue' | 'delegation' | 'routine';
+  chatId?: string;
+  seq?: number;
+}
+
+export interface PairBotChatState {
+  current: string | null;
+  queue: string[];
+  hops: number;
+  turnsByBot: Record<string, number>;
+  pendingHuman: boolean;
 }
 
 /**
@@ -346,4 +430,23 @@ export type HostToPhone =
   /** 识别中间结果（整句覆盖，不是增量）；correcting = 已定稿、正在纠错 */
   | { type: 'voice-partial'; requestId: string; text: string; correcting?: true }
   /** voice-chunk 的应答；error 为 SpeechErrorCode，未知值按 failed 处理 */
-  | { type: 'voice-result'; requestId: string; text?: string; error?: string };
+  | { type: 'voice-result'; requestId: string; text?: string; error?: string }
+  /**
+   * Bot 模式目录。enabled=false 表示桌面已关闭 Bot 模式（手机隐藏 Bot 分段）。
+   * 旧手机 switch 无 default 分支，以下 bot 帧一律忽略。
+   */
+  | { type: 'bot-catalog'; enabled: boolean; bots: PairBotMember[] }
+  | { type: 'bot-chats'; chats: PairBotChatSummary[] }
+  /** 群时间线一页（升序）；beforeSeq 回显请求，缺省 = 最新一页；单帧超限时由 host 减少条数 */
+  | {
+      type: 'group-timeline';
+      chatId: string;
+      entries: PairGroupEntry[];
+      lastSeq: number;
+      beforeSeq?: number;
+      hasOlder: boolean;
+    }
+  | { type: 'bot-event'; event: PairBotEvent }
+  | ({ type: 'bot-chat-state'; chatId: string } & PairBotChatState)
+  /** bot-send 的应答：失败时手机提示并恢复输入 */
+  | { type: 'bot-send-result'; chatId: string; deliveryId: string; ok: boolean; error?: string };

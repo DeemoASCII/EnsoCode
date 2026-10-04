@@ -1,0 +1,159 @@
+import type { PairBotChatSummary, PairBotMember, PairGroupEntry } from '@enso/pair';
+import { describe, expect, it } from 'vitest';
+import {
+  activeMention,
+  botChatSections,
+  insertMention,
+  mentionOptions,
+  mergeGroupTimeline,
+} from './botState';
+
+const member = (id: string, name: string, extra: Partial<PairBotMember> = {}): PairBotMember => ({
+  id,
+  name,
+  title: '',
+  avatarColor: '#7c5cff',
+  status: 'idle',
+  ...extra,
+});
+
+const chat = (
+  id: string,
+  kind: 'direct' | 'group',
+  updatedAt: number,
+  extra: Partial<PairBotChatSummary> = {}
+): PairBotChatSummary => ({
+  id,
+  kind,
+  title: id,
+  members: kind === 'direct' ? ['a'] : ['a', 'b'],
+  bossBotId: kind === 'group' ? 'a' : null,
+  updatedAt,
+  lastSeq: 0,
+  sessions: {},
+  status: 'idle',
+  ...extra,
+});
+
+const human = (seq: number): PairGroupEntry => ({
+  seq,
+  id: `e${seq}`,
+  at: seq,
+  kind: 'human',
+  text: `m${seq}`,
+  mentions: [],
+});
+const page = (
+  seqs: number[],
+  extra: { beforeSeq?: number; hasOlder?: boolean; lastSeq?: number } = {}
+) => ({
+  type: 'group-timeline' as const,
+  chatId: 'c',
+  entries: seqs.map(human),
+  lastSeq: extra.lastSeq ?? Math.max(0, ...seqs),
+  hasOlder: extra.hasOlder ?? (seqs[0] ?? 1) > 1,
+  ...(extra.beforeSeq !== undefined ? { beforeSeq: extra.beforeSeq } : {}),
+});
+
+describe('Bot 抽屉列表', () => {
+  it('群聊在上、私聊在下；各自置顶优先再按活跃倒序', () => {
+    const bots = [member('a', '阿后')];
+    const sections = botChatSections(
+      [
+        chat('d1', 'direct', 5),
+        chat('g1', 'group', 1),
+        chat('g2', 'group', 9),
+        chat('g3', 'group', 2, { pinned: true }),
+        chat('d2', 'direct', 7),
+      ],
+      bots
+    );
+    expect(sections.groups.map((c) => c.id)).toEqual(['g3', 'g2', 'g1']);
+    expect(sections.directs.map((c) => c.id)).toEqual(['d2', 'd1']);
+  });
+
+  it('已归档成员的私聊不显示', () => {
+    const sections = botChatSections(
+      [chat('d1', 'direct', 1), chat('d2', 'direct', 2, { members: ['z'] })],
+      [member('a', '阿后', { archived: true })]
+    );
+    expect(sections.directs).toEqual([]);
+  });
+});
+
+describe('群时间线分页合并', () => {
+  it('首屏直接采用', () => {
+    const state = mergeGroupTimeline(undefined, page([3, 4, 5]));
+    expect(state.entries.map((e) => e.seq)).toEqual([3, 4, 5]);
+    expect(state.hasOlder).toBe(true);
+    expect(state.lastSeq).toBe(5);
+  });
+
+  it('向上分页拼到前面，hasOlder 取最早一页', () => {
+    const first = mergeGroupTimeline(undefined, page([3, 4, 5]));
+    const older = mergeGroupTimeline(first, page([1, 2], { beforeSeq: 3, lastSeq: 5 }));
+    expect(older.entries.map((e) => e.seq)).toEqual([1, 2, 3, 4, 5]);
+    expect(older.hasOlder).toBe(false);
+  });
+
+  it('最新页与已加载区间重叠时按 seq 去重、新内容覆盖，保留更早的页', () => {
+    let state = mergeGroupTimeline(undefined, page([3, 4]));
+    state = mergeGroupTimeline(state, page([1, 2], { beforeSeq: 3, lastSeq: 4 }));
+    const latest = page([4, 5, 6]);
+    latest.entries[0] = { ...latest.entries[0], text: 'edited' } as PairGroupEntry;
+    state = mergeGroupTimeline(state, latest);
+    expect(state.entries.map((e) => e.seq)).toEqual([1, 2, 3, 4, 5, 6]);
+    expect(state.entries[3]).toMatchObject({ text: 'edited' });
+    expect(state.hasOlder).toBe(false);
+    expect(state.lastSeq).toBe(6);
+  });
+
+  it('最新页与已加载区间之间有缺口时丢弃旧区间，避免时间线断档', () => {
+    const state = mergeGroupTimeline(
+      mergeGroupTimeline(undefined, page([1, 2])),
+      page([10, 11], { hasOlder: true })
+    );
+    expect(state.entries.map((e) => e.seq)).toEqual([10, 11]);
+    expect(state.hasOlder).toBe(true);
+  });
+
+  it('过期的分页应答（与当前最早条目不衔接）被忽略', () => {
+    const state = mergeGroupTimeline(undefined, page([10, 11], { hasOlder: true }));
+    const stale = mergeGroupTimeline(state, page([1, 2], { beforeSeq: 5, lastSeq: 11 }));
+    expect(stale).toBe(state);
+  });
+});
+
+describe('@ 补全', () => {
+  const members = [member('a', 'Alice'), member('b', '阿后'), member('c', 'alex')];
+
+  it('识别光标前正在输入的 @前缀', () => {
+    expect(activeMention('hi @al', 6)).toEqual({ start: 3, query: 'al' });
+    expect(activeMention('@', 1)).toEqual({ start: 0, query: '' });
+    expect(activeMention('hi @al there', 12)).toBeNull();
+    expect(activeMention('mail a@b', 8)).toBeNull();
+    expect(activeMention('no mention', 10)).toBeNull();
+  });
+
+  it('候选含「所有人」并按前缀过滤', () => {
+    expect(mentionOptions('', members).map((m) => m.name)).toEqual([
+      '所有人',
+      'Alice',
+      '阿后',
+      'alex',
+    ]);
+    expect(mentionOptions('AL', members).map((m) => m.name)).toEqual(['Alice', 'alex']);
+    expect(mentionOptions('所', members).map((m) => m.name)).toEqual(['所有人']);
+  });
+
+  it('插入提及并把光标放到其后', () => {
+    expect(insertMention('hi @al', { start: 3, query: 'al' }, 6, 'Alice')).toEqual({
+      text: 'hi @Alice ',
+      caret: 10,
+    });
+    expect(insertMention('@ 你好', { start: 0, query: '' }, 1, '阿后')).toEqual({
+      text: '@阿后  你好',
+      caret: 4,
+    });
+  });
+});

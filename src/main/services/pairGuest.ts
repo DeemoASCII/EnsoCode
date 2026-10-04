@@ -468,6 +468,14 @@ async function handleFrame(conn: Connection, frame: Uint8Array): Promise<void> {
     case 'appearance':
     case 'push-config':
       return;
+    // 远程节点不提供 Bot 模式
+    case 'bot-catalog':
+    case 'bot-chats':
+    case 'group-timeline':
+    case 'bot-event':
+    case 'bot-chat-state':
+    case 'bot-send-result':
+      return;
     default:
       onMessage?.({ nodeId: conn.node.nodeId, payload });
   }

@@ -841,3 +841,107 @@ describe('PairClient 缓存与续传', () => {
     await expect(recording.finish()).resolves.toEqual({ ok: false, error: 'failed' });
   });
 });
+
+describe('PairClient Bot 帧', () => {
+  let client: PairClient;
+  let events: ClientEvents;
+  beforeEach(() => {
+    vi.useFakeTimers();
+    Socket.all = [];
+    vi.stubGlobal('WebSocket', Socket);
+    vi.stubGlobal('localStorage', {
+      getItem: () => null,
+      setItem: () => {},
+      removeItem: () => {},
+    });
+    events = {
+      onState: vi.fn(),
+      onCatalog: vi.fn(),
+      onProjects: vi.fn(),
+      onProviders: vi.fn(),
+      onSession: vi.fn(),
+      onBotCatalog: vi.fn(),
+      onBotChats: vi.fn(),
+      onGroupTimeline: vi.fn(),
+      onBotEvent: vi.fn(),
+      onBotChatState: vi.fn(),
+      onBotSendResult: vi.fn(),
+    };
+    client = new PairClient(device, events, null, {
+      load: vi.fn(async () => null),
+      save: vi.fn(async () => {}),
+      clear: vi.fn(async () => {}),
+    });
+  });
+  afterEach(() => {
+    client.close();
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  async function start() {
+    client.connect();
+    await settle();
+    const socket = Socket.all[0];
+    socket.open();
+    await settle();
+    return socket;
+  }
+
+  it('未知帧静默忽略，不影响后续帧', async () => {
+    const socket = await start();
+    socket.receive({ type: 'from-the-future', payload: 1 });
+    socket.receive({ type: 'bot-chats', chats: [] });
+    await settle();
+    expect(events.onBotChats).toHaveBeenCalledWith([]);
+  });
+
+  it('Bot 帧分发到对应回调', async () => {
+    const socket = await start();
+    const timeline = {
+      type: 'group-timeline',
+      chatId: 'c',
+      entries: [],
+      lastSeq: 0,
+      hasOlder: false,
+    };
+    socket.receive({ type: 'bot-catalog', enabled: true, bots: [] });
+    socket.receive(timeline);
+    socket.receive({ type: 'bot-event', event: { kind: 'timeline', chatId: 'c', seq: 3 } });
+    socket.receive({
+      type: 'bot-chat-state',
+      chatId: 'c',
+      current: null,
+      queue: [],
+      hops: 0,
+      turnsByBot: {},
+      pendingHuman: false,
+    });
+    socket.receive({
+      type: 'bot-send-result',
+      chatId: 'c',
+      deliveryId: 'd',
+      ok: false,
+      error: 'x',
+    });
+    await settle();
+    expect(events.onBotCatalog).toHaveBeenCalledWith(true, []);
+    expect(events.onGroupTimeline).toHaveBeenCalledWith(timeline);
+    expect(events.onBotEvent).toHaveBeenCalledWith({ kind: 'timeline', chatId: 'c', seq: 3 });
+    expect(events.onBotChatState).toHaveBeenCalledWith(expect.objectContaining({ chatId: 'c' }));
+    expect(events.onBotSendResult).toHaveBeenCalledWith(
+      expect.objectContaining({ deliveryId: 'd', ok: false })
+    );
+  });
+
+  it('结构不对的 Bot 帧丢弃', async () => {
+    const socket = await start();
+    socket.receive({ type: 'bot-catalog', enabled: true, bots: 'nope' });
+    socket.receive({ type: 'group-timeline', chatId: 'c', entries: null });
+    socket.receive({ type: 'bot-event', event: null });
+    await settle();
+    expect(events.onBotCatalog).not.toHaveBeenCalled();
+    expect(events.onGroupTimeline).not.toHaveBeenCalled();
+    expect(events.onBotEvent).not.toHaveBeenCalled();
+  });
+});

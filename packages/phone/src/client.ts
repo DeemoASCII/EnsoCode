@@ -15,6 +15,9 @@ import {
   isPairSyncCursor,
   type NudgeReason,
   openFrame,
+  type PairBotChatSummary,
+  type PairBotEvent,
+  type PairBotMember,
   type PairedDevice,
   type PairSessionSync,
   type PairSyncCursor,
@@ -72,6 +75,10 @@ export type ConnState = 'connecting' | 'online' | 'host-offline' | 'unauthorized
 /** 与桌面远程节点视图共用一份投影结构 */
 export type SessionView = GuestSessionView;
 
+export type GroupTimelineFrame = Extract<HostToPhone, { type: 'group-timeline' }>;
+export type BotChatStateFrame = Extract<HostToPhone, { type: 'bot-chat-state' }>;
+export type BotSendResultFrame = Extract<HostToPhone, { type: 'bot-send-result' }>;
+
 const VOICE_TIMEOUT_MS = 60_000;
 /** 约 200ms 一块：桌面边收边识别 */
 const VOICE_CHUNK_SAMPLES = SPEECH_SAMPLE_RATE / 5;
@@ -102,6 +109,13 @@ export interface ClientEvents {
   onRtt?(ms: number): void;
   /** 桌面语音识别是否可用；断线/换主机视为不可用 */
   onVoiceInput?(available: boolean): void;
+  /** Bot 模式（桌面开启时才下发；enabled=false = 已关闭） */
+  onBotCatalog?(enabled: boolean, bots: PairBotMember[]): void;
+  onBotChats?(chats: PairBotChatSummary[]): void;
+  onGroupTimeline?(frame: GroupTimelineFrame): void;
+  onBotEvent?(event: PairBotEvent): void;
+  onBotChatState?(frame: BotChatStateFrame): void;
+  onBotSendResult?(frame: BotSendResultFrame): void;
 }
 
 export class PairClient {
@@ -522,6 +536,33 @@ export class PairClient {
         this.scheduleCache();
         break;
       }
+      case 'bot-catalog':
+        if (Array.isArray(payload.bots)) {
+          this.events.onBotCatalog?.(payload.enabled === true, payload.bots);
+        }
+        break;
+      case 'bot-chats':
+        if (Array.isArray(payload.chats)) this.events.onBotChats?.(payload.chats);
+        break;
+      case 'group-timeline':
+        if (typeof payload.chatId === 'string' && Array.isArray(payload.entries)) {
+          this.events.onGroupTimeline?.(payload);
+        }
+        break;
+      case 'bot-event':
+        if (typeof payload.event === 'object' && payload.event !== null) {
+          this.events.onBotEvent?.(payload.event);
+        }
+        break;
+      case 'bot-chat-state':
+        if (typeof payload.chatId === 'string') this.events.onBotChatState?.(payload);
+        break;
+      case 'bot-send-result':
+        if (typeof payload.deliveryId === 'string') this.events.onBotSendResult?.(payload);
+        break;
+      default:
+        // 新桌面新增的帧：旧逻辑不认识就忽略，不能影响后续帧
+        break;
     }
   }
 

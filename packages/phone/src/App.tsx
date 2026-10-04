@@ -1,5 +1,8 @@
 import {
   type CatalogEntry,
+  type PairBotChatState,
+  type PairBotChatSummary,
+  type PairBotMember,
   type PairedDevice,
   type ProjectEntry,
   type ProjectGroupEntry,
@@ -7,14 +10,19 @@ import {
   revokePairing,
 } from '@enso/pair';
 import { parseCompactCommand } from '@shared/compactCommand';
+import { emptyGuestView } from '@shared/pair/guestProjection';
+import type { AttachedImage } from '@shared/types/agent';
 import { Smartphone } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { applyAppBadge, attentionBadgeCount } from './attentionBadge';
+import { BotDrawerPanel } from './BotDrawerPanel';
+import { type GroupTimelineState, mergeGroupTimeline } from './botState';
 import { ChatScreen } from './ChatScreen';
 import { type ConnState, PairClient, type SessionView } from './client';
 import { formatOnlineConnectionLabel } from './connectionLabel';
 import { pickActive, removeDevice, renameDevice, upsertDevice } from './deviceList';
+import { GroupChatScreen, type MemberPending } from './GroupChatScreen';
 import { parseSessionFromSearch, parseSessionId, takeStashedSessionId } from './launchSession';
 import { NewSessionSheet } from './NewSessionSheet';
 import { PairScreen } from './PairScreen';
@@ -69,6 +77,9 @@ const STATE_LABEL: Record<ConnState, string> = {
 };
 
 const PUSH_ENABLED_KEY = 'enso-phone-push';
+
+/** 私聊尚无会话（从未发过消息）时的空视图 */
+const EMPTY_VIEW = emptyGuestView();
 
 /** 通知点击冷启动时带的 ?session=：取出即抹掉，优先于上次会话 */
 function takeSessionFromUrl(): string | null {
@@ -132,6 +143,20 @@ export function App() {
   /** 订阅进行中：开关乐观显示已开但禁用，避免数秒无反馈 */
   const [pushBusy, setPushBusy] = useState(false);
   const [pushError, setPushError] = useState<PushFailureReason | null>(null);
+  /** Bot 模式：只有桌面开启并下发过 bot-catalog 才出现 */
+  const [botEnabled, setBotEnabled] = useState(false);
+  const [bots, setBots] = useState<PairBotMember[]>([]);
+  const [botChats, setBotChats] = useState<PairBotChatSummary[]>([]);
+  const [botSegment, setBotSegment] = useState(false);
+  /** 打开中的 Bot 聊天；非 null 时主屏显示 Bot 视图，Code 的 activeId 原样保留 */
+  const [botChatId, setBotChatId] = useState<string | null>(null);
+  /** 群聊「查看过程」的成员会话（只读） */
+  const [processId, setProcessId] = useState<string | null>(null);
+  const [timelines, setTimelines] = useState<Record<string, GroupTimelineState>>({});
+  const [chatStates, setChatStates] = useState<Record<string, PairBotChatState>>({});
+  /** 群成员会话投影（只取审批/提问，来自不受订阅限制的 pending 事件） */
+  const [memberViews, setMemberViews] = useState<Record<string, SessionView>>({});
+  const [botNotice, setBotNotice] = useState<string | null>(null);
   const clientRef = useRef<PairClient | null>(null);
   const activeIdRef = useRef<string | null>(activeId);
   const catalogRef = useRef(catalog);
@@ -139,6 +164,28 @@ export function App() {
   catalogRef.current = catalog;
   viewRef.current = view;
   activeIdRef.current = activeId;
+  const botChat = botChatId ? botChats.find((chat) => chat.id === botChatId) : undefined;
+  const directSessionId =
+    botChat?.kind === 'direct'
+      ? (botChat.sessions[botChat.members[0]]?.conversationId ?? null)
+      : null;
+  /** 实际订阅的会话：Code 会话 / 私聊成员当前会话 / 群聊里正在查看过程的成员会话 */
+  const subscribedId = botChatId ? (directSessionId ?? processId) : activeId;
+  const subscribedRef = useRef(subscribedId);
+  subscribedRef.current = subscribedId;
+  const botChatsRef = useRef(botChats);
+  botChatsRef.current = botChats;
+  const botChatIdRef = useRef(botChatId);
+  botChatIdRef.current = botChatId;
+  const memberIdsRef = useRef(new Set<string>());
+  memberIdsRef.current = new Set(
+    botChat?.kind === 'group'
+      ? Object.values(botChat.sessions).map((session) => session.conversationId)
+      : []
+  );
+  const botRefreshRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** 群时间线上滑分页：同一 beforeSeq 只发一次 */
+  const olderRequestRef = useRef<string | null>(null);
   /** VAPID 公钥（桌面下发）；用 ref 避免重建连接 effect */
   const vapidKeyRef = useRef<string | null>(null);
 
@@ -151,7 +198,17 @@ export function App() {
       if (data?.type !== 'open-session') return;
       const sessionId = parseSessionId(data.sessionId);
       if (!sessionId) return;
-      setActiveId(sessionId);
+      // Bot 成员会话的通知（后台审批等）落到对应 Bot 聊天，不当作 Code 会话打开
+      const chat = botChatsRef.current.find((item) =>
+        Object.values(item.sessions).some((session) => session.conversationId === sessionId)
+      );
+      if (chat) {
+        setBotChatId(chat.id);
+        setProcessId(null);
+      } else {
+        setBotChatId(null);
+        setActiveId(sessionId);
+      }
       setDrawerOpen(false);
     };
     navigator.serviceWorker.addEventListener('message', onMessage);
@@ -223,7 +280,40 @@ export function App() {
       },
       onProviders: setProviders,
       onSession: (id, next) => {
-        setView((prev) => (id === activeIdRef.current ? next : prev));
+        setView((prev) => (id === subscribedRef.current ? next : prev));
+        if (memberIdsRef.current.has(id)) setMemberViews((prev) => ({ ...prev, [id]: next }));
+      },
+      onBotCatalog: (enabled, list) => {
+        setBotEnabled(enabled);
+        setBots(list);
+        if (enabled) return;
+        setBotChats([]);
+        setBotChatId(null);
+        setProcessId(null);
+        setBotSegment(false);
+      },
+      onBotChats: setBotChats,
+      onGroupTimeline: (frame) =>
+        setTimelines((prev) => ({
+          ...prev,
+          [frame.chatId]: mergeGroupTimeline(prev[frame.chatId], frame),
+        })),
+      onBotChatState: ({ type: _type, chatId, ...rest }) =>
+        setChatStates((prev) => ({ ...prev, [chatId]: rest })),
+      onBotEvent: (event) => {
+        // 当前打开的群有变化：合并刷新最新一页时间线与运行态
+        if (!event.chatId || event.chatId !== botChatIdRef.current || botRefreshRef.current) {
+          return;
+        }
+        botRefreshRef.current = setTimeout(() => {
+          botRefreshRef.current = null;
+          const chatId = botChatIdRef.current;
+          const chat = botChatsRef.current.find((item) => item.id === chatId);
+          if (chatId && chat?.kind === 'group') client.send({ type: 'bot-chat-open', chatId });
+        }, 200);
+      },
+      onBotSendResult: (result) => {
+        if (!result.ok) setBotNotice(`发送失败：${result.error ?? '未知错误'}`);
       },
       onSync: (state) => setSyncing(state === 'syncing'),
       onGhostSession: (id) => {
@@ -295,6 +385,8 @@ export function App() {
       window.removeEventListener('pageshow', onPageShow);
       window.removeEventListener('focus', onFocus);
       window.removeEventListener('pagehide', onPageHide);
+      if (botRefreshRef.current) clearTimeout(botRefreshRef.current);
+      botRefreshRef.current = null;
       client.close();
       clientRef.current = null;
     };
@@ -305,16 +397,47 @@ export function App() {
   const freshIdsRef = useRef(new Set<string>());
   // biome-ignore lint/correctness/useExhaustiveDependencies: pairId 变化时也要在新 client 上重订阅
   useEffect(() => {
-    activeIdRef.current = activeId;
     // 用 has 而非读时删除：StrictMode 下 effect 双跑，第二跑不能把标记吞掉；切走时才消费
-    const fresh = activeId !== null && freshIdsRef.current.has(activeId);
-    clientRef.current?.subscribe(activeId, { fresh });
+    const fresh = subscribedId !== null && freshIdsRef.current.has(subscribedId);
+    clientRef.current?.subscribe(subscribedId, { fresh });
     for (const id of freshIdsRef.current) {
-      if (id !== activeId) freshIdsRef.current.delete(id);
+      if (id !== subscribedId) freshIdsRef.current.delete(id);
     }
-    setView(activeId ? (clientRef.current?.getSession(activeId) ?? null) : null);
-    if (device) saveLastSession(device.pairId, activeId);
-  }, [activeId, device?.pairId]);
+    setView(subscribedId ? (clientRef.current?.getSession(subscribedId) ?? null) : null);
+  }, [subscribedId, device?.pairId]);
+
+  const pairId = device?.pairId;
+  useEffect(() => {
+    if (pairId) saveLastSession(pairId, activeId);
+  }, [activeId, pairId]);
+
+  // 打开群聊或重连后：拉最新一页时间线与运行态；成员审批先用本地已有投影垫上
+  const groupOpenId = botChat?.kind === 'group' ? botChat.id : null;
+  useEffect(() => {
+    if (!groupOpenId || state !== 'online') return;
+    olderRequestRef.current = null;
+    clientRef.current?.send({ type: 'bot-chat-open', chatId: groupOpenId });
+  }, [groupOpenId, state]);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: memberIdsRef 随 botChat 在渲染期更新
+  useEffect(() => {
+    const seeded: Record<string, SessionView> = {};
+    for (const id of memberIdsRef.current) {
+      const session = clientRef.current?.getSession(id);
+      if (session) seeded[id] = session;
+    }
+    setMemberViews(seeded);
+  }, [groupOpenId, botChat?.sessions]);
+
+  // 冷启动通知带来的 ?session= 若是 Bot 成员会话：目录到达后转到对应 Bot 聊天
+  useEffect(() => {
+    if (!activeId || botChatId) return;
+    const chat = botChats.find((item) =>
+      Object.values(item.sessions).some((session) => session.conversationId === activeId)
+    );
+    if (!chat) return;
+    setBotChatId(chat.id);
+    setActiveId(null);
+  }, [activeId, botChatId, botChats]);
 
   // 排队区复用桌面组件，它经 store 桩调用这些方法；这里转成 pair 命令发回桌面
   useEffect(() => {
@@ -416,6 +539,15 @@ export function App() {
     setSyncing(false);
     setQueueEchoes([]);
     setRttMs(null);
+    setBotEnabled(false);
+    setBots([]);
+    setBotChats([]);
+    setBotChatId(null);
+    setProcessId(null);
+    setTimelines({});
+    setChatStates({});
+    setMemberViews({});
+    setBotNotice(null);
     setActiveId(nextActiveId);
   };
 
@@ -494,6 +626,112 @@ export function App() {
 
   const send = (command: Parameters<PairClient['send']>[0]) => clientRef.current?.send(command);
 
+  const openDrawer = () => {
+    setBotSegment(botEnabled && botChatId !== null);
+    setDrawerOpen(true);
+    if (botEnabled) send({ type: 'bot-catalog-request' });
+  };
+
+  const sendBot = (chatId: string, text: string, images: AttachedImage[] = []) => {
+    setBotNotice(null);
+    send({
+      type: 'bot-send',
+      chatId,
+      text,
+      ...(images.length ? { images } : {}),
+      deliveryId: crypto.randomUUID(),
+    });
+  };
+
+  const botById = new Map(bots.map((bot) => [bot.id, bot]));
+
+  const renderBotScreen = (chat: PairBotChatSummary) => {
+    if (chat.kind === 'group' && !processId) {
+      const pending: MemberPending[] = Object.entries(chat.sessions).flatMap(
+        ([botId, { conversationId }]) => {
+          const memberView = memberViews[conversationId];
+          return memberView ? [{ sessionId: conversationId, botId, view: memberView }] : [];
+        }
+      );
+      return (
+        <GroupChatScreen
+          chat={chat}
+          bots={botById}
+          timeline={timelines[chat.id]}
+          state={chatStates[chat.id]}
+          pending={pending}
+          connState={state}
+          stateLabel={connectionLabel}
+          notice={botNotice}
+          onOpenDrawer={openDrawer}
+          onLoadOlder={() => {
+            const beforeSeq = timelines[chat.id]?.entries[0]?.seq;
+            const key = `${chat.id}:${beforeSeq}`;
+            if (beforeSeq === undefined || olderRequestRef.current === key) return;
+            olderRequestRef.current = key;
+            send({ type: 'bot-timeline', chatId: chat.id, beforeSeq });
+          }}
+          onSend={(text) => sendBot(chat.id, text)}
+          onStop={() => send({ type: 'bot-stop', chatId: chat.id })}
+          onOpenProcess={setProcessId}
+          onApproval={(sessionId, requestId, decision) =>
+            send({ type: 'approval-respond', sessionId, requestId, decision })
+          }
+          onAsk={(sessionId, requestId, answer) =>
+            send({ type: 'ask-respond', sessionId, requestId, answer })
+          }
+        />
+      );
+    }
+    // 私聊：成员当前会话；群聊「查看过程」：该条回复所属的成员会话（只读）
+    const process = chat.kind === 'group';
+    const processBotId = timelines[chat.id]?.entries.find(
+      (entry) => entry.kind === 'bot' && entry.conversationId === processId
+    );
+    const member = botById.get(
+      process ? (processBotId?.kind === 'bot' ? processBotId.botId : '') : chat.members[0]
+    );
+    return (
+      <ChatScreen
+        sessionId={subscribedId ?? `bot-chat:${chat.id}`}
+        title={process ? `${member?.name ?? '成员'} · 过程` : (member?.name ?? chat.title)}
+        projectName={process ? chat.title : (member?.title ?? '')}
+        view={subscribedId ? view : EMPTY_VIEW}
+        connState={state}
+        stateLabel={connectionLabel}
+        syncing={syncing && Boolean(subscribedId)}
+        onOpenDrawer={openDrawer}
+        onNewSession={() => {}}
+        canCreate={false}
+        hasOlder={Boolean(
+          subscribedId && view && view.messages.size > 0 && Math.min(...view.messages.keys()) > 0
+        )}
+        historyLoading={Boolean(subscribedId && historyPending.has(subscribedId))}
+        onLoadOlder={() => subscribedId && clientRef.current?.requestHistory(subscribedId)}
+        voice={voice}
+        bot={process ? { readOnly: true, onBack: () => setProcessId(null) } : { notice: botNotice }}
+        onSend={(text, images) => sendBot(chat.id, text, images)}
+        onAbort={() => subscribedId && send({ type: 'abort', sessionId: subscribedId })}
+        onApproval={(requestId, decision) =>
+          subscribedId &&
+          send({ type: 'approval-respond', sessionId: subscribedId, requestId, decision })
+        }
+        onAsk={(requestId, answer) =>
+          subscribedId && send({ type: 'ask-respond', sessionId: subscribedId, requestId, answer })
+        }
+      />
+    );
+  };
+
+  const voice = voiceInput
+    ? (onPartial: Parameters<PairClient['startVoice']>[0]) =>
+        clientRef.current?.startVoice(onPartial) ?? {
+          push: () => {},
+          finish: () => Promise.resolve({ ok: false as const, error: 'failed' as const }),
+          cancel: () => {},
+        }
+    : undefined;
+
   const togglePush = async (next: boolean) => {
     setPushError(null);
     if (!next) {
@@ -521,83 +759,78 @@ export function App() {
 
   return (
     <>
-      <ChatScreen
-        sessionId={activeId}
-        title={entry?.title || (activeId ? '会话' : 'EnsoCode')}
-        projectName={entry?.projectName ?? ''}
-        cwd={entry?.cwd}
-        view={view}
-        connState={state}
-        stateLabel={connectionLabel}
-        syncing={syncing && Boolean(activeId)}
-        onOpenDrawer={() => setDrawerOpen(true)}
-        onNewSession={() => {
-          setComposeProjectId(null);
-          setComposing(true);
-        }}
-        canCreate={state === 'online' && projects.length > 0}
-        modelLabel={state === 'online' ? modelLabel : undefined}
-        onOpenConfig={() => setConfigOpen(true)}
-        tabGroup={tabGroup}
-        onSelectTab={setActiveId}
-        hasOlder={Boolean(
-          activeId && view && view.messages.size > 0 && Math.min(...view.messages.keys()) > 0
-        )}
-        historyLoading={Boolean(activeId && historyPending.has(activeId))}
-        onLoadOlder={() => activeId && clientRef.current?.requestHistory(activeId)}
-        voice={
-          voiceInput
-            ? (onPartial) =>
-                clientRef.current?.startVoice(onPartial) ?? {
-                  push: () => {},
-                  finish: () => Promise.resolve({ ok: false, error: 'failed' }),
-                  cancel: () => {},
-                }
-            : undefined
-        }
-        queued={withoutQueuedIds(entry?.queued, queueEchoes, activeId ?? '')}
-        echoes={queueEchoes}
-        goal={entry?.goal}
-        context={entry?.context}
-        usageTotals={entry?.usageTotals}
-        slashCommands={entry?.slashCommands}
-        onSend={(text, images) => {
-          if (!activeId) return;
-          const compact = parseCompactCommand(text);
-          if (compact) {
+      {botChat ? (
+        renderBotScreen(botChat)
+      ) : (
+        <ChatScreen
+          sessionId={activeId}
+          title={entry?.title || (activeId ? '会话' : 'EnsoCode')}
+          projectName={entry?.projectName ?? ''}
+          cwd={entry?.cwd}
+          view={view}
+          connState={state}
+          stateLabel={connectionLabel}
+          syncing={syncing && Boolean(activeId)}
+          onOpenDrawer={openDrawer}
+          onNewSession={() => {
+            setComposeProjectId(null);
+            setComposing(true);
+          }}
+          canCreate={state === 'online' && projects.length > 0}
+          modelLabel={state === 'online' ? modelLabel : undefined}
+          onOpenConfig={() => setConfigOpen(true)}
+          tabGroup={tabGroup}
+          onSelectTab={setActiveId}
+          hasOlder={Boolean(
+            activeId && view && view.messages.size > 0 && Math.min(...view.messages.keys()) > 0
+          )}
+          historyLoading={Boolean(activeId && historyPending.has(activeId))}
+          onLoadOlder={() => activeId && clientRef.current?.requestHistory(activeId)}
+          voice={voice}
+          queued={withoutQueuedIds(entry?.queued, queueEchoes, activeId ?? '')}
+          echoes={queueEchoes}
+          goal={entry?.goal}
+          context={entry?.context}
+          usageTotals={entry?.usageTotals}
+          slashCommands={entry?.slashCommands}
+          onSend={(text, images) => {
+            if (!activeId) return;
+            const compact = parseCompactCommand(text);
+            if (compact) {
+              send({
+                type: 'compact',
+                sessionId: activeId,
+                ...(compact.instructions ? { instructions: compact.instructions } : {}),
+              });
+              return;
+            }
+            const goalMatch = /^\/goal(?:\s+([\s\S]+))?$/.exec(text.trim());
+            if (goalMatch) {
+              const arg = goalMatch[1]?.trim();
+              if (!arg) return;
+              if (arg === 'clear') send({ type: 'goal-clear', sessionId: activeId });
+              else if (arg === 'pause') send({ type: 'goal-pause', sessionId: activeId });
+              else if (arg === 'resume') send({ type: 'goal-resume', sessionId: activeId });
+              else send({ type: 'goal-set', sessionId: activeId, text: arg });
+              return;
+            }
+            // 与桌面同语义：轮次进行中先入队（可编辑/删除/立即发送/打断并发送）
             send({
-              type: 'compact',
+              type: view?.status === 'running' ? 'enqueue' : 'prompt',
               sessionId: activeId,
-              ...(compact.instructions ? { instructions: compact.instructions } : {}),
+              text,
+              ...(images.length ? { images } : {}),
             });
-            return;
+          }}
+          onAbort={() => activeId && send({ type: 'abort', sessionId: activeId })}
+          onApproval={(requestId, decision) =>
+            activeId && send({ type: 'approval-respond', sessionId: activeId, requestId, decision })
           }
-          const goalMatch = /^\/goal(?:\s+([\s\S]+))?$/.exec(text.trim());
-          if (goalMatch) {
-            const arg = goalMatch[1]?.trim();
-            if (!arg) return;
-            if (arg === 'clear') send({ type: 'goal-clear', sessionId: activeId });
-            else if (arg === 'pause') send({ type: 'goal-pause', sessionId: activeId });
-            else if (arg === 'resume') send({ type: 'goal-resume', sessionId: activeId });
-            else send({ type: 'goal-set', sessionId: activeId, text: arg });
-            return;
+          onAsk={(requestId, answer) =>
+            activeId && send({ type: 'ask-respond', sessionId: activeId, requestId, answer })
           }
-          // 与桌面同语义：轮次进行中先入队（可编辑/删除/立即发送/打断并发送）
-          send({
-            type: view?.status === 'running' ? 'enqueue' : 'prompt',
-            sessionId: activeId,
-            text,
-            ...(images.length ? { images } : {}),
-          });
-        }}
-        onAbort={() => activeId && send({ type: 'abort', sessionId: activeId })}
-        onApproval={(requestId, decision) =>
-          activeId && send({ type: 'approval-respond', sessionId: activeId, requestId, decision })
-        }
-        onAsk={(requestId, answer) =>
-          activeId && send({ type: 'ask-respond', sessionId: activeId, requestId, answer })
-        }
-      />
+        />
+      )}
 
       <SessionDrawer
         open={drawerOpen}
@@ -605,7 +838,7 @@ export function App() {
         groups={projectGroups}
         catalog={catalog}
         pinnedOrder={pinnedOrder}
-        activeId={activeId}
+        activeId={botChatId ? null : activeId}
         canCreate={state === 'online'}
         devices={devices}
         activeDevicePairId={device.pairId}
@@ -613,6 +846,8 @@ export function App() {
         connectionLabel={connectionLabel}
         onClose={() => setDrawerOpen(false)}
         onSelect={(id) => {
+          setBotChatId(null);
+          setProcessId(null);
           setActiveId(id);
           setDrawerOpen(false);
         }}
@@ -634,6 +869,30 @@ export function App() {
         }}
         onRenameDevice={handleRename}
         onUnpairDevice={unpairDevice}
+        botSegment={
+          botEnabled
+            ? {
+                active: botSegment,
+                onChange: (next) => {
+                  setBotSegment(next);
+                  if (next) send({ type: 'bot-catalog-request' });
+                },
+                panel: (
+                  <BotDrawerPanel
+                    bots={bots}
+                    chats={botChats}
+                    activeChatId={botChatId}
+                    onSelect={(chatId) => {
+                      setBotChatId(chatId);
+                      setProcessId(null);
+                      setBotNotice(null);
+                      setDrawerOpen(false);
+                    }}
+                  />
+                ),
+              }
+            : undefined
+        }
       />
 
       <NewSessionSheet
@@ -651,6 +910,8 @@ export function App() {
           freshIdsRef.current.add(sessionId);
           setComposing(false);
           setComposeProjectId(null);
+          setBotChatId(null);
+          setProcessId(null);
           setActiveId(sessionId);
         }}
       />
