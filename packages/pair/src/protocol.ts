@@ -136,7 +136,10 @@ export type PhoneToHost =
   | { type: 'bot-chat-open'; chatId: string }
   /** 群时间线分页：缺省 beforeSeq = 最新一页 */
   | { type: 'bot-timeline'; chatId: string; beforeSeq?: number }
-  | { type: 'bot-stop'; chatId: string };
+  | { type: 'bot-stop'; chatId: string }
+  /** 收件箱：请求当前条目；忽略只对提示类条目有效（审批、提问、例程需要处理） */
+  | { type: 'bot-inbox-request' }
+  | { type: 'bot-inbox-dismiss'; key: string };
 
 /** 手机命令白名单：main 只接受这些 type，其余（set-approval-mode、设置写入等）拒绝 */
 export const PHONE_COMMAND_TYPES = [
@@ -180,6 +183,8 @@ export const PHONE_COMMAND_TYPES = [
   'bot-chat-open',
   'bot-timeline',
   'bot-stop',
+  'bot-inbox-request',
+  'bot-inbox-dismiss',
 ] as const satisfies readonly PhoneToHost['type'][];
 
 export function isPhoneCommand(value: unknown): value is PhoneToHost {
@@ -333,6 +338,28 @@ export interface PairBotEvent {
   seq?: number;
 }
 
+export interface PairBotInboxItem {
+  key: string;
+  kind:
+    | 'approval'
+    | 'ask'
+    | 'delegation-interrupted'
+    | 'budget'
+    | 'routine-draft'
+    | 'routine-blocked'
+    | 'silence';
+  chatId: string | null;
+  botId?: string;
+  /** 委派会话：botId 替 ownerBotId 执行 */
+  ownerBotId?: string;
+  /** 工具与摘要 / 问题 / 任务 / 例程标题或阻塞原因 */
+  text?: string;
+  /** 静默起点 */
+  since?: number;
+  createdAt: number;
+  dismissible: boolean;
+}
+
 export interface PairBotChatState {
   current: string | null;
   queue: string[];
@@ -451,4 +478,6 @@ export type HostToPhone =
   | { type: 'bot-event'; event: PairBotEvent }
   | ({ type: 'bot-chat-state'; chatId: string } & PairBotChatState)
   /** bot-send 的应答：失败时手机提示并恢复输入 */
-  | { type: 'bot-send-result'; chatId: string; deliveryId: string; ok: boolean; error?: string };
+  | { type: 'bot-send-result'; chatId: string; deliveryId: string; ok: boolean; error?: string }
+  /** Bot 收件箱：未结束且未忽略的条目（新的在前），变化时整表重推 */
+  | { type: 'bot-inbox'; items: PairBotInboxItem[] };

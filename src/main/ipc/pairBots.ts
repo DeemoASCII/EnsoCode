@@ -1,6 +1,7 @@
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import type { HostToPhone, PairBotRunState } from '@enso/pair';
+import { INBOX_DISMISSIBLE, visibleInbox } from '@shared/bots/inbox';
 import type { RendererAgentEvent } from '@shared/types/agent';
 import type { BotChat } from '@shared/types/bot';
 import { app } from 'electron';
@@ -108,6 +109,24 @@ async function replyDirectory(services: Services, reply: PairReply): Promise<voi
   announced = true;
   await reply(catalogFrame(services));
   await reply(chatsFrame(services));
+  await reply(inboxFrame(services));
+}
+
+function inboxFrame(services: Services): HostToPhone {
+  return {
+    type: 'bot-inbox',
+    items: visibleInbox(services.inbox.list()).map((item) => ({
+      key: item.key,
+      kind: item.kind,
+      chatId: item.chatId,
+      ...(item.botId ? { botId: item.botId } : {}),
+      ...(item.ownerBotId ? { ownerBotId: item.ownerBotId } : {}),
+      ...(item.text ? { text: item.text } : {}),
+      ...(item.since !== undefined ? { since: item.since } : {}),
+      createdAt: item.createdAt,
+      dismissible: INBOX_DISMISSIBLE.includes(item.kind),
+    })),
+  };
 }
 
 function replyTimeline(
@@ -152,6 +171,13 @@ async function handle(_pairId: string, command: PairBotCommand, reply: PairReply
   switch (command.type) {
     case 'bot-catalog-request':
       await replyDirectory(services, reply);
+      return;
+    case 'bot-inbox-request':
+      await reply(inboxFrame(services));
+      return;
+    case 'bot-inbox-dismiss':
+      // 结果经 inbox 事件整表重推；不可忽略的条目 Main 拒绝
+      services.inbox.dismiss(command.key);
       return;
     case 'bot-chat-open': {
       const chat = services.chats.get(command.chatId);
@@ -246,6 +272,12 @@ export function registerPairBotHandlers(): void {
     },
   });
   observeBotEvents((event) => {
+    // 收件箱变化：整表重推（手机端没有 bot-event 的 inbox kind）
+    if (event.kind === 'inbox') {
+      const services = enabledServices();
+      if (services && announced) broadcastPairFrame(inboxFrame(services));
+      return;
+    }
     // 群任务看板 / 核心笔记手机端暂不支持、通知跳转只给本机窗口：不转发新 kind，pair 协议保持不变
     if (
       !botModeEnabled() ||

@@ -262,7 +262,16 @@ export function setPairQueueActionListener(listener: (action: PairQueueAction) =
 
 export type PairBotCommand = Extract<
   PhoneToHost,
-  { type: 'bot-catalog-request' | 'bot-send' | 'bot-chat-open' | 'bot-timeline' | 'bot-stop' }
+  {
+    type:
+      | 'bot-catalog-request'
+      | 'bot-send'
+      | 'bot-chat-open'
+      | 'bot-timeline'
+      | 'bot-stop'
+      | 'bot-inbox-request'
+      | 'bot-inbox-dismiss';
+  }
 >;
 export type PairReply = (message: HostToPhone) => Promise<boolean>;
 
@@ -1037,6 +1046,8 @@ async function handleFrame(
     case 'bot-chat-open':
     case 'bot-timeline':
     case 'bot-stop':
+    case 'bot-inbox-request':
+    case 'bot-inbox-dismiss':
       // 发送可能要等 spawn：不卡本连接的收帧队列
       void botPort
         ?.handle(conn.device.pairId, command, (message) => send(conn, message))

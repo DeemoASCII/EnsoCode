@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { budgetAlerts, budgetDraft, budgetFormOf, limitsDraft, limitsFormOf } from './budget';
+import { budgetDraft, budgetFormOf, limitsDraft, limitsFormOf } from './budget';
 
 describe('budget form', () => {
   it('round-trips a stored budget and treats blanks as unlimited', () => {
@@ -54,24 +54,5 @@ describe('limits form', () => {
       );
     for (const maxTurnTokens of ['0', '1.5', '-1', 'x'])
       expect(limitsDraft({ delegationTimeout: '', maxTurnTokens }).ok, maxTurnTokens).toBe(false);
-  });
-});
-
-describe('budgetAlerts', () => {
-  const today = { tokens: 0, cost: null, messages: 0, sessions: 0 };
-  const row = { today, week: today, month: today };
-  it('lists members exhausted today that have not been dismissed for that day', () => {
-    const overview = {
-      day: '2026-10-04',
-      bots: {
-        a: { ...row, exhausted: 'tokens' as const },
-        b: row,
-        c: { ...row, exhausted: 'cost' as const },
-      },
-    };
-    expect(budgetAlerts(overview, ['c:2026-10-04', 'a:2026-10-03'])).toEqual([
-      { botId: 'a', day: '2026-10-04', reason: 'tokens', key: 'a:2026-10-04' },
-    ]);
-    expect(budgetAlerts(null, [])).toEqual([]);
   });
 });

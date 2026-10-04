@@ -1,13 +1,16 @@
-import type { PairBotChatSummary, PairBotMember } from '@enso/pair';
+import type { PairBotChatSummary, PairBotInboxItem, PairBotMember } from '@enso/pair';
 import { cn } from '@/lib/utils';
 import { BotAvatar } from './BotAvatar';
-import { botChatSections } from './botState';
+import { botChatSections, inboxLabel } from './botState';
 
 interface Props {
   bots: PairBotMember[];
   chats: PairBotChatSummary[];
   activeChatId: string | null;
   onSelect(chatId: string): void;
+  /** 收件箱（未结束且未忽略）；提示类条目可忽略 */
+  inbox?: PairBotInboxItem[];
+  onDismiss?(key: string): void;
 }
 
 const STATUS_TEXT = { running: '工作中', queued: '排队中' } as const;
@@ -21,7 +24,14 @@ function lastLine(chat: PairBotChatSummary, byId: Map<string, PairBotMember>): s
 }
 
 /** 抽屉「Bot」分段：群聊在上、成员私聊在下；新建/编辑只在桌面端 */
-export function BotDrawerPanel({ bots, chats, activeChatId, onSelect }: Props) {
+export function BotDrawerPanel({
+  bots,
+  chats,
+  activeChatId,
+  onSelect,
+  inbox = [],
+  onDismiss,
+}: Props) {
   const byId = new Map(bots.map((bot) => [bot.id, bot]));
   const { groups, directs } = botChatSections(chats, bots);
   const row = (chat: PairBotChatSummary) => {
@@ -68,6 +78,50 @@ export function BotDrawerPanel({ bots, chats, activeChatId, onSelect }: Props) {
           <p className="rounded-lg border border-dashed px-3 py-6 text-center text-muted-foreground text-sm">
             桌面端还没有 Bot 聊天
           </p>
+        )}
+        {inbox.length > 0 && (
+          <div>
+            <p className="px-2 py-1.5 font-medium text-muted-foreground text-xs">
+              收件箱 · {inbox.length}
+            </p>
+            {inbox.map((item) => {
+              const member = item.botId ? byId.get(item.botId) : undefined;
+              const owner = item.ownerBotId ? byId.get(item.ownerBotId) : undefined;
+              return (
+                <div key={item.key} className="flex items-center gap-2 rounded-lg px-2 py-2">
+                  <button
+                    type="button"
+                    disabled={!item.chatId}
+                    onClick={() => item.chatId && onSelect(item.chatId)}
+                    className="flex min-w-0 flex-1 items-center gap-2.5 text-left"
+                  >
+                    <BotAvatar bot={member} />
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate font-medium text-sm">
+                        {member?.name ?? '成员'}
+                        {owner ? ` 替 ${owner.name}` : ''}
+                        <span className="ml-1.5 font-normal text-brand text-xs">
+                          {inboxLabel(item, Date.now())}
+                        </span>
+                      </span>
+                      <span className="block truncate text-muted-foreground text-xs">
+                        {item.text || '\u00a0'}
+                      </span>
+                    </span>
+                  </button>
+                  {item.dismissible && onDismiss && (
+                    <button
+                      type="button"
+                      onClick={() => onDismiss(item.key)}
+                      className="shrink-0 rounded px-2 py-1 text-muted-foreground text-xs hover:bg-muted"
+                    >
+                      忽略
+                    </button>
+                  )}
+                </div>
+              );
+            })}
+          </div>
         )}
         {groups.length > 0 && (
           <div>

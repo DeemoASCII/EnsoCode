@@ -1,14 +1,12 @@
 import type { ApprovalRequestInfo, AskRequestInfo } from '@shared/types/agent';
-import type { BotChat, BotRoutine, Delegation } from '@shared/types/bot';
+import type { BotChat, Delegation } from '@shared/types/bot';
 import { describe, expect, it } from 'vitest';
 import { emptyProjection } from '@/stores/sessions/reducer';
 import {
   activeDelegations,
-  botPendingCount,
   delegationActions,
   delegationOwners,
   formatElapsed,
-  interruptedDelegations,
   isRetried,
   openTarget,
   pendingOwners,
@@ -95,68 +93,6 @@ describe('isRetried', () => {
     expect(isRetried(original, list)).toBe(true);
     expect(isRetried(lookalike, list)).toBe(false);
     expect(isRetried(retry, list)).toBe(false);
-  });
-});
-
-describe('interruptedDelegations', () => {
-  const interrupted = record({ state: 'failed', failure: 'interrupted', finishedAt: 50 });
-  it('列出因重启中断且未处理的委派', () => {
-    expect(interruptedDelegations([interrupted, record({ id: 'x', state: 'failed' })], [])).toEqual(
-      [interrupted]
-    );
-  });
-  it('已忽略、已重试（之后有同父会话/目标/任务的新委派）或无聊天的不再列出', () => {
-    expect(interruptedDelegations([interrupted], ['d1'])).toEqual([]);
-    expect(
-      interruptedDelegations(
-        [interrupted, record({ id: 'd9', createdAt: 60, state: 'queued' })],
-        []
-      )
-    ).toEqual([]);
-    expect(interruptedDelegations([{ ...interrupted, chatId: null }], [])).toEqual([]);
-  });
-});
-
-describe('botPendingCount', () => {
-  it('所有 bot 会话（含委派子会话）的待审批/提问 + 未忽略的中断委派', () => {
-    const sessions = {
-      p1: { ...emptyProjection, pendingAsks: [{ requestId: 'a' } as AskRequestInfo] },
-      k1: { ...emptyProjection, pendingApprovals: [{ requestId: 'r' } as ApprovalRequestInfo] },
-      orphan: { ...emptyProjection, pendingAsks: [{ requestId: 'o' } as AskRequestInfo] },
-    };
-    const interrupted = record({
-      id: 'd2',
-      childConversationId: 'k2',
-      state: 'failed',
-      failure: 'interrupted',
-    });
-    const state = {
-      sessions,
-      chats: [chat],
-      delegations: [record({}), interrupted],
-      dismissedDelegations: [],
-    };
-    expect(botPendingCount(state)).toBe(3);
-    expect(botPendingCount({ ...state, dismissedDelegations: ['d2'] })).toBe(2);
-    const draft = { id: 'r', status: 'draft', updatedAt: 1 } as BotRoutine;
-    expect(
-      botPendingCount({
-        ...state,
-        routines: [draft, { ...draft, id: 'r2', status: 'enabled' } as BotRoutine],
-      })
-    ).toBe(4);
-    expect(
-      botPendingCount({ sessions: {}, chats: [], delegations: [], dismissedDelegations: [] })
-    ).toBe(0);
-    const zero = { tokens: 0, cost: null, messages: 0, sessions: 0 };
-    const usage = {
-      day: '2026-10-04',
-      bots: { ops: { today: zero, week: zero, month: zero, exhausted: 'cost' as const } },
-    };
-    expect(botPendingCount({ ...state, usage, dismissedBudgets: [] })).toBe(4);
-    expect(botPendingCount({ ...state, usage, dismissedBudgets: ['ops:2026-10-04'] })).toBe(3);
-    const quiet = { conversationId: 'p1', chatId: 'c1', botId: 'boss', since: 1 };
-    expect(botPendingCount({ ...state, silences: [quiet] })).toBe(4);
   });
 });
 

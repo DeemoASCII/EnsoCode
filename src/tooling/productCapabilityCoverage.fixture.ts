@@ -750,6 +750,8 @@ export const IPC_PRODUCT_COVERAGE = {
   BOT_EVENT: excluded('Bot mode change notification transport.'),
   BOT_USAGE_SUMMARY: excluded('Bot mode per-member usage ranking UI.'),
   BOT_USAGE: excluded('Bot mode member usage overview and budget status UI.'),
+  BOT_INBOX_LIST: excluded('Bot mode inbox UI.'),
+  BOT_INBOX_UPDATE: excluded('Bot mode inbox dismiss / reopen UI.'),
   BOT_DELEGATIONS_LIST: excluded('Bot mode delegation projection UI.'),
   BOT_DELEGATION_CANCEL: excluded('Bot mode delegation UI action.'),
   BOT_DELEGATION_RETRY: excluded('Bot mode delegation UI action.'),

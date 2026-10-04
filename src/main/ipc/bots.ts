@@ -27,6 +27,7 @@ import type {
   BotFileSearchResult,
   BotGetResult,
   BotGoalSuggestResult,
+  BotInboxListResult,
   BotNewSessionResult,
   BotNotesResult,
   BotPersonaSuggestResult,
@@ -88,6 +89,8 @@ import {
 } from '../services/bots/groupHistory';
 import { GroupTaskStore } from '../services/bots/groupTaskStore';
 import { GroupTaskService } from '../services/bots/groupTasks';
+import { BotInboxService } from '../services/bots/inbox';
+import { BotInboxStore } from '../services/bots/inboxStore';
 import { removeBotMemorySpace } from '../services/bots/memoryCleanup';
 import { proposeRoutine } from '../services/bots/routineProposal';
 import { RoutineRunner } from '../services/bots/routineRunner';
@@ -126,6 +129,7 @@ import {
   parseChatCreateInput,
   parseChatUpdateInput,
   parseGoalSuggestRequest,
+  parseInboxUpdateInput,
   parseNotesSaveInput,
   parseNotesTargetInput,
   parseOpenWorkspaceInput,
@@ -152,6 +156,7 @@ interface BotServices {
   tasks: GroupTaskService;
   usage: BotUsageService;
   snooze: ChatSnoozeTimer;
+  inbox: BotInboxService;
   composerRefs: ComposerRefs;
 }
 
@@ -181,6 +186,7 @@ export function botModeEnabled(): boolean {
 export function emitBotEvent(event: BotEvent): void {
   if (event.kind === 'catalog' || event.kind === 'chat') services?.scheduler.refresh();
   if (event.kind === 'chat') services?.snooze.refresh();
+  if (event.kind !== 'inbox') services?.inbox.onBotEvent(event);
   try {
     sendToAllWindows(IPC_CHANNELS.BOT_EVENT, event);
   } catch {
@@ -503,9 +509,20 @@ export function getBotServices(): BotServices | null {
     run: (routine, options) => runner.run(routine, options),
     emit: emitBotEvent,
   });
+  const inbox = new BotInboxService({
+    store: new BotInboxStore(path.join(userData, 'bot-chats', 'inbox.jsonl')),
+    conversation: (id) => authority.conversation(id),
+    delegations: () => delegationStore.list(),
+    routines: () => routines.listAll(),
+    usage: () => usage.overview(),
+    silences: () => host.silences(),
+    emit: emitBotEvent,
+  });
+  host.onTurnFinished((event) => inbox.turnFinished(event.conversationId));
   setBotWorkerEventObserver((event) => {
     runner.observe(event);
     host.observe(event);
+    inbox.observe(event);
     if (event.type === 'status' && event.status === 'running')
       delegations.observeRunning(event.identity.sessionId);
   });
@@ -554,6 +571,7 @@ export function getBotServices(): BotServices | null {
     usage,
     composerRefs,
     snooze,
+    inbox,
   };
   if (botModeEnabled()) scheduler.start();
   snooze.refresh();
@@ -1501,4 +1519,15 @@ export function registerBotHandlers(): void {
     async (_sender, _request, services) => ({ ok: true, ...(await services.usage.overview()) }),
     { ok: true, day: '', bots: {} }
   );
+  handle(
+    IPC_CHANNELS.BOT_INBOX_LIST,
+    'read',
+    (_sender, _request, { inbox }): BotInboxListResult => ({ ok: true, items: inbox.list() }),
+    { ok: true, items: [] } satisfies BotInboxListResult
+  );
+  handle(IPC_CHANNELS.BOT_INBOX_UPDATE, 'write', (_sender, request, { inbox }) => {
+    const input = parseInboxUpdateInput(request);
+    if (!input) return INVALID;
+    return input.action === 'dismiss' ? inbox.dismiss(input.key) : inbox.reopen(input.key);
+  });
 }

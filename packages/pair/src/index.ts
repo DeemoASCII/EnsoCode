@@ -80,6 +80,7 @@ export {
   type PairBotChatState,
   type PairBotChatSummary,
   type PairBotEvent,
+  type PairBotInboxItem,
   type PairBotMember,
   type PairBotRunState,
   type PairControl,

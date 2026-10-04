@@ -26,6 +26,7 @@ const READ_ONLY_ALLOWED = [
   'bot-catalog-request',
   'bot-chat-open',
   'bot-timeline',
+  'bot-inbox-request',
 ];
 
 describe('配对作用域', () => {
@@ -58,6 +59,7 @@ describe('配对作用域', () => {
       'voice-chunk',
       'bot-send',
       'bot-stop',
+      'bot-inbox-dismiss',
     ] as const)
       expect(commandAllowedForScope('read', type), type).toBe(false);
   });

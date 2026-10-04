@@ -1,3 +1,4 @@
+import { visibleInbox } from '@shared/bots/inbox';
 import type { AttachedImage } from '@shared/types/agent';
 import type {
   BotChat,
@@ -10,6 +11,7 @@ import type {
 import type {
   BotActionResult,
   BotEvent,
+  BotInboxItem,
   BotQueueItem,
   BotSearchHit,
   BotSendResult,
@@ -22,7 +24,7 @@ import { applyHistoryPage, emptyProjection } from '@/stores/sessions/reducer';
 import { resizeSidePanelWidth, SIDE_PANEL_DEFAULT_WIDTH } from '@/stores/sidePanel/width';
 import type { BotUsageSnapshot } from './budget';
 import { createCoalescer } from './coalesce';
-import { botPendingCount, isActiveDelegation } from './delegations';
+import { isActiveDelegation } from './delegations';
 import { mergeLatest, mergeOlder } from './groupTimeline';
 import { applyBotAgentEvent, type BotSessions, seedHistory } from './projection';
 import { chatSummary } from './selectors';
@@ -65,8 +67,9 @@ const READS_KEY = 'enso-bot-reads';
 const PANEL_KEY = 'enso-bot-panel';
 const PANEL_WIDTH_KEY = 'enso-bot-panel-width';
 const VIEW_KEY = 'enso-bot-view';
-const DISMISSED_KEY = 'enso-bot-dismissed-delegations';
-const DISMISSED_BUDGETS_KEY = 'enso-bot-dismissed-budgets';
+/** 旧版收件箱忽略记录（localStorage），首次连上 Main 收件箱时迁移后删除 */
+const LEGACY_DISMISSED_KEY = 'enso-bot-dismissed-delegations';
+const LEGACY_DISMISSED_BUDGETS_KEY = 'enso-bot-dismissed-budgets';
 
 function loadReads(): Record<string, number> | null {
   try {
@@ -85,7 +88,7 @@ function loadView(): BotView {
   return raw ? { kind: 'chat', chatId: raw } : null;
 }
 
-function loadDismissed(key = DISMISSED_KEY): string[] {
+function loadDismissed(key: string): string[] {
   try {
     const parsed = JSON.parse(localStorage.getItem(key) ?? '[]');
     return Array.isArray(parsed) ? parsed.filter((id) => typeof id === 'string') : [];
@@ -103,12 +106,10 @@ interface BotsState {
   /** 运行中却超过静默阈值没有输出的成员会话（Main 看门狗） */
   silences: BotSilence[];
   delegations: Delegation[];
-  /** 收件箱里被忽略的中断委派 */
-  dismissedDelegations: string[];
+  /** Main 收件箱（未结束的条目，含已忽略） */
+  inbox: BotInboxItem[];
   /** 成员用量概览（今日 / 7 天 / 30 天 + 今日是否超预算） */
   usage: BotUsageSnapshot | null;
-  /** 收件箱里被忽略的预算提示，键为 botId:YYYY-MM-DD */
-  dismissedBudgets: string[];
   /** 全部例行任务：收件箱的待批准 / 阻塞提示、群时间线里的提议卡片 */
   routines: BotRoutine[];
   timelines: Record<string, TimelineState>;
@@ -131,9 +132,9 @@ interface BotsState {
   refreshChats: () => Promise<void>;
   /** 拉委派列表，并跟踪进行中委派的子会话（审批/提问归属发起聊天） */
   refreshDelegations: () => Promise<void>;
-  dismissDelegation: (id: string) => void;
+  refreshInbox: () => Promise<void>;
+  dismissInbox: (key: string) => Promise<void>;
   refreshUsage: () => Promise<void>;
-  dismissBudget: (key: string) => void;
   refreshRoutines: () => Promise<void>;
   refreshTasks: (chatId: string) => Promise<void>;
   loadLatest: (chatId: string) => Promise<void>;
@@ -267,7 +268,27 @@ export const useBotsStore = create<BotsState>()((set, get) => {
       case 'budget':
         void get().refreshUsage();
         break;
+      case 'inbox':
+        void get().refreshInbox();
+        break;
     }
+  };
+
+  /** 旧版 localStorage 里的忽略记录交给 Main 收件箱，只做一次 */
+  const migrateDismissed = async () => {
+    const keys = [
+      ...loadDismissed(LEGACY_DISMISSED_KEY).map((id) => `delegation-interrupted:${id}`),
+      ...loadDismissed(LEGACY_DISMISSED_BUDGETS_KEY).map((key) => `budget:${key}`),
+    ];
+    if (localStorage.getItem(LEGACY_DISMISSED_KEY) === null && keys.length === 0) return;
+    const active = new Set(get().inbox.map((item) => item.key));
+    await Promise.all(
+      keys
+        .filter((key) => active.has(key))
+        .map((key) => window.electronAPI.bots.inbox.update({ key, action: 'dismiss' }))
+    ).catch(() => {});
+    localStorage.removeItem(LEGACY_DISMISSED_KEY);
+    localStorage.removeItem(LEGACY_DISMISSED_BUDGETS_KEY);
   };
 
   const subscribe = () => {
@@ -305,7 +326,9 @@ export const useBotsStore = create<BotsState>()((set, get) => {
         get().refreshDelegations(),
         get().refreshUsage(),
         get().refreshRoutines(),
+        get().refreshInbox(),
       ]);
+      void migrateDismissed();
       const groups = get().chats.filter((chat) => chat.kind === 'group');
       await Promise.all([
         ...groups.map((chat) => get().loadLatest(chat.id)),
@@ -329,9 +352,8 @@ export const useBotsStore = create<BotsState>()((set, get) => {
     queue: [],
     silences: [],
     delegations: [],
-    dismissedDelegations: loadDismissed(),
+    inbox: [],
     usage: null,
-    dismissedBudgets: loadDismissed(DISMISSED_BUDGETS_KEY),
     routines: [],
     timelines: {},
     runtime: {},
@@ -402,10 +424,21 @@ export const useBotsStore = create<BotsState>()((set, get) => {
       set((state) => ({ tasks: { ...state.tasks, [chatId]: result.tasks } }));
     },
 
-    dismissDelegation: (id) => {
-      const next = [...get().dismissedDelegations.filter((item) => item !== id), id];
-      localStorage.setItem(DISMISSED_KEY, JSON.stringify(next));
-      set({ dismissedDelegations: next });
+    refreshInbox: () =>
+      coalesce('inbox', async () => {
+        const result = await window.electronAPI.bots.inbox.list();
+        if (result.ok) set({ inbox: result.items });
+      }),
+
+    dismissInbox: async (key) => {
+      // 先本地隐藏，Main 的 inbox 事件随后以权威列表覆盖
+      set((state) => ({
+        inbox: state.inbox.map((item) =>
+          item.key === key ? { ...item, dismissedAt: Date.now() } : item
+        ),
+      }));
+      await window.electronAPI.bots.inbox.update({ key, action: 'dismiss' }).catch(() => null);
+      await get().refreshInbox();
     },
 
     refreshUsage: () =>
@@ -417,13 +450,6 @@ export const useBotsStore = create<BotsState>()((set, get) => {
           // 用量概览只影响收件箱提示与资料面板，失败不阻断其余加载
         }
       }),
-
-    dismissBudget: (key) => {
-      // 只留最近的键，避免逐日累积
-      const next = [...get().dismissedBudgets.filter((item) => item !== key), key].slice(-200);
-      localStorage.setItem(DISMISSED_BUDGETS_KEY, JSON.stringify(next));
-      set({ dismissedBudgets: next });
-    },
 
     refreshRoutines: () =>
       coalesce('routines', async () => {
@@ -698,5 +724,6 @@ export const useBotsStore = create<BotsState>()((set, get) => {
   };
 });
 
+/** Bot 待处理数：收件箱入口与标题栏徽标共用 */
 export const useBotPendingCount = (): number =>
-  useBotsStore(botPendingCount) + usePendingMemoryWrites().length;
+  useBotsStore((s) => visibleInbox(s.inbox).length) + usePendingMemoryWrites().length;

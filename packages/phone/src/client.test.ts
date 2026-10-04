@@ -879,6 +879,7 @@ describe('PairClient Bot 帧', () => {
       onBotEvent: vi.fn(),
       onBotChatState: vi.fn(),
       onBotSendResult: vi.fn(),
+      onBotInbox: vi.fn(),
     };
     client = new PairClient(device, events, null, {
       load: vi.fn(async () => null),
@@ -919,6 +920,8 @@ describe('PairClient Bot 帧', () => {
       hasOlder: false,
     };
     socket.receive({ type: 'bot-catalog', enabled: true, bots: [] });
+    socket.receive({ type: 'bot-inbox', items: [{ key: 'k', kind: 'budget', chatId: null }] });
+    socket.receive({ type: 'bot-inbox', items: 'bad' });
     socket.receive(timeline);
     socket.receive({ type: 'bot-event', event: { kind: 'timeline', chatId: 'c', seq: 3 } });
     socket.receive({
@@ -939,6 +942,8 @@ describe('PairClient Bot 帧', () => {
     });
     await settle();
     expect(events.onBotCatalog).toHaveBeenCalledWith(true, []);
+    expect(events.onBotInbox).toHaveBeenCalledTimes(1);
+    expect(events.onBotInbox).toHaveBeenCalledWith([{ key: 'k', kind: 'budget', chatId: null }]);
     expect(events.onGroupTimeline).toHaveBeenCalledWith(timeline);
     expect(events.onBotEvent).toHaveBeenCalledWith({ kind: 'timeline', chatId: 'c', seq: 3 });
     expect(events.onBotChatState).toHaveBeenCalledWith(expect.objectContaining({ chatId: 'c' }));

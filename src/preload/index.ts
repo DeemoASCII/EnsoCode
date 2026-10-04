@@ -149,6 +149,8 @@ import type {
   BotGetResult,
   BotGoalSuggestRequest,
   BotGoalSuggestResult,
+  BotInboxListResult,
+  BotInboxUpdateInput,
   BotNewSessionResult,
   BotNotesResult,
   BotPersonaSuggestRequest,
@@ -1286,6 +1288,11 @@ const electronAPI = {
     usageSummary: (days: UsageRangeDays): Promise<BotUsageSummaryResult> =>
       ipcRenderer.invoke(IPC_CHANNELS.BOT_USAGE_SUMMARY, days),
     usage: (): Promise<BotUsageOverviewResult> => ipcRenderer.invoke(IPC_CHANNELS.BOT_USAGE),
+    inbox: {
+      list: (): Promise<BotInboxListResult> => ipcRenderer.invoke(IPC_CHANNELS.BOT_INBOX_LIST),
+      update: (request: BotInboxUpdateInput): Promise<BotActionResult> =>
+        ipcRenderer.invoke(IPC_CHANNELS.BOT_INBOX_UPDATE, request),
+    },
     artifacts: {
       list: (target: BotArtifactTarget): Promise<BotArtifactsResult> =>
         ipcRenderer.invoke(IPC_CHANNELS.BOT_ARTIFACTS_LIST, target),

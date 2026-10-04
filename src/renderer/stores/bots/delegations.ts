@@ -1,9 +1,5 @@
-import type { BotChat, BotRoutine, Delegation, DelegationState } from '@shared/types/bot';
-import type { BotSilence } from '@shared/types/botIpc';
-import { type BotUsageSnapshot, budgetAlerts } from './budget';
-import type { BotSessions } from './projection';
-import { routineAlerts } from './routines';
-import { pendingItems, type SessionOwner, sessionOwners } from './selectors';
+import type { BotChat, Delegation, DelegationState } from '@shared/types/bot';
+import { type SessionOwner, sessionOwners } from './selectors';
 
 export const isActiveDelegation = (state: DelegationState) =>
   state === 'queued' || state === 'running';
@@ -44,60 +40,11 @@ export function isRetried(item: Delegation, delegations: readonly Delegation[]):
   return delegations.some((other) => other.retryOf === item.id);
 }
 
-/** 之后出现了同父会话、同目标、同任务的新委派（成员自己重新委派） */
-function isRedone(item: Delegation, delegations: readonly Delegation[]): boolean {
-  return delegations.some(
-    (other) =>
-      other.createdAt > item.createdAt &&
-      other.parentConversationId === item.parentConversationId &&
-      other.targetBotId === item.targetBotId &&
-      other.task === item.task
-  );
-}
-
-/** 重启中断、未被重试也未忽略的委派，新的在前 */
-export function interruptedDelegations(
-  delegations: readonly Delegation[],
-  dismissed: readonly string[]
-): Delegation[] {
-  return delegations
-    .filter(
-      (item) =>
-        item.chatId !== null &&
-        item.state === 'failed' &&
-        item.failure === 'interrupted' &&
-        !dismissed.includes(item.id) &&
-        !isRetried(item, delegations) &&
-        !isRedone(item, delegations)
-    )
-    .sort((a, b) => (b.finishedAt ?? b.createdAt) - (a.finishedAt ?? a.createdAt));
-}
-
 export function delegationActions(state: DelegationState): { cancel: boolean; retry: boolean } {
   return {
     cancel: isActiveDelegation(state),
     retry: state === 'failed' || state === 'canceled',
   };
-}
-
-/** Bot 待处理数：收件箱入口与标题栏徽标共用 */
-export function botPendingCount(state: {
-  sessions: BotSessions;
-  chats: readonly BotChat[];
-  delegations: readonly Delegation[];
-  dismissedDelegations: readonly string[];
-  usage?: BotUsageSnapshot | null;
-  dismissedBudgets?: readonly string[];
-  routines?: readonly BotRoutine[];
-  silences?: readonly BotSilence[];
-}): number {
-  return (
-    pendingItems(state.sessions, pendingOwners(state.chats, state.delegations)).length +
-    interruptedDelegations(state.delegations, state.dismissedDelegations).length +
-    budgetAlerts(state.usage ?? null, state.dismissedBudgets ?? []).length +
-    routineAlerts(state.routines ?? []).length +
-    (state.silences?.length ?? 0)
-  );
 }
 
 /** 通知点击的跳转目标：委派子会话没有聊天绑定时归到委派所属聊天，都找不到就去收件箱 */

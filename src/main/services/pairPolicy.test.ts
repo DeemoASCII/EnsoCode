@@ -565,6 +565,16 @@ describe('Bot 模式上行命令', () => {
       ok: true,
       command: { type: 'bot-catalog-request' },
     });
+    expect(parsePhoneCommand({ type: 'bot-inbox-request', x: 1 })).toEqual({
+      ok: true,
+      command: { type: 'bot-inbox-request' },
+    });
+    expect(parsePhoneCommand({ type: 'bot-inbox-dismiss', key: 'budget:a:d', x: 1 })).toEqual({
+      ok: true,
+      command: { type: 'bot-inbox-dismiss', key: 'budget:a:d' },
+    });
+    for (const key of [undefined, 1, '', 'k'.repeat(301)])
+      expect(parsePhoneCommand({ type: 'bot-inbox-dismiss', key }).ok).toBe(false);
     expect(parsePhoneCommand({ type: 'bot-chat-open', chatId })).toEqual({
       ok: true,
       command: { type: 'bot-chat-open', chatId },

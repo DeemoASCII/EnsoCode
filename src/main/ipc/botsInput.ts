@@ -423,6 +423,23 @@ export function parseTimelineInput(
   };
 }
 
+/** 收件箱忽略 / 重新打开：key 由 Main 生成，这里只限长度 */
+export function parseInboxUpdateInput(
+  value: unknown
+): { key: string; action: 'dismiss' | 'reopen' } | null {
+  const input = record(value);
+  if (
+    !input ||
+    !onlyKeys(input, ['key', 'action']) ||
+    typeof input.key !== 'string' ||
+    !input.key ||
+    input.key.length > 300 ||
+    (input.action !== 'dismiss' && input.action !== 'reopen')
+  )
+    return null;
+  return { key: input.key, action: input.action };
+}
+
 export function parseOpenWorkspaceInput(
   value: unknown
 ): { chatId: string } | { botId: string } | null {

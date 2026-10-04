@@ -1,4 +1,10 @@
-import type { HostToPhone, PairBotChatSummary, PairBotMember, PairGroupEntry } from '@enso/pair';
+import type {
+  HostToPhone,
+  PairBotChatSummary,
+  PairBotInboxItem,
+  PairBotMember,
+  PairGroupEntry,
+} from '@enso/pair';
 import { mentionCandidates } from '@shared/bots/mentions';
 import { BOT_MENTION_ALL, botNameKey } from '@shared/types/bot';
 
@@ -97,4 +103,19 @@ export function insertMention(
     text: text.slice(0, mention.start) + inserted + text.slice(caret),
     caret: mention.start + inserted.length,
   };
+}
+
+const INBOX_LABELS: Record<Exclude<PairBotInboxItem['kind'], 'silence'>, string> = {
+  approval: '需要审批',
+  ask: '等你回答',
+  'delegation-interrupted': '委派中断',
+  budget: '今日预算已用完',
+  'routine-draft': '例行任务待批准',
+  'routine-blocked': '例行任务被阻塞',
+};
+
+/** 收件箱条目标签；静默按 now 算已安静秒数 */
+export function inboxLabel(item: PairBotInboxItem, now: number): string {
+  if (item.kind !== 'silence') return INBOX_LABELS[item.kind];
+  return `已安静 ${Math.max(0, Math.floor((now - (item.since ?? now)) / 1000))} 秒`;
 }

@@ -2,6 +2,7 @@ import {
   type CatalogEntry,
   type PairBotChatState,
   type PairBotChatSummary,
+  type PairBotInboxItem,
   type PairBotMember,
   type PairedDevice,
   type ProjectEntry,
@@ -151,6 +152,7 @@ export function App() {
   const [botEnabled, setBotEnabled] = useState(false);
   const [bots, setBots] = useState<PairBotMember[]>([]);
   const [botChats, setBotChats] = useState<PairBotChatSummary[]>([]);
+  const [botInbox, setBotInbox] = useState<PairBotInboxItem[]>([]);
   const [botSegment, setBotSegment] = useState(false);
   /** 打开中的 Bot 聊天；非 null 时主屏显示 Bot 视图，Code 的 activeId 原样保留 */
   const [botChatId, setBotChatId] = useState<string | null>(null);
@@ -300,11 +302,13 @@ export function App() {
         setBots(list);
         if (enabled) return;
         setBotChats([]);
+        setBotInbox([]);
         setBotChatId(null);
         setProcessId(null);
         setBotSegment(false);
       },
       onBotChats: setBotChats,
+      onBotInbox: setBotInbox,
       onGroupTimeline: (frame) =>
         setTimelines((prev) => ({
           ...prev,
@@ -932,6 +936,8 @@ export function App() {
                     bots={bots}
                     chats={botChats}
                     activeChatId={botChatId}
+                    inbox={botInbox}
+                    onDismiss={(key) => send({ type: 'bot-inbox-dismiss', key })}
                     onSelect={(chatId) => {
                       setBotChatId(chatId);
                       setProcessId(null);

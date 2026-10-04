@@ -17,6 +17,7 @@ import {
   openFrame,
   type PairBotChatSummary,
   type PairBotEvent,
+  type PairBotInboxItem,
   type PairBotMember,
   type PairedDevice,
   type PairSessionSync,
@@ -118,6 +119,8 @@ export interface ClientEvents {
   onBotEvent?(event: PairBotEvent): void;
   onBotChatState?(frame: BotChatStateFrame): void;
   onBotSendResult?(frame: BotSendResultFrame): void;
+  /** Bot 收件箱整表（未结束且未忽略） */
+  onBotInbox?(items: PairBotInboxItem[]): void;
 }
 
 export class PairClient {
@@ -562,6 +565,9 @@ export class PairClient {
         break;
       case 'bot-send-result':
         if (typeof payload.deliveryId === 'string') this.events.onBotSendResult?.(payload);
+        break;
+      case 'bot-inbox':
+        if (Array.isArray(payload.items)) this.events.onBotInbox?.(payload.items);
         break;
       default:
         // 新桌面新增的帧：旧逻辑不认识就忽略，不能影响后续帧

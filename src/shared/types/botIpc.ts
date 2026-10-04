@@ -2,7 +2,12 @@ import type { AbilitySuggestion } from '../bots/abilitySuggest';
 import type { GoalSuggestion, GoalSuggestTemplate } from '../bots/goalSuggest';
 import type { PersonaSuggestion } from '../bots/personaSuggest';
 import type { TeamFileError, TeamRename, TeamSpec } from '../bots/team';
-import type { AttachedImage, ConversationAuthority } from './agent';
+import type {
+  ApprovalRequestInfo,
+  AskRequestInfo,
+  AttachedImage,
+  ConversationAuthority,
+} from './agent';
 import type {
   BotChat,
   BotProfile,
@@ -123,6 +128,8 @@ export type BotEventKind =
   | 'silence'
   /** 稍后提醒到点（带 chatId）：Main 已取消搁置，renderer 标为未读；手机端不转发 */
   | 'reminder'
+  /** Main 收件箱有变化：renderer 重新拉 BOT_INBOX_LIST；手机端改推 bot-inbox 帧 */
+  | 'inbox'
   /** 点击系统通知：切到 Bot 模式并打开 chatId 或 conversationId 所属聊天；只发给主窗口 */
   | 'open';
 
@@ -145,6 +152,48 @@ export interface BotSilence {
   botId: string;
   delegationId?: string;
   since: number;
+}
+
+export type BotInboxKind =
+  | 'approval'
+  | 'ask'
+  | 'delegation-interrupted'
+  | 'budget'
+  | 'routine-draft'
+  | 'routine-blocked'
+  | 'silence';
+
+/** Main 持久化的收件箱条目；key 为去重身份，同 key 重新出现时重新打开 */
+export interface BotInboxItem {
+  key: string;
+  kind: BotInboxKind;
+  /** 打开哪个聊天；委派会话归到发起委派的聊天 */
+  chatId: string | null;
+  botId?: string;
+  /** 审批 / 提问 / 静默所在的根会话 */
+  conversationId?: string;
+  delegationId?: string;
+  /** 委派会话：botId 替 ownerBotId 执行 */
+  ownerBotId?: string;
+  routine?: { botId: string; id: string };
+  approval?: ApprovalRequestInfo;
+  ask?: AskRequestInfo;
+  /** 预算：触达的上限与自然日 */
+  budget?: { reason: 'cost' | 'tokens'; day: string };
+  /** 静默起点（最后一次输出时间） */
+  since?: number;
+  /** 列表与手机端的摘要 */
+  text?: string;
+  createdAt: number;
+  updatedAt: number;
+  dismissedAt?: number;
+  resolvedAt?: number;
+}
+
+export type BotInboxListResult = { ok: true; items: BotInboxItem[] } | BotIpcError;
+export interface BotInboxUpdateInput {
+  key: string;
+  action: 'dismiss' | 'reopen';
 }
 
 /** 「自动设置能力」入参：只传成员描述；候选技能 / MCP / 成员由 Main 从权威记录取 */

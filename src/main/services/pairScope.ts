@@ -15,6 +15,7 @@ const READ_SCOPE_COMMANDS: ReadonlySet<string> = new Set([
   'bot-catalog-request',
   'bot-chat-open',
   'bot-timeline',
+  'bot-inbox-request',
 ]);
 
 export const deviceScope = (device: Pick<PairedDevice, 'scope'>): PairScope =>

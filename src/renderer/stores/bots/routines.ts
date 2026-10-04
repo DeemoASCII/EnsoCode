@@ -46,16 +46,3 @@ export interface RoutineAlert {
   kind: 'approval' | 'blocked';
   routine: BotRoutine;
 }
-
-/** 收件箱：成员提议 / 改动待批准的草稿，以及运行前依赖检查不通过被阻塞的例程 */
-export function routineAlerts(routines: readonly BotRoutine[]): RoutineAlert[] {
-  return routines
-    .flatMap((routine): RoutineAlert[] =>
-      routine.status === 'draft'
-        ? [{ kind: 'approval', routine }]
-        : routine.status === 'blocked'
-          ? [{ kind: 'blocked', routine }]
-          : []
-    )
-    .sort((a, b) => b.routine.updatedAt - a.routine.updatedAt);
-}

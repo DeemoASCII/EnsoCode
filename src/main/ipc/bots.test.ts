@@ -866,3 +866,43 @@ describe('聊天管理', () => {
     expect(chat?.snoozedUntil).toBeUndefined();
   });
 });
+
+describe('收件箱 IPC', () => {
+  it('列表与忽略入参收窄；审批随 worker 事件出现与结束；开关关闭返回空列表', async () => {
+    const { setBotWorkerEventObserver } = await import('./agent');
+    const observe = vi.mocked(setBotWorkerEventObserver).mock.calls.at(-1)?.[0];
+    const alice = await createBot('Alice');
+    const created = await call(IPC_CHANNELS.BOT_CHAT_CREATE, {
+      kind: 'direct',
+      members: [alice],
+      workspace: { kind: 'member-home' },
+    });
+    const chatId = (created.chat as { id: string }).id;
+    const sent = await call(IPC_CHANNELS.BOT_SEND, { chatId, text: 'hi', deliveryId: 'i1' });
+    const identity = { sessionId: sent.conversationId as string, generation: 'g' };
+    observe?.({
+      type: 'approval-request',
+      seq: 1,
+      identity,
+      request: { requestId: 'r1', tool: 'bash', kind: 'exec', summary: 'rm -rf x' },
+    } as never);
+    const listed = await call(IPC_CHANNELS.BOT_INBOX_LIST);
+    expect(listed.items).toEqual([
+      expect.objectContaining({ key: `approval:${identity.sessionId}:r1`, chatId, botId: alice }),
+    ]);
+    expect(
+      await call(IPC_CHANNELS.BOT_INBOX_UPDATE, {
+        key: `approval:${identity.sessionId}:r1`,
+        action: 'dismiss',
+      })
+    ).toEqual({ ok: false, error: 'not-dismissible' });
+    expect(await call(IPC_CHANNELS.BOT_INBOX_UPDATE, { key: 'k', action: 'drop' })).toEqual({
+      ok: false,
+      error: 'invalid',
+    });
+    observe?.({ type: 'approval-resolved', seq: 2, identity, requestId: 'r1' } as never);
+    expect((await call(IPC_CHANNELS.BOT_INBOX_LIST)).items).toEqual([]);
+    mocks.settings.botModeEnabled = false;
+    expect(await call(IPC_CHANNELS.BOT_INBOX_LIST)).toEqual({ ok: true, items: [] });
+  });
+});

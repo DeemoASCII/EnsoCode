@@ -4,7 +4,7 @@ import {
   isDelegationTimeoutMinutes,
   isTokenCap,
 } from '@shared/types/bot';
-import type { BotBudgetVerdict, BotUsageOverview } from '@shared/usage/botUsage';
+import type { BotUsageOverview } from '@shared/usage/botUsage';
 
 /** 表单里以字符串编辑，留空 = 不限 */
 export interface BudgetForm {
@@ -21,14 +21,6 @@ export interface LimitsForm {
 export interface BotUsageSnapshot {
   day: string;
   bots: Record<string, BotUsageOverview>;
-}
-
-export interface BudgetAlert {
-  botId: string;
-  day: string;
-  reason: BotBudgetVerdict;
-  /** 收件箱「忽略」的键：按成员 + 自然日 */
-  key: string;
 }
 
 export function budgetFormOf(budget: BotBudget | undefined): BudgetForm {
@@ -82,19 +74,4 @@ export function limitsDraft(
   )
     return { ok: false };
   return { ok: true, delegationTimeoutMinutes: timeout, maxTokensPerTurn: cap };
-}
-
-export function budgetAlerts(
-  usage: BotUsageSnapshot | null,
-  dismissed: readonly string[]
-): BudgetAlert[] {
-  if (!usage) return [];
-  const alerts: BudgetAlert[] = [];
-  for (const [botId, overview] of Object.entries(usage.bots)) {
-    if (!overview.exhausted) continue;
-    const key = `${botId}:${usage.day}`;
-    if (!dismissed.includes(key))
-      alerts.push({ botId, day: usage.day, reason: overview.exhausted, key });
-  }
-  return alerts;
 }

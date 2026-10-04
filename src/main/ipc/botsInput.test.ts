@@ -6,6 +6,7 @@ import {
   parseChatCreateInput,
   parseChatUpdateInput,
   parseGoalSuggestRequest,
+  parseInboxUpdateInput,
   parseNotesSaveInput,
   parseNotesTargetInput,
   parseOpenWorkspaceInput,
@@ -265,6 +266,22 @@ describe('send / timeline / workspace / history inputs', () => {
 
   it('打开工作区与会话历史只收标识符', () => {
     expect(parseOpenWorkspaceInput({ chatId: A })).toEqual({ chatId: A });
+    expect(parseInboxUpdateInput({ key: 'budget:a:2026-10-04', action: 'dismiss' })).toEqual({
+      key: 'budget:a:2026-10-04',
+      action: 'dismiss',
+    });
+    expect(parseInboxUpdateInput({ key: 'k', action: 'reopen' })).toEqual({
+      key: 'k',
+      action: 'reopen',
+    });
+    for (const bad of [
+      { key: '', action: 'dismiss' },
+      { key: 'x'.repeat(301), action: 'dismiss' },
+      { key: 'k', action: 'delete' },
+      { key: 'k', action: 'dismiss', extra: 1 },
+      null,
+    ])
+      expect(parseInboxUpdateInput(bad)).toBeNull();
     expect(parseOpenWorkspaceInput({ botId: A })).toEqual({ botId: A });
     expect(parseOpenWorkspaceInput({ chatId: A, botId: A })).toBeNull();
     expect(parseOpenWorkspaceInput({ path: '/etc' })).toBeNull();

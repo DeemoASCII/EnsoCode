@@ -63,6 +63,11 @@ function parseBotCommand(v: Record<string, unknown>): CommandCheck {
   switch (v.type) {
     case 'bot-catalog-request':
       return { ok: true, command: { type: 'bot-catalog-request' } };
+    case 'bot-inbox-request':
+      return { ok: true, command: { type: 'bot-inbox-request' } };
+    case 'bot-inbox-dismiss':
+      if (!isStr(v.key) || v.key.length > 300) return { ok: false, error: 'invalid key' };
+      return { ok: true, command: { type: 'bot-inbox-dismiss', key: v.key } };
     case 'bot-chat-open':
     case 'bot-stop':
       if (!isChatId(v.chatId)) return { ok: false, error: 'invalid chatId' };

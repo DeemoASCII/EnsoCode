@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   activeMention,
   botChatSections,
+  inboxLabel,
   insertMention,
   mentionOptions,
   mergeGroupTimeline,
@@ -155,5 +156,14 @@ describe('@ 补全', () => {
       text: '@阿后  你好',
       caret: 4,
     });
+  });
+});
+
+describe('inboxLabel', () => {
+  it('按类型给出中文标签，静默显示已安静秒数', () => {
+    const item = { key: 'k', chatId: null, createdAt: 1, dismissible: false } as const;
+    expect(inboxLabel({ ...item, kind: 'approval' }, 0)).toBe('需要审批');
+    expect(inboxLabel({ ...item, kind: 'routine-blocked' }, 0)).toBe('例行任务被阻塞');
+    expect(inboxLabel({ ...item, kind: 'silence', since: 1_000 }, 92_500)).toBe('已安静 91 秒');
   });
 });

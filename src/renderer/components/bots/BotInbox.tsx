@@ -1,5 +1,5 @@
 import type { BotProfile, Delegation } from '@shared/types/bot';
-import type { BotSilence } from '@shared/types/botIpc';
+import type { BotInboxItem } from '@shared/types/botIpc';
 import { Inbox } from 'lucide-react';
 import { useMemo, useState } from 'react';
 import { Button } from '@/components/ui/button';
@@ -8,11 +8,8 @@ import { useI18n } from '@/i18n';
 import { protectedActionLabel } from '@/lib/protectedAction';
 import { toolLabel } from '@/lib/toolLabels';
 import { useBotsStore } from '@/stores/bots';
-import { type BudgetAlert, budgetAlerts } from '@/stores/bots/budget';
-import { interruptedDelegations, pendingOwners } from '@/stores/bots/delegations';
-import { routineAlerts } from '@/stores/bots/routines';
-import { type PendingItem, pendingItems } from '@/stores/bots/selectors';
-import { silenceAlerts } from '@/stores/bots/silence';
+import { inboxSections } from '@/stores/bots/inbox';
+import type { PendingItem } from '@/stores/bots/selectors';
 import { usePendingMemoryWrites } from '@/stores/memoryReview';
 import { BotAvatar } from './BotAvatar';
 import { chatTitle } from './botText';
@@ -22,32 +19,21 @@ import { RoutineAlertCard } from './RoutineCards';
 import { SessionHistoryDialog } from './SessionHistoryDialog';
 import { QuietFor } from './SilenceNote';
 
-/** 收件箱：成员会话与委派会话里待你处理的审批、提问，以及重启中断的委派 */
+/** 收件箱：Main 汇总的审批、提问、预算、例程、静默与中断委派，另加待批准的记忆写入 */
 export function BotInbox() {
   const { t } = useI18n();
-  const sessions = useBotsStore((s) => s.sessions);
+  const inbox = useBotsStore((s) => s.inbox);
   const chats = useBotsStore((s) => s.chats);
   const bots = useBotsStore((s) => s.bots);
   const delegations = useBotsStore((s) => s.delegations);
-  const dismissed = useBotsStore((s) => s.dismissedDelegations);
-  const usage = useBotsStore((s) => s.usage);
-  const dismissedBudgets = useBotsStore((s) => s.dismissedBudgets);
   const routines = useBotsStore((s) => s.routines);
-  const silences = useBotsStore((s) => s.silences);
   const [history, setHistory] = useState<{ id: string; title: string; bot?: BotProfile } | null>(
     null
   );
-  const items = useMemo(
-    () => pendingItems(sessions, pendingOwners(chats, delegations)),
-    [sessions, chats, delegations]
+  const sections = useMemo(
+    () => inboxSections(inbox, { routines, delegations }),
+    [inbox, routines, delegations]
   );
-  const interrupted = useMemo(
-    () => interruptedDelegations(delegations, dismissed),
-    [delegations, dismissed]
-  );
-  const budgets = useMemo(() => budgetAlerts(usage, dismissedBudgets), [usage, dismissedBudgets]);
-  const routineItems = useMemo(() => routineAlerts(routines), [routines]);
-  const quiet = useMemo(() => silenceAlerts(silences, delegations), [silences, delegations]);
   const memoryWrites = usePendingMemoryWrites();
   const byId = useMemo(() => new Map(bots.map((bot) => [bot.id, bot])), [bots]);
   const chatName = (chatId: string | null) => {
@@ -65,18 +51,13 @@ export function BotInbox() {
       </header>
       <div className="min-h-0 flex-1 overflow-y-auto">
         <div className="mx-auto w-full max-w-2xl space-y-2.5 px-6 py-4">
-          {items.length === 0 &&
-            interrupted.length === 0 &&
-            budgets.length === 0 &&
-            routineItems.length === 0 &&
-            quiet.length === 0 &&
-            memoryWrites.length === 0 && (
-              <div className="flex flex-col items-center gap-2 py-16 text-muted-foreground">
-                <Inbox className="h-6 w-6" />
-                <p className="text-sm">{t('Nothing needs your attention')}</p>
-              </div>
-            )}
-          {items.map((item) => (
+          {sections.count === 0 && memoryWrites.length === 0 && (
+            <div className="flex flex-col items-center gap-2 py-16 text-muted-foreground">
+              <Inbox className="h-6 w-6" />
+              <p className="text-sm">{t('Nothing needs your attention')}</p>
+            </div>
+          )}
+          {sections.pending.map((item) => (
             <InboxCard
               key={`${item.conversationId}:${item.request.requestId}`}
               item={item}
@@ -85,8 +66,8 @@ export function BotInbox() {
               chatName={chatName(item.chatId)}
             />
           ))}
-          {budgets.map((alert) => (
-            <BudgetCard key={alert.key} alert={alert} bot={byId.get(alert.botId)} />
+          {sections.budgets.map((item) => (
+            <BudgetCard key={item.key} item={item} bot={byId.get(item.botId ?? '')} />
           ))}
           {memoryWrites.map((write) => (
             <MemoryWriteCard
@@ -96,25 +77,26 @@ export function BotInbox() {
               chatName={chatName(write.chatId)}
             />
           ))}
-          {routineItems.map((alert) => (
+          {sections.routines.map((alert) => (
             <RoutineAlertCard key={alert.routine.id} alert={alert} />
           ))}
-          {quiet.map((item) => (
+          {sections.silences.map((item) => (
             <SilenceCard
-              key={item.conversationId}
+              key={item.key}
               item={item}
-              bot={byId.get(item.botId)}
+              bot={byId.get(item.botId ?? '')}
               chatName={chatName(item.chatId)}
             />
           ))}
-          {interrupted.length > 0 && (
+          {sections.interrupted.length > 0 && (
             <div className="pt-3 font-medium text-muted-foreground text-xs">
               {t('Interrupted delegations')}
             </div>
           )}
-          {interrupted.map((record) => (
+          {sections.interrupted.map(({ item, record }) => (
             <InterruptedCard
-              key={record.id}
+              key={item.key}
+              inboxKey={item.key}
               record={record}
               bots={byId}
               chatName={chatName(record.chatId)}
@@ -147,12 +129,13 @@ function SilenceCard({
   bot,
   chatName,
 }: {
-  item: BotSilence;
+  item: BotInboxItem;
   bot: BotProfile | undefined;
   chatName: string;
 }) {
   const { t } = useI18n();
   const setView = useBotsStore((s) => s.setView);
+  const dismiss = useBotsStore((s) => s.dismissInbox);
   const name = bot?.name ?? t('Deleted member');
   return (
     <div className="rounded-xl border bg-card p-3">
@@ -162,14 +145,17 @@ function SilenceCard({
         {chatName && <span>· {chatName}</span>}
         {item.delegationId && <span>· {t('Delegation')}</span>}
         <span className="rounded bg-warning/20 px-1.5 text-[11px] text-warning">
-          <QuietFor since={item.since} />
+          <QuietFor since={item.since ?? item.createdAt} />
         </span>
       </div>
       <div className="mt-2 text-sm">
         {t('{{name}} is still running but has produced no output for a while', { name })}
       </div>
-      {item.chatId && (
-        <div className="mt-2.5 flex flex-wrap items-center justify-end gap-1.5">
+      <div className="mt-2.5 flex flex-wrap items-center justify-end gap-1.5">
+        <Button size="xs" variant="ghost" onClick={() => void dismiss(item.key)}>
+          {t('Dismiss')}
+        </Button>
+        {item.chatId && (
           <Button
             size="xs"
             variant="outline"
@@ -177,15 +163,15 @@ function SilenceCard({
           >
             {t('Go to chat')}
           </Button>
-        </div>
-      )}
+        )}
+      </div>
     </div>
   );
 }
 
-function BudgetCard({ alert, bot }: { alert: BudgetAlert; bot: BotProfile | undefined }) {
+function BudgetCard({ item, bot }: { item: BotInboxItem; bot: BotProfile | undefined }) {
   const { t } = useI18n();
-  const dismiss = useBotsStore((s) => s.dismissBudget);
+  const dismiss = useBotsStore((s) => s.dismissInbox);
   const openDirect = useBotsStore((s) => s.openDirect);
   const name = bot?.name ?? t('Deleted member');
   return (
@@ -199,12 +185,12 @@ function BudgetCard({ alert, bot }: { alert: BudgetAlert; bot: BotProfile | unde
       </div>
       <div className="mt-2 text-sm">{t("{{name}}'s budget for today is used up", { name })}</div>
       <div className="mt-1 text-muted-foreground text-xs">
-        {alert.reason === 'cost'
+        {item.budget?.reason === 'cost'
           ? t('Daily cost limit reached. New messages are refused until local midnight.')
           : t('Daily token limit reached. New messages are refused until local midnight.')}
       </div>
       <div className="mt-2.5 flex flex-wrap items-center justify-end gap-1.5">
-        <Button size="xs" variant="ghost" onClick={() => dismiss(alert.key)}>
+        <Button size="xs" variant="ghost" onClick={() => void dismiss(item.key)}>
           {t('Dismiss')}
         </Button>
         {bot && (
@@ -218,11 +204,13 @@ function BudgetCard({ alert, bot }: { alert: BudgetAlert; bot: BotProfile | unde
 }
 
 function InterruptedCard({
+  inboxKey,
   record,
   bots,
   chatName,
   onOpen,
 }: {
+  inboxKey: string;
   record: Delegation;
   bots: Map<string, BotProfile>;
   chatName: string;
@@ -230,7 +218,7 @@ function InterruptedCard({
 }) {
   const { t } = useI18n();
   const setView = useBotsStore((s) => s.setView);
-  const dismiss = useBotsStore((s) => s.dismissDelegation);
+  const dismiss = useBotsStore((s) => s.dismissInbox);
   const from = bots.get(record.parentBotId);
   const to = bots.get(record.targetBotId);
   const fromName = from?.name ?? t('Deleted member');
@@ -250,7 +238,7 @@ function InterruptedCard({
       <div className="mt-2 line-clamp-3 text-sm">{record.task}</div>
       <div className="mt-1 text-muted-foreground text-xs">{failureText(record, t)}</div>
       <div className="mt-2.5 flex flex-wrap items-center justify-end gap-1.5">
-        <Button size="xs" variant="ghost" onClick={() => dismiss(record.id)}>
+        <Button size="xs" variant="ghost" onClick={() => void dismiss(inboxKey)}>
           {t('Dismiss')}
         </Button>
         {record.chatId && (
