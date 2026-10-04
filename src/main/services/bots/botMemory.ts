@@ -3,6 +3,7 @@ import { type MemoryAuthority, memorySpaceContext } from '../memory/space';
 import type { BotStore } from './botStore';
 import type { BotChatStore } from './chatStore';
 import { readJson, writeJsonAtomic } from './files';
+import { rewoundWatermark } from './rewind';
 
 interface MemoryConversation extends MemoryAuthority {
   conversationId: string;
@@ -34,6 +35,31 @@ export class BotMemoryService {
     this.watermarks.delete(conversationId);
     if (this.pending.has(conversationId)) this.removed.add(conversationId);
     this.persist();
+  }
+
+  /** 私聊回退：水位若在被裁掉的部分，退回到回退点之前，避免下次整理回落为全量重复整理 */
+  rewind(conversationId: string, branch: readonly string[], targetEntryId: string): void {
+    const conversation = this.deps.chats
+      .list()
+      .flatMap((chat) =>
+        Object.entries(chat.sessions).map(([botId, session]) => ({ chat, botId, session }))
+      )
+      .find((item) => item.session.conversationId === conversationId);
+    const current =
+      this.watermarks.get(conversationId) ?? conversation?.session.distilledTo ?? undefined;
+    const moved = rewoundWatermark(branch, targetEntryId, current);
+    if (!moved) return;
+    if (moved.next) this.watermarks.set(conversationId, moved.next);
+    else this.watermarks.delete(conversationId);
+    this.persist();
+    if (conversation)
+      this.deps.chats.update(conversation.chat.id, (draft) => {
+        const session = draft.sessions[conversation.botId];
+        if (session?.conversationId !== conversationId) return draft;
+        if (moved.next) session.distilledTo = moved.next;
+        else delete session.distilledTo;
+        return draft;
+      });
   }
 
   dispose(): void {

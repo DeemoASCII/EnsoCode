@@ -39,6 +39,10 @@ export function chatErrorText(error: string, t: TFunction): string {
       return t("The file is not inside this chat's workspace.");
     case 'skill-unavailable':
       return t('This skill is not available to the member.');
+    case 'session-busy':
+      return t('The member is busy. Try again after the current turn.');
+    case 'rewind-target-not-found':
+      return t('That message is no longer on the current branch.');
     default:
       return error;
   }

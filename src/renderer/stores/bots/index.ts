@@ -8,6 +8,7 @@ import type {
   GroupTask,
 } from '@shared/types/bot';
 import type {
+  BotActionResult,
   BotEvent,
   BotQueueItem,
   BotSearchHit,
@@ -15,6 +16,7 @@ import type {
   BotSilence,
 } from '@shared/types/botIpc';
 import { create } from 'zustand';
+import { draftFromSentText, seedBotDraft } from '@/components/bots/botDraft';
 import { usePendingMemoryWrites } from '@/stores/memoryReview';
 import { applyHistoryPage, emptyProjection } from '@/stores/sessions/reducer';
 import { resizeSidePanelWidth, SIDE_PANEL_DEFAULT_WIDTH } from '@/stores/sidePanel/width';
@@ -153,6 +155,9 @@ interface BotsState {
     refs?: { files?: string[]; chats?: string[]; skill?: string }
   ) => Promise<BotSendResult>;
   stop: (chatId: string) => Promise<void>;
+  /** 私聊回退 / 重试（Main 校验并收尾委派与记忆水位）；回退草稿经 rewind-done 回填输入框 */
+  rewind: (chatId: string, entryId: string, restoreFiles: boolean) => Promise<BotActionResult>;
+  retry: (chatId: string) => Promise<BotActionResult>;
   /** 打开与成员的私聊；没有就建一个 */
   openDirect: (botId: string) => Promise<string | null>;
   upsertChat: (chat: BotChat) => void;
@@ -168,6 +173,8 @@ export const useBotsStore = create<BotsState>()((set, get) => {
   /** Bot 事件常成串到达：同一刷新约 50ms 内合并为一次 */
   const coalesce = createCoalescer(50);
   const seeding = new Map<string, Promise<void>>();
+  /** 本窗口发起、尚未收到 rewind-done 草稿的回退：conversationId → chatId */
+  const rewinds = new Map<string, string>();
   let storedReads = loadReads();
   let bindings = 0;
   let unbind: (() => void) | null = null;
@@ -271,6 +278,11 @@ export const useBotsStore = create<BotsState>()((set, get) => {
       const result = applyBotAgentEvent(sessions, event);
       if (result.sessions !== sessions) set({ sessions: result.sessions });
       for (const id of result.resync) void window.electronAPI.agent.requestSnapshot(id);
+      if (event.type === 'rewind-done' && event.filesRestored === undefined) {
+        const chatId = rewinds.get(event.identity.sessionId);
+        rewinds.delete(event.identity.sessionId);
+        if (chatId && event.editorText) seedBotDraft(chatId, draftFromSentText(event.editorText));
+      }
     });
     // 解绑期间（关闭 Bot 模式）seeding 保留已完成的加载；重绑时缓存必须重新向权威源补齐。
     for (const [id, cached] of Object.entries(get().sessions)) {
@@ -610,6 +622,22 @@ export const useBotsStore = create<BotsState>()((set, get) => {
       const conversationId = chat.sessions[chat.members[0]]?.conversationId;
       if (conversationId) await window.electronAPI.agent.abort(conversationId);
     },
+
+    rewind: async (chatId, entryId, restoreFiles) => {
+      const chat = get().chats.find((item) => item.id === chatId);
+      const conversationId = chat?.sessions[chat.members[0]]?.conversationId;
+      if (conversationId) rewinds.set(conversationId, chatId);
+      const result = await window.electronAPI.bots
+        .rewind({ chatId, entryId, restoreFiles })
+        .catch((error: unknown) => ({ ok: false as const, error: String(error) }));
+      if (!result.ok && conversationId) rewinds.delete(conversationId);
+      return result;
+    },
+
+    retry: (chatId) =>
+      window.electronAPI.bots
+        .retry(chatId)
+        .catch((error: unknown) => ({ ok: false as const, error: String(error) })),
 
     openDirect: async (botId) => {
       const existing = get().chats.find(

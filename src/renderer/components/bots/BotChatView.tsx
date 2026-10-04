@@ -478,6 +478,22 @@ function DirectTimeline({
 }) {
   const { t } = useI18n();
   const conversationId = chat.sessions[bot.id]?.conversationId;
+  const archived = chat.archivedAt !== undefined;
+  // 私聊当前会话可回退 / 重试；Main 校验空闲并收尾委派与记忆水位
+  const controls = useMemo(() => {
+    if (archived || !conversationId) return undefined;
+    const report = (result: { ok: boolean; error?: string }) => {
+      if (!result.ok)
+        addToast({ type: 'error', title: chatErrorText(result.error ?? 'unavailable', t) });
+    };
+    return {
+      subscribe: useBotsStore.subscribe,
+      projection: () => useBotsStore.getState().sessions[conversationId],
+      rewind: (entryId: string, restoreFiles: boolean) =>
+        void useBotsStore.getState().rewind(chat.id, entryId, restoreFiles).then(report),
+      retry: () => void useBotsStore.getState().retry(chat.id).then(report),
+    };
+  }, [chat.id, conversationId, archived, t]);
   const turnFooter = useCallback(
     (messageIndex: number) =>
       conversationId ? (
@@ -502,6 +518,7 @@ function DirectTimeline({
       focus={focus}
       onFocusDone={onFocusDone}
       turnFooter={turnFooter}
+      controls={controls}
     />
   );
 }

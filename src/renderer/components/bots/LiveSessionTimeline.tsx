@@ -1,5 +1,5 @@
 import { type ReactNode, type RefObject, useEffect, useMemo, useRef, useState } from 'react';
-import { ChatHostContext } from '@/components/chat/chatHost';
+import { type ChatHost, ChatHostContext } from '@/components/chat/chatHost';
 import {
   CHAT_COL,
   MessageTimeline,
@@ -87,6 +87,8 @@ interface LiveSessionTimelineProps {
   onFocusDone?: (nonce: number) => void;
   /** 一轮最终回复下方的附加内容（私聊产物卡片） */
   turnFooter?: (messageIndex: number) => ReactNode;
+  /** 私聊当前会话：开启回退 / 重试（须稳定引用） */
+  controls?: ChatHost['botControls'];
 }
 
 /** 成员会话的实时投影（私聊正文、群里正在回复的成员） */
@@ -98,6 +100,7 @@ export function LiveSessionTimeline({
   focus,
   onFocusDone,
   turnFooter,
+  controls,
 }: LiveSessionTimelineProps) {
   const projection = useBotsStore((s) => s.sessions[conversationId]);
   const historyLoading = useBotsStore((s) => Boolean(s.sessionHistoryLoading[conversationId]));
@@ -138,12 +141,14 @@ export function LiveSessionTimeline({
   const host = useMemo(
     () => ({
       sessionId: conversationId,
-      canRewind: false,
-      canRetry: false,
+      canRewind: Boolean(controls),
+      canRetry: Boolean(controls),
+      canFork: false,
       speaker: { name, color },
       turnFooter,
+      ...(controls ? { botControls: controls } : {}),
     }),
-    [conversationId, name, color, turnFooter]
+    [conversationId, name, color, turnFooter, controls]
   );
   const hasOlder = (projection?.historyBaseIndex ?? 0) > 0;
 

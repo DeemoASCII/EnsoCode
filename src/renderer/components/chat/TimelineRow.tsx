@@ -40,7 +40,15 @@ import {
   Workflow,
   Wrench,
 } from 'lucide-react';
-import { memo, type ReactNode, useCallback, useEffect, useRef, useState } from 'react';
+import {
+  memo,
+  type ReactNode,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from 'react';
 import { InjectedMessageCard } from '@/components/bots/InjectedMessageCard';
 import {
   Dialog,
@@ -872,24 +880,40 @@ function displayedConversation(state: ReturnType<typeof useSessionsStore.getStat
   return active.activeTabId ? (state.conversations[active.activeTabId] ?? active) : active;
 }
 
+const noSubscribe = () => () => {};
+
 /** 终态错误后续跑：已 spawn 且非 running 才显示（手机 stub started=false 自动隐藏） */
 export function RetryTurnButton() {
   const { t } = useI18n();
   const host = useChatHost();
-  const canRetry = useSessionsStore((state) => {
+  const controls = host?.botControls;
+  const sessionCanRetry = useSessionsStore((state) => {
     // 远程节点视图：协议无 retry，宿主显式关闭
-    if (host && !host.canRetry) return false;
+    if (host && (!host.canRetry || host.botControls)) return false;
     const conversation = displayedConversation(state);
     return Boolean(
       conversation?.started && !conversation.spawning && conversation.status !== 'running'
     );
   });
+  // Bot 私聊：投影在 bots store；冷会话由 Main 先恢复再续跑
+  const retryable = () => {
+    if (!controls || !host?.canRetry) return false;
+    const projection = controls.projection();
+    return Boolean(projection && projection.status !== 'running');
+  };
+  const botCanRetry = useSyncExternalStore(
+    controls?.subscribe ?? noSubscribe,
+    retryable,
+    retryable
+  );
+  const canRetry = controls ? botCanRetry : sessionCanRetry;
   if (!canRetry) return null;
   return (
     <button
       type="button"
       title={t('Retry')}
       onClick={() => {
+        if (controls) return controls.retry();
         const conversation = displayedConversation(useSessionsStore.getState());
         if (!conversation) return;
         useSessionsStore.getState().retry(conversation.id);
@@ -988,7 +1012,9 @@ function RewindButton({ messageIndex }: { messageIndex: number }) {
     entryId: string;
   } | null>(null);
   const host = useChatHost();
-  const canRewind = useSessionsStore((state) => {
+  const controls = host?.botControls;
+  const sessionCanRewind = useSessionsStore((state) => {
+    if (host?.botControls) return false;
     const conversation = displayedConversation(state);
     return (
       canRewindDisplayedSession(state, host) &&
@@ -998,8 +1024,28 @@ function RewindButton({ messageIndex }: { messageIndex: number }) {
       )
     );
   });
+  /** Bot 私聊：该行可回退时返回目标 user entryId（原始值选择，避免流式更新重渲染每行） */
+  const rewindTarget = () => {
+    if (!controls || !host?.canRewind || !host.sessionId) return null;
+    const projection = controls.projection();
+    if (!projection || projection.status === 'running') return null;
+    return (
+      resolveRewindConfirm(host.sessionId, host.sessionId, projection, messageIndex)?.entryId ??
+      null
+    );
+  };
+  const botEntryId = useSyncExternalStore(
+    controls?.subscribe ?? noSubscribe,
+    rewindTarget,
+    rewindTarget
+  );
+  const canRewind = controls ? botEntryId !== null : sessionCanRewind;
   if (!canRewind) return null;
   const queueRewind = (restoreFiles: boolean) => {
+    if (controls && host?.sessionId && botEntryId) {
+      setPending({ restoreFiles, conversationId: host.sessionId, entryId: botEntryId });
+      return;
+    }
     const conversation = displayedConversation(useSessionsStore.getState());
     if (!conversation) return;
     const target = resolveRewindConfirm(
@@ -1012,6 +1058,7 @@ function RewindButton({ messageIndex }: { messageIndex: number }) {
       setPending({ restoreFiles, conversationId: conversation.id, entryId: target.entryId });
   };
   const rewind = (restoreFiles: boolean, originId: string, entryId: string) => {
+    if (controls) return controls.rewind(entryId, restoreFiles);
     const state = useSessionsStore.getState();
     const displayed = displayedConversation(state);
     const target = resolveRewindConfirm(

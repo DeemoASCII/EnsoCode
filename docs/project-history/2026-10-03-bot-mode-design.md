@@ -273,6 +273,21 @@ Main 在 `spawnSession` 里根据 `ConversationAuthority.bot` 组装提示词，
 - 委派会话的审批归在发起委派的聊天名下显示，并注明「X 替 Y 执行」。
 - 新成员默认完全放行，只有用户手动调严时才会出现审批。出现时一直等待（桌面通知 + 手机推送 + 收件箱），不超时；委派受 4 小时总超时约束；例行任务触发的轮次里，审批 30 分钟无人处理自动拒绝。
 
+### 私聊回退与重试
+
+只对私聊当前会话开启（`LiveSessionTimeline` 的 `controls`，ChatHost `canRewind/canRetry`，不开分叉）；群聊与只读历史不开——群时间线是另一份权威记录，单个成员会话回退会与时间线 / cursor 脱节。
+
+- 通道 `BOT_REWIND {chatId, entryId, restoreFiles?}` / `BOT_RETRY {chatId}`：renderer 只给聊天和持久化 user entryId，会话由 Main 按 `chat.sessions` 推导；`AGENT_REWIND / AGENT_RETRY` 对 bot 会话仍然拒绝。
+- 复用 Code 的 worker `rewind` / `retry` 命令（含 git checkpoint 文件还原，非 git 工作区静默降级）。宿主 `rewindConversation / retryConversation`：会话忙（运行中或有排队投递）拒绝 `session-busy`；冷会话先带 resumeFile 恢复（只 spawn 不 prompt）。重试像一次投递那样占用回合：新 turnKey、计入并发上限与预算检查、经 `turn-completed` 正常结算并发 `BotTurnFinished`；worker 认为无需续跑（不会进入 running）时宽限期后按 `nothing-to-retry` 结算，回合不悬挂。
+- **回退一致性**（worker 接受回退命令后同步收尾，目标 entry 先按 jsonl 当前分支校验，找不到回 `rewind-target-not-found` 且不发命令）：
+  - **委派**：该会话在回退点（被裁掉的 user 消息时间）之后发起的委派——进行中的取消（停掉子会话，任务看板经委派终态同步），连同已结束但未投递的结果一起记为已投递作废，不会再注入回退后的会话；已投递的结果随被裁分支离开上下文，不动；回退点之前的委派不受影响。重试不产生新回退，委派照常。
+  - **记忆水位**：水位（及 `sessions[botId].distilledTo`）若落在被裁掉的部分，退到回退点前一条 entry（回退到首条则清空），避免 `sliceTranscript` 找不到起点回落全量而重复整理；已经整理进记忆的内容不撤回。
+  - **私聊状态**：正文由 worker 的 `messages-truncated` / `rewind-done` 经 bots store 投影归并；`rewind-done` 的回填文本由 `draftFromSentText` 还原成草稿（剥掉笔记块，聊天摘录还原为引用 chip，技能块还原为技能），只回填本窗口发起的回退。
+
+**测试**：`rewind`（委派作废边界、水位前移 / 清空 / 不变）、宿主（冷会话恢复后回退、忙碌拒绝、重试 turnKey 与结算、worker 拒绝立即释放）、bots IPC（目标不在分支、多余参数、群聊 `direct-only`、委派取消与作废、`distilledTo` 退回、忙碌拒绝）、`draftFromSentText`。
+
+**真机**（同上两家模型）：Clau 私聊回退最后一轮，草稿回到输入框；Qwen 私聊回退一条带 @聊天 的消息，输入框还原正文和聊天 chip，重发后摘录反映 Clau 回退后的分支；两人各自写长文时停止（`Request was aborted` + 重试），点重试后被停止释放的会话先恢复再续跑完成，状态回到空闲；Clau 工作区为 git 时让其改文件，「对话 + 还原文件」回退后文件恢复原值。
+
 ### 手机端
 
 - pair 协议新增可选帧（旧手机忽略不认识的帧）：

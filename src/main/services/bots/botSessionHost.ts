@@ -84,6 +84,10 @@ export interface BotRuntimePort {
   release(conversationId: string): Promise<void>;
   abort?(conversationId: string): void;
   removeSessionFiles(conversation: ConversationAuthority): void;
+  /** 私聊回退到持久化 user entry（可选还原文件）；结果经 rewind-done 事件回来 */
+  rewind?(conversationId: string, entryId: string, restoreFiles: boolean): ActionResult;
+  /** 终态错误后续跑当前分支 */
+  retry?(conversationId: string): ActionResult;
 }
 
 export interface BotSessionHostDeps {
@@ -858,21 +862,8 @@ export class BotSessionHost {
   private async start(delivery: Delivery): Promise<BotDeliverResult> {
     if (this.disposed) return { ok: false, error: 'disabled' };
     const { conversationId } = delivery;
-    const conversation = this.deps.authority.conversation(conversationId);
-    const bot = this.deps.bots.get(delivery.botId);
-    const chat = conversation?.bot?.chatId
-      ? this.deps.chats.get(conversation.bot.chatId)
-      : undefined;
-    if (
-      !conversation ||
-      conversation.lifecycle === 'ended' ||
-      !bot ||
-      bot.archivedAt !== undefined ||
-      this.deps.authority.project(conversation.projectId)?.state !== 'active' ||
-      (conversation.bot?.chatId &&
-        (!chat || chat.archivedAt !== undefined || !chat.members.includes(bot.id)))
-    )
-      return { ok: false, error: 'session-unavailable' };
+    const bot = this.usableBot(delivery);
+    if (!bot) return { ok: false, error: 'session-unavailable' };
     this.slots.set(conversationId, { sawRunning: false });
     this.turnKeys.set(conversationId, randomUUID());
     this.lastAssistant.delete(conversationId);
@@ -886,26 +877,8 @@ export class BotSessionHost {
     };
     let notes: { text: string; seen?: string } = { text: delivery.text };
     if (!this.live.has(conversationId)) {
-      const spec = this.spawnSpec(delivery);
-      if (!spec.ok) return fail(spec.error);
-      const snap = this.notesFor(conversationId, bot.id);
-      if (snap?.section)
-        spec.spec = {
-          ...spec.spec,
-          systemPrompt: `${spec.spec.systemPrompt}\n\n${snap.section}`,
-        };
-      const spawned = await this.deps.runtime.spawn(spec.spec);
-      if (!spawned.ok) return fail(spawned.error ?? 'spawn-failed');
-      if (
-        this.disposed ||
-        this.deps.authority.conversation(conversationId)?.lifecycle === 'ended'
-      ) {
-        await this.deps.runtime.release(conversationId);
-        return fail(this.disposed ? 'disabled' : 'canceled');
-      }
-      this.liveProfiles.set(conversationId, spec.spec.bot);
-      this.live.add(conversationId);
-      this.notesSeen.set(conversationId, snap?.version ?? '');
+      const spawned = await this.spawnLive(delivery, bot);
+      if (spawned) return fail(spawned);
     } else notes = this.withNotesUpdate(delivery);
     const sent = this.deps.runtime.prompt(
       conversationId,
@@ -917,6 +890,115 @@ export class BotSessionHost {
     if (notes.seen !== undefined) this.notesSeen.set(conversationId, notes.seen);
     this.deliverySent(delivery);
     return { ok: true, conversationId };
+  }
+
+  /** 会话仍可用（未结束、成员未归档、项目在、仍在聊天里）时返回成员档案 */
+  private usableBot(delivery: Delivery): BotProfile | undefined {
+    const conversation = this.deps.authority.conversation(delivery.conversationId);
+    const bot = this.deps.bots.get(delivery.botId);
+    const chat = conversation?.bot?.chatId
+      ? this.deps.chats.get(conversation.bot.chatId)
+      : undefined;
+    if (
+      !conversation ||
+      conversation.lifecycle === 'ended' ||
+      !bot ||
+      bot.archivedAt !== undefined ||
+      this.deps.authority.project(conversation.projectId)?.state !== 'active' ||
+      (conversation.bot?.chatId &&
+        (!chat || chat.archivedAt !== undefined || !chat.members.includes(bot.id)))
+    )
+      return undefined;
+    return bot;
+  }
+
+  /** spawn（带 resumeFile 恢复）并登记为 live；失败返回错误码 */
+  private async spawnLive(delivery: Delivery, bot: BotProfile): Promise<string | undefined> {
+    const { conversationId } = delivery;
+    const spec = this.spawnSpec(delivery);
+    if (!spec.ok) return spec.error;
+    const snap = this.notesFor(conversationId, bot.id);
+    if (snap?.section)
+      spec.spec = {
+        ...spec.spec,
+        systemPrompt: `${spec.spec.systemPrompt}\n\n${snap.section}`,
+      };
+    const spawned = await this.deps.runtime.spawn(spec.spec);
+    if (!spawned.ok) return spawned.error ?? 'spawn-failed';
+    if (this.disposed || this.deps.authority.conversation(conversationId)?.lifecycle === 'ended') {
+      await this.deps.runtime.release(conversationId);
+      return this.disposed ? 'disabled' : 'canceled';
+    }
+    this.liveProfiles.set(conversationId, spec.spec.bot);
+    this.live.add(conversationId);
+    this.notesSeen.set(conversationId, snap?.version ?? '');
+    return undefined;
+  }
+
+  /** 回退 / 重试的公共前置：会话空闲、可用，且已在 worker 里（冷会话只恢复不 prompt） */
+  private async controllable(conversationId: string): Promise<Delivery | Fail> {
+    if (this.disposed) return { ok: false, error: 'disabled' };
+    const binding = this.binding(conversationId);
+    if (!binding?.chatId || binding.delegationId) return { ok: false, error: 'not-bot-session' };
+    if (this.isBusy(conversationId)) return { ok: false, error: 'session-busy' };
+    const delivery: Delivery = {
+      chatId: binding.chatId,
+      botId: binding.botId,
+      conversationId,
+      text: '',
+    };
+    const bot = this.usableBot(delivery);
+    if (!bot) return { ok: false, error: 'session-unavailable' };
+    if (!this.live.has(conversationId)) {
+      const failed = await this.spawnLive(delivery, bot);
+      if (failed) return { ok: false, error: failed };
+    }
+    return delivery;
+  }
+
+  /** 私聊回退：只在空闲时执行；正文与草稿经 worker 的 rewind-done 事件回流 */
+  rewindConversation(
+    conversationId: string,
+    entryId: string,
+    restoreFiles: boolean
+  ): Promise<{ ok: true } | Fail> {
+    return this.withLock(conversationId, async () => {
+      const ready = await this.controllable(conversationId);
+      if ('ok' in ready) return ready;
+      if (!this.deps.runtime.rewind) return { ok: false, error: 'unsupported' };
+      const sent = this.deps.runtime.rewind(conversationId, entryId, restoreFiles);
+      if (!sent.ok) return { ok: false, error: sent.error ?? 'rewind-failed' };
+      this.lastAssistant.delete(conversationId);
+      return { ok: true };
+    });
+  }
+
+  /** 私聊重试：像一次投递那样占用回合（新 turnKey、计入并发、正常结算） */
+  retryConversation(conversationId: string): Promise<BotDeliverResult> {
+    return this.withLock(conversationId, async (): Promise<BotDeliverResult> => {
+      if (this.runningCount() >= this.maxRunning) return { ok: false, error: 'session-busy' };
+      const ready = await this.controllable(conversationId);
+      if ('ok' in ready) return ready;
+      if (!this.deps.runtime.retry) return { ok: false, error: 'unsupported' };
+      if (await this.overBudget(ready.botId, ready.chatId))
+        return { ok: false, error: BOT_BUDGET_ERROR };
+      const slot = { sawRunning: false };
+      this.slots.set(conversationId, slot);
+      this.turnKeys.set(conversationId, randomUUID());
+      this.lastAssistant.delete(conversationId);
+      this.activeDeliveries.delete(conversationId);
+      this.touch(conversationId);
+      const sent = this.deps.runtime.retry(conversationId);
+      if (!sent.ok) {
+        this.slots.delete(conversationId);
+        this.turnKeys.delete(conversationId);
+        this.quiet(conversationId);
+        return { ok: false, error: sent.error ?? 'retry-failed' };
+      }
+      // worker 认为无需续跑时不会进入 running：宽限期后按未运行结算，回合不悬挂
+      this.scheduleSettle(conversationId, slot, 'nothing-to-retry');
+      return { ok: true, conversationId };
+    });
   }
 
   private deliverySent(delivery: Delivery): void {

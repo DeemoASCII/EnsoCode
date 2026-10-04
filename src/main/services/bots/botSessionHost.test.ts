@@ -1094,3 +1094,107 @@ describe('BotSessionHost silence watchdog', () => {
     expect(host.silences()).toEqual([]);
   });
 });
+
+describe('BotSessionHost 私聊回退与重试', () => {
+  class ControlRuntime extends FakeRuntime {
+    rewinds: Array<{ id: string; entryId: string; restoreFiles: boolean }> = [];
+    retries: string[] = [];
+    rewind(id: string, entryId: string, restoreFiles: boolean) {
+      this.rewinds.push({ id, entryId, restoreFiles });
+      return { ok: true };
+    }
+    retry(id: string) {
+      this.retries.push(id);
+      return { ok: true };
+    }
+  }
+  let control: ControlRuntime;
+  const make = () => {
+    control = new ControlRuntime();
+    host = new BotSessionHost({
+      bots,
+      chats,
+      authority: registry,
+      runtime: control,
+      emit: () => {},
+    });
+  };
+
+  it('冷会话先恢复（只 spawn 不 prompt）再回退；运行中拒绝', async () => {
+    make();
+    const alice = bot('Alice');
+    const chat = direct(alice.id);
+    const session = host.ensureSession(chat.id, alice.id);
+    if (!session.ok) throw new Error(session.error);
+    expect(await host.rewindConversation(session.conversationId, 'e1', true)).toEqual({ ok: true });
+    expect(control.spawns).toHaveLength(1);
+    expect(control.prompts).toEqual([]);
+    expect(control.rewinds).toEqual([
+      { id: session.conversationId, entryId: 'e1', restoreFiles: true },
+    ]);
+
+    await host.deliver(chat.id, alice.id, 'go');
+    expect(await host.rewindConversation(session.conversationId, 'e1', false)).toEqual({
+      ok: false,
+      error: 'session-busy',
+    });
+    expect(await host.retryConversation(session.conversationId)).toEqual({
+      ok: false,
+      error: 'session-busy',
+    });
+    expect(control.spawns).toHaveLength(1);
+  });
+
+  it('重试占用回合：新 turnKey、正常结算并上报完成', async () => {
+    make();
+    const alice = bot('Alice');
+    const chat = direct(alice.id);
+    const finished: BotTurnFinished[] = [];
+    host.onTurnFinished((event) => finished.push(event));
+    const sent = await host.deliver(chat.id, alice.id, 'first');
+    if (!sent.ok) throw new Error(sent.error);
+    const id = sent.conversationId;
+    host.observe(ev({ type: 'status', status: 'running' }, id));
+    host.observe(ev({ type: 'turn-failed', turnId: 't1', error: 'boom' }, id));
+    const firstKey = finished[0].turnKey;
+
+    expect(await host.retryConversation(id)).toEqual({ ok: true, conversationId: id });
+    expect(control.retries).toEqual([id]);
+    expect(host.isBusy(id)).toBe(true);
+    const retryKey = host.turnKey(id);
+    expect(retryKey).toBeTruthy();
+    expect(retryKey).not.toBe(firstKey);
+    host.observe(ev({ type: 'status', status: 'running' }, id));
+    host.observe(
+      ev(
+        {
+          type: 'message-upsert',
+          index: 3,
+          message: {
+            role: 'assistant',
+            content: [{ type: 'text', text: 'done' }],
+            stopReason: 'stop',
+          },
+        },
+        id
+      )
+    );
+    host.observe(ev({ type: 'turn-completed', turnId: 't2' }, id));
+    expect(finished.at(-1)).toMatchObject({ ok: true, text: 'done', turnKey: retryKey });
+    expect(host.isBusy(id)).toBe(false);
+  });
+
+  it('worker 拒绝重试时立即释放回合', async () => {
+    make();
+    control.retry = () => ({ ok: false, error: 'nope' }) as never;
+    const alice = bot('Alice');
+    const chat = direct(alice.id);
+    const session = host.ensureSession(chat.id, alice.id);
+    if (!session.ok) throw new Error(session.error);
+    expect(await host.retryConversation(session.conversationId)).toEqual({
+      ok: false,
+      error: 'nope',
+    });
+    expect(host.isBusy(session.conversationId)).toBe(false);
+  });
+});

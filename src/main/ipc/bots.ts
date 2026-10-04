@@ -51,6 +51,8 @@ import {
   resolveModelSelection,
   resolveVirtualClassifier,
   respondApproval,
+  retrySession,
+  rewindSession,
   spawnSession,
   steerSession,
 } from '../services/agentHost';
@@ -90,7 +92,11 @@ import { RoutineRunner } from '../services/bots/routineRunner';
 import { BotRoutineRunLog } from '../services/bots/routineRuns';
 import { RoutineScheduler, routineBlock } from '../services/bots/routineScheduler';
 import { BotRoutineStore } from '../services/bots/routineStore';
-import { readBotSessionMessages } from '../services/bots/sessionMessages';
+import {
+  type BranchEntry,
+  readBotSessionBranch,
+  readBotSessionMessages,
+} from '../services/bots/sessionMessages';
 import { createSmartRouter } from '../services/bots/smartRouter';
 import { createTeam } from '../services/bots/teamCreate';
 import { searchFiles } from '../services/fileSearch';
@@ -289,6 +295,16 @@ function createRuntime(botsRoot: string): BotRuntimePort {
     abort(conversationId) {
       const identity = rootIdentity(conversationId);
       if (identity) abortSession(identity);
+    },
+    rewind(conversationId, entryId, restoreFiles) {
+      const identity = rootIdentity(conversationId);
+      return identity
+        ? rewindSession(identity, entryId, restoreFiles)
+        : { ok: false, error: 'stale session generation' };
+    },
+    retry(conversationId) {
+      const identity = rootIdentity(conversationId);
+      return identity ? retrySession(identity) : { ok: false, error: 'stale session generation' };
     },
     removeSessionFiles(conversation) {
       removeConversationSessionFiles({
@@ -748,6 +764,79 @@ function searchChatFiles({ chats, host }: BotServices, request: unknown): BotFil
     return INVALID;
   const root = host.workspacePath(input.chatId);
   return root ? { ok: true, files: searchFiles(root, input.query) } : UNAVAILABLE;
+}
+
+/** 私聊回退 / 重试的目标会话：只认私聊当前会话 */
+function directSession(
+  { chats }: BotServices,
+  chatId: unknown
+): { chatId: string; conversationId: string } | { ok: false; error: string } {
+  const chat = isBotId(chatId) ? chats.get(chatId) : undefined;
+  if (!chat) return INVALID;
+  if (chat.kind !== 'direct') return { ok: false, error: 'direct-only' };
+  if (chat.archivedAt !== undefined) return { ok: false, error: 'chat-archived' };
+  const conversationId = chat.sessions[chat.members[0]]?.conversationId;
+  return conversationId
+    ? { chatId: chat.id, conversationId }
+    : { ok: false, error: 'session-unavailable' };
+}
+
+/**
+ * 私聊回退（复用 Code 的 worker rewind，含文件还原）。worker 接受后同步收尾：
+ * 回退点之后发起的委派取消 / 结果作废，记忆水位退回回退点之前。
+ */
+export async function rewindBotChat(
+  services: BotServices,
+  request: unknown,
+  readBranch: (sessionFile: string | undefined) => Promise<readonly BranchEntry[]> = (file) =>
+    readBotSessionBranch(sessionDir(), file)
+): Promise<BotActionResult> {
+  const input = objectInput(request);
+  if (
+    !input ||
+    Object.keys(input).some((key) => !['chatId', 'entryId', 'restoreFiles'].includes(key)) ||
+    typeof input.entryId !== 'string' ||
+    !input.entryId.trim() ||
+    input.entryId.length > 200 ||
+    (input.restoreFiles !== undefined && typeof input.restoreFiles !== 'boolean')
+  )
+    return INVALID;
+  const target = directSession(services, input.chatId);
+  if ('ok' in target) return target;
+  const { conversationId } = target;
+  if (services.host.isBusy(conversationId)) return { ok: false, error: 'session-busy' };
+  const branch = await readBranch(
+    getSourceAuthorityRegistry()?.conversation(conversationId)?.sessionFile
+  ).catch(() => []);
+  const entry = branch.find((item) => item.id === input.entryId && item.userAt !== undefined);
+  if (!entry?.userAt) return { ok: false, error: 'rewind-target-not-found' };
+  const result = await services.host.rewindConversation(
+    conversationId,
+    entry.id,
+    input.restoreFiles === true
+  );
+  if (!result.ok) return result;
+  services.delegations.discardRewound(conversationId, entry.userAt);
+  services.memory.rewind(
+    conversationId,
+    branch.map((item) => item.id),
+    entry.id
+  );
+  emitBotEvent({ kind: 'chat', chatId: target.chatId });
+  return { ok: true };
+}
+
+/** 私聊重试：经宿主占用回合，结算、并发与委派批次与普通投递一致 */
+export async function retryBotChat(
+  services: BotServices,
+  request: unknown
+): Promise<BotActionResult> {
+  const input = objectInput(request);
+  if (!input || Object.keys(input).some((key) => key !== 'chatId')) return INVALID;
+  const target = directSession(services, input.chatId);
+  if ('ok' in target) return target;
+  const result = await services.host.retryConversation(target.conversationId);
+  return result.ok ? { ok: true } : result;
 }
 
 const objectInput = (value: unknown): Record<string, unknown> | undefined =>
@@ -1370,6 +1459,12 @@ export function registerBotHandlers(): void {
   );
   handle(IPC_CHANNELS.BOT_FILE_SEARCH, 'read', (_sender, request, services) =>
     searchChatFiles(services, request)
+  );
+  handle(IPC_CHANNELS.BOT_REWIND, 'write', (_sender, request, services) =>
+    rewindBotChat(services, request)
+  );
+  handle(IPC_CHANNELS.BOT_RETRY, 'write', (_sender, request, services) =>
+    retryBotChat(services, request)
   );
   handle(IPC_CHANNELS.BOT_ARTIFACTS_LIST, 'read', (_sender, request, services) =>
     listArtifacts(services, request)

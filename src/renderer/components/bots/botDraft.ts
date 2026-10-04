@@ -1,4 +1,5 @@
-import { CHAT_REF_MAX_PER_MESSAGE } from '@shared/bots/composerRefs';
+import { CHAT_REF_MAX_PER_MESSAGE, splitChatReferences } from '@shared/bots/composerRefs';
+import { stripBotNotesUpdate } from '@shared/bots/notes';
 
 /** Bot 输入框草稿：按聊天存 localStorage（图片不存） */
 export interface BotComposerDraft {
@@ -51,6 +52,24 @@ export function writeBotDraft(storage: DraftStorage, chatId: string, draft: BotC
 }
 
 const seedListeners = new Set<(chatId: string) => void>();
+
+const SKILL_PREFIX =
+  /^<skill name="([^"]+)" location="[^"]*">\n[\s\S]*?\n<\/skill>(?:\n\n([\s\S]*))?$/;
+
+/**
+ * 回退回填：Main 发出的正文 → 草稿。聊天摘录还原为引用；技能块只知道名称，
+ * 先以名称存入 skill，输入框按 id 或名称解析。
+ */
+export function draftFromSentText(sent: string): BotComposerDraft {
+  const { body, refs } = splitChatReferences(stripBotNotesUpdate(sent));
+  const skill = SKILL_PREFIX.exec(body);
+  return {
+    text: skill ? (skill[2] ?? '').trim() : body,
+    files: [],
+    chats: refs.map((ref) => ref.id).slice(0, CHAT_REF_MAX_PER_MESSAGE),
+    ...(skill ? { skill: skill[1] } : {}),
+  };
+}
 
 /** 预填某聊天的输入框（不发送）：写入持久化草稿，已挂载的输入框立即更新 */
 export function seedBotDraft(chatId: string, draft: string | BotComposerDraft): void {

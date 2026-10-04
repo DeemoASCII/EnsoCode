@@ -15,6 +15,7 @@ import {
 } from './delegationBatch';
 import { delegatedBotPermissions, delegationPolicy } from './delegationPolicy';
 import type { DelegationStore } from './delegationStore';
+import { rewoundDelegations } from './rewind';
 
 interface Deps {
   bots: BotStore;
@@ -338,6 +339,19 @@ export class DelegationService {
     }
     const rest = batch();
     if (rest.length && !rest.some(active)) this.delivered(rest);
+  }
+
+  /** 私聊回退越过发起委派的回合：取消进行中的，未投递结果一律作废（规则见 rewoundDelegations） */
+  discardRewound(parentConversationId: string, since: number): void {
+    const { cancel, discard } = rewoundDelegations(this.list(), parentConversationId, since);
+    this.discarding = true;
+    try {
+      for (const id of cancel) this.cancel(id);
+    } finally {
+      this.discarding = false;
+    }
+    const records = discard.flatMap((id) => this.deps.store.get(id) ?? []);
+    if (records.length) this.delivered(records);
   }
 
   observeRunning(conversationId: string): void {

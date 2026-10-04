@@ -297,6 +297,105 @@ describe('bots IPC', () => {
     expect(text).toContain('title="Bob" kind="direct"');
   });
 
+  it('私聊回退：校验目标、取消越过的委派、退回记忆水位；群聊与忙碌会话拒绝', async () => {
+    const alice = await createBot('Alice');
+    const bob = await createBot('Bob');
+    const created = await call(IPC_CHANNELS.BOT_CHAT_CREATE, {
+      kind: 'direct',
+      members: [alice],
+      workspace: { kind: 'member-home' },
+    });
+    const chatId = (created.chat as { id: string }).id;
+    const { getBotServices, rewindBotChat, retryBotChat } = await import('./bots');
+    const services = getBotServices()!;
+    const session = services.host.ensureSession(chatId, alice);
+    if (!session.ok) throw new Error(session.error);
+    const conv = session.conversationId;
+    const rewind = vi.fn((..._args: unknown[]) => ({ ok: true }));
+    (
+      services.host as unknown as { deps: { runtime: Record<string, unknown> } }
+    ).deps.runtime.rewind = rewind;
+    const branch = [
+      { id: 'h' },
+      { id: 'u1', userAt: 100 },
+      { id: 'a1' },
+      { id: 'u2', userAt: 200 },
+      { id: 'a2' },
+    ];
+    const readBranch = async () => branch;
+    const save = (patch: Record<string, unknown>) =>
+      (
+        services.delegations as unknown as { deps: { store: { save(r: unknown): void } } }
+      ).deps.store.save({
+        id: crypto.randomUUID(),
+        parentConversationId: conv,
+        parentBotId: alice,
+        targetBotId: bob,
+        chatId,
+        task: 't',
+        context: '',
+        childConversationId: crypto.randomUUID(),
+        depth: 1,
+        ...patch,
+      });
+    const ids = { old: crypto.randomUUID(), late: crypto.randomUUID(), live: crypto.randomUUID() };
+    save({ id: ids.old, state: 'completed', createdAt: 150 });
+    save({ id: ids.late, state: 'completed', createdAt: 250 });
+    save({ id: ids.live, state: 'running', createdAt: 260 });
+    services.chats.update(chatId, (draft) => {
+      draft.sessions[alice].distilledTo = 'a2';
+      return draft;
+    });
+
+    expect(await rewindBotChat(services, { chatId, entryId: 'a1' }, readBranch)).toEqual({
+      ok: false,
+      error: 'rewind-target-not-found',
+    });
+    expect(
+      await rewindBotChat(services, { chatId, entryId: 'u2', path: '/x' }, readBranch)
+    ).toEqual({
+      ok: false,
+      error: 'invalid',
+    });
+    expect(rewind).not.toHaveBeenCalled();
+
+    expect(
+      await rewindBotChat(services, { chatId, entryId: 'u2', restoreFiles: true }, readBranch)
+    ).toEqual({ ok: true });
+    expect(rewind).toHaveBeenCalledWith(conv, 'u2', true);
+    const state = (key: keyof typeof ids) =>
+      services.delegations.list().find((item) => item.id === ids[key]);
+    expect(state('old')?.deliveredAt).toBeUndefined();
+    expect(state('late')?.deliveredAt).toBeDefined();
+    expect(state('live')).toMatchObject({ state: 'canceled' });
+    expect(state('live')?.deliveredAt).toBeDefined();
+    expect(services.chats.get(chatId)?.sessions[alice].distilledTo).toBe('a1');
+
+    await services.host.deliver(chatId, alice, 'busy now');
+    expect(await rewindBotChat(services, { chatId, entryId: 'u1' }, readBranch)).toEqual({
+      ok: false,
+      error: 'session-busy',
+    });
+    expect(await retryBotChat(services, { chatId })).toEqual({ ok: false, error: 'session-busy' });
+
+    const group = await call(IPC_CHANNELS.BOT_CHAT_CREATE, {
+      kind: 'group',
+      title: 'team',
+      members: [alice, bob],
+      bossBotId: alice,
+      workspace: { kind: 'chat-home' },
+    });
+    const groupId = (group.chat as { id: string }).id;
+    expect(await rewindBotChat(services, { chatId: groupId, entryId: 'u1' }, readBranch)).toEqual({
+      ok: false,
+      error: 'direct-only',
+    });
+    expect(await retryBotChat(services, { chatId: groupId })).toEqual({
+      ok: false,
+      error: 'direct-only',
+    });
+  });
+
   it('核心笔记：入参收窄、version 防覆盖、只支持群笔记，保存后注入新会话系统提示词', async () => {
     const alice = await createBot('Alice');
     const created = await call(IPC_CHANNELS.BOT_CHAT_CREATE, {

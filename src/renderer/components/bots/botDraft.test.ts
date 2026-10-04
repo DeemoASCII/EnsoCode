@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { EMPTY_BOT_DRAFT, readBotDraft, writeBotDraft } from './botDraft';
+import { draftFromSentText, EMPTY_BOT_DRAFT, readBotDraft, writeBotDraft } from './botDraft';
 
 function memoryStorage() {
   const data = new Map<string, string>();
@@ -12,6 +12,18 @@ function memoryStorage() {
 }
 
 describe('bot composer drafts', () => {
+  it('回退回填：把 Main 展开的技能块 / 聊天摘录 / 笔记块还原成草稿引用', () => {
+    const sent =
+      '<notes-updated>n</notes-updated>\n<skill name="review" location="/s/SKILL.md">\nReferences are relative to /s.\n\nbody\n</skill>\n\n看 @src/a.ts\n\n<chat-reference id="c1" title="A" kind="direct">\nx\n</chat-reference>';
+    expect(draftFromSentText(sent)).toEqual({
+      text: '看 @src/a.ts',
+      files: [],
+      chats: ['c1'],
+      skill: 'review',
+    });
+    expect(draftFromSentText('plain')).toEqual({ text: 'plain', files: [], chats: [] });
+  });
+
   it('按聊天分别持久化，读回一致', () => {
     const storage = memoryStorage();
     writeBotDraft(storage, 'a', {

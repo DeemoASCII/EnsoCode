@@ -1271,6 +1271,14 @@ const electronAPI = {
       ipcRenderer.invoke(IPC_CHANNELS.BOT_SEARCH, request),
     searchFiles: (request: BotFileSearchRequest): Promise<BotFileSearchResult> =>
       ipcRenderer.invoke(IPC_CHANNELS.BOT_FILE_SEARCH, request),
+    /** 私聊回退到持久化 user entry；结果经 AGENT_EVENT 的 rewind-done 回来 */
+    rewind: (request: {
+      chatId: string;
+      entryId: string;
+      restoreFiles?: boolean;
+    }): Promise<BotActionResult> => ipcRenderer.invoke(IPC_CHANNELS.BOT_REWIND, request),
+    retry: (chatId: string): Promise<BotActionResult> =>
+      ipcRenderer.invoke(IPC_CHANNELS.BOT_RETRY, { chatId }),
     usageSummary: (days: UsageRangeDays): Promise<BotUsageSummaryResult> =>
       ipcRenderer.invoke(IPC_CHANNELS.BOT_USAGE_SUMMARY, days),
     usage: (): Promise<BotUsageOverviewResult> => ipcRenderer.invoke(IPC_CHANNELS.BOT_USAGE),

@@ -18,6 +18,23 @@ export interface ChatHost {
   botSession?: boolean;
   /** 一轮最终回复正文下方的附加内容（Bot 私聊的产物卡片）；参数为该消息绝对下标 */
   turnFooter?: (messageIndex: number) => ReactNode;
+  /**
+   * Bot 私聊回退 / 重试：会话投影在 bots store（sessionId 为键），
+   * 入口经 Bot IPC 走 Main 而不是 sessions store。
+   */
+  botControls?: {
+    /** 投影订阅（useSyncExternalStore），避免时间线直接依赖 bots store */
+    subscribe: (listener: () => void) => () => void;
+    projection: () =>
+      | {
+          status: string;
+          messages: readonly { role: string; entryId?: string; optimistic?: boolean }[];
+          historyBaseIndex?: number;
+        }
+      | undefined;
+    rewind: (entryId: string, restoreFiles: boolean) => void;
+    retry: () => void;
+  };
 }
 
 export const ChatHostContext = createContext<ChatHost | null>(null);

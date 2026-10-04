@@ -30,3 +30,29 @@ export async function readBotSessionMessages(
   while (cache.size > CACHE_LIMIT) cache.delete(cache.keys().next().value as string);
   return messages;
 }
+
+export interface BranchEntry {
+  id: string;
+  /** user 消息条目才有：消息时间（ms） */
+  userAt?: number;
+}
+
+/** 当前分支的 entry 序列（回退校验目标、计算记忆水位与委派作废边界用） */
+export async function readBotSessionBranch(
+  sessionDir: string,
+  sessionFile: string | undefined
+): Promise<BranchEntry[]> {
+  const resolved = resolveParentHistoryFile(sessionDir, sessionFile);
+  if (!resolved) throw new Error('session file outside sessions directory');
+  const { SessionManager } = await import('@earendil-works/pi-coding-agent');
+  return SessionManager.open(resolved, sessionDir)
+    .getBranch()
+    .map((entry) => {
+      const message =
+        entry.type === 'message' ? (entry.message as { role?: string; timestamp?: number }) : null;
+      if (message?.role !== 'user') return { id: entry.id };
+      const at =
+        typeof message.timestamp === 'number' ? message.timestamp : Date.parse(entry.timestamp);
+      return { id: entry.id, ...(Number.isFinite(at) ? { userAt: at } : {}) };
+    });
+}

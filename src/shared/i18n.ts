@@ -2141,6 +2141,8 @@ export const zhTranslations: Record<string, string> = {
   'This skill is not available to the member.': '该成员没有这个技能。',
   '{{names}} cannot use this skill; they will be told it is unavailable':
     '{{names}} 没有这个技能，投递时会告知其不可用',
+  'The member is busy. Try again after the current turn.': '成员正忙，请等这一轮结束后再试。',
+  'That message is no longer on the current branch.': '这条消息已不在当前分支上。',
   'Custom color': '自定义颜色',
   Inbox: '收件箱',
   'Everything members are waiting on you for': '所有成员待你处理的事',
