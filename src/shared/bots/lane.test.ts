@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { enqueueByLane } from './lane';
+import { type BotDeliverySource, enqueueByLane } from './lane';
 
 describe('enqueueByLane', () => {
   it('人 > bot > 后台，同级先来先出，缺省按 bot', () => {
@@ -17,7 +17,7 @@ describe('enqueueByLane', () => {
   });
 
   it('不改原数组', () => {
-    const queue = [{ id: 'a', source: 'bot' as const }];
+    const queue: Array<{ id: string; source: BotDeliverySource }> = [{ id: 'a', source: 'bot' }];
     expect(enqueueByLane(queue, { id: 'h', source: 'human' })).toHaveLength(2);
     expect(queue).toHaveLength(1);
   });
