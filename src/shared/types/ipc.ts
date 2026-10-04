@@ -428,6 +428,8 @@ export const IPC_CHANNELS = {
   BOT_ARTIFACTS_LIST: 'bots:artifacts-list',
   BOT_ARTIFACT_READ: 'bots:artifact-read',
   BOT_ARTIFACT_OPEN: 'bots:artifact-open',
+  /** 输入框 @文件补全：只收 chatId + 查询词，工作区根由 Main 推导 */
+  BOT_FILE_SEARCH: 'bots:file-search',
 } as const;
 
 export type IpcChannel = (typeof IPC_CHANNELS)[keyof typeof IPC_CHANNELS];

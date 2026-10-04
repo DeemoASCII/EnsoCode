@@ -144,6 +144,8 @@ import type {
   BotDelegationsResult,
   BotDraftInput,
   BotEvent,
+  BotFileSearchRequest,
+  BotFileSearchResult,
   BotGetResult,
   BotNewSessionResult,
   BotNotesResult,
@@ -1267,6 +1269,8 @@ const electronAPI = {
       ipcRenderer.invoke(IPC_CHANNELS.BOT_SESSION_HISTORY, request),
     search: (request: BotSearchRequest): Promise<BotSearchResult> =>
       ipcRenderer.invoke(IPC_CHANNELS.BOT_SEARCH, request),
+    searchFiles: (request: BotFileSearchRequest): Promise<BotFileSearchResult> =>
+      ipcRenderer.invoke(IPC_CHANNELS.BOT_FILE_SEARCH, request),
     usageSummary: (days: UsageRangeDays): Promise<BotUsageSummaryResult> =>
       ipcRenderer.invoke(IPC_CHANNELS.BOT_USAGE_SUMMARY, days),
     usage: (): Promise<BotUsageOverviewResult> => ipcRenderer.invoke(IPC_CHANNELS.BOT_USAGE),

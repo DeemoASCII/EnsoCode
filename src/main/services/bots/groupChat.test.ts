@@ -691,6 +691,22 @@ describe('压缩后补群状态', () => {
   });
 });
 
+describe('输入框引用', () => {
+  it('人类条目只存引用标识；投递时按被投递成员附加展开内容', async () => {
+    const refsAppendix = vi.fn(
+      async (_chat: unknown, botId: string, list: readonly { kind: string }[]) =>
+        list.some((entry) => entry.kind === 'human') ? `<appendix for="${botId}"/>` : ''
+    );
+    group.dispose();
+    group = new GroupChatService({ bots, chats, host, emit, refsAppendix });
+    await group.send(id, '@Alice 看看', { deliveryId: 'd1' }, { chats: [id], skill: 's1' });
+    const human = entries().find((entry) => entry.kind === 'human');
+    expect(human).toMatchObject({ refs: { chats: [id], skill: 's1' } });
+    expect(deliver.mock.calls[0][2]).toContain(`<appendix for="${a}"/>`);
+    expect(refsAppendix.mock.calls[0][1]).toBe(a);
+  });
+});
+
 it('reports one settled batch per relay round with every participant, skipping [skip] replies', async () => {
   const batches: unknown[] = [];
   group = new GroupChatService({

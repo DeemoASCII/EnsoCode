@@ -8,11 +8,13 @@ import { assignTeamNames } from '@shared/bots/team';
 import type { SessionIdentity } from '@shared/builtinAgents';
 import { BUILTIN_AGENT_TYPES, IPC_CHANNELS } from '@shared/types';
 import type { AttachedImage } from '@shared/types/agent';
+import type { SkillEntry } from '@shared/types/assets';
 import {
   type BotChat,
   type BotChatWorkspace,
   GROUP_TASK_TEXT_MAX,
   GROUP_TASK_TITLE_MAX,
+  type HumanEntryRefs,
   isBotId,
 } from '@shared/types/bot';
 import type {
@@ -22,6 +24,7 @@ import type {
   BotChatsListResult,
   BotChatWriteResult,
   BotEvent,
+  BotFileSearchResult,
   BotGetResult,
   BotNewSessionResult,
   BotNotesResult,
@@ -69,6 +72,7 @@ import { directTurnNotice, groupBatchNotice } from '../services/bots/botTurnNoti
 import { BotUsageService } from '../services/bots/botUsage';
 import { ChatSnoozeTimer } from '../services/bots/chatSnooze';
 import { BotChatStore } from '../services/bots/chatStore';
+import { type ComposerRefs, createComposerRefs } from '../services/bots/composerRefs';
 import { turnDelegationTargets } from '../services/bots/delegationBatch';
 import { delegationPolicy } from '../services/bots/delegationPolicy';
 import { DelegationService } from '../services/bots/delegationService';
@@ -86,8 +90,10 @@ import { RoutineRunner } from '../services/bots/routineRunner';
 import { BotRoutineRunLog } from '../services/bots/routineRuns';
 import { RoutineScheduler, routineBlock } from '../services/bots/routineScheduler';
 import { BotRoutineStore } from '../services/bots/routineStore';
+import { readBotSessionMessages } from '../services/bots/sessionMessages';
 import { createSmartRouter } from '../services/bots/smartRouter';
 import { createTeam } from '../services/bots/teamCreate';
+import { searchFiles } from '../services/fileSearch';
 import { resolveGlobalInstruction } from '../services/instructionStore';
 import { listMemories } from '../services/memory/store';
 import { notifyBotChat } from '../services/notifications';
@@ -137,12 +143,14 @@ interface BotServices {
   tasks: GroupTaskService;
   usage: BotUsageService;
   snooze: ChatSnoozeTimer;
+  composerRefs: ComposerRefs;
 }
 
 type GroupSender = (
   chat: BotChat,
   text: string,
-  options: { images?: AttachedImage[]; deliveryId: string }
+  options: { images?: AttachedImage[]; deliveryId: string },
+  refs?: HumanEntryRefs
 ) => Promise<BotSendResult>;
 
 let services: BotServices | null = null;
@@ -328,11 +336,20 @@ export function getBotServices(): BotServices | null {
     path.join(userData, 'bot-chats', 'delegations.jsonl')
   );
   const taskStore = new GroupTaskStore(path.join(userData, 'bot-chats'));
+  const composerRefs = createComposerRefs({
+    bots,
+    chats,
+    skills: () => skillEntries(readSettingsState()?.skills),
+    sessionMessages: (conversationId) =>
+      readBotSessionMessages(sessionDir(), authority.conversation(conversationId)?.sessionFile),
+    workspacePath: (chatId) => host.workspacePath(chatId),
+  });
   const groups = new GroupChatService({
     bots,
     chats,
     host,
     emit: emitBotEvent,
+    refsAppendix: (chat, botId, entries) => composerRefs.groupAppendix(chat, botId, entries),
     onBatchSettled: (batch) => {
       const chat = chats.get(batch.chatId);
       if (!chat) return;
@@ -488,7 +505,7 @@ export function getBotServices(): BotServices | null {
   host.onDiscard((scope) => {
     if (scope.conversationId) memory.remove(scope.conversationId);
   });
-  setBotGroupSender((chat, text, options) => groups.send(chat.id, text, options));
+  setBotGroupSender((chat, text, options, refs) => groups.send(chat.id, text, options, refs));
   const snooze = new ChatSnoozeTimer({
     chats,
     onDue: (chat) => {
@@ -516,6 +533,7 @@ export function getBotServices(): BotServices | null {
     runner,
     tasks,
     usage,
+    composerRefs,
     snooze,
   };
   if (botModeEnabled()) scheduler.start();
@@ -626,6 +644,20 @@ function catalogItems(value: unknown): { id: string; name: string; description?:
 const notesEvent = (target: BotNotesTarget): BotEvent =>
   target.kind === 'chat' ? { kind: 'notes', chatId: target.id } : { kind: 'notes' };
 
+/** 设置里的技能条目（成员按 skillIds 取用，与 worker 的技能加载一致：不看全局开关） */
+function skillEntries(value: unknown): SkillEntry[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter(
+    (item): item is SkillEntry =>
+      Boolean(item) &&
+      typeof item === 'object' &&
+      typeof item.id === 'string' &&
+      typeof item.name === 'string' &&
+      typeof item.path === 'string' &&
+      item.path.length > 0
+  );
+}
+
 /** since 之后整理写入某空间的结论（核心笔记重写的输入） */
 async function recentDistilled(spaceId: string, since: number): Promise<string[]> {
   const { memoryDatabase } = await import('../services/memoryHost');
@@ -656,13 +688,16 @@ function assistantCompleter(maxTokens: number): AbilityCompleter {
 
 /** 桌面 BOT_SEND 与手机 bot-send 共用 */
 export async function sendBotMessage(
-  { chats, host }: BotServices,
+  { chats, host, composerRefs }: BotServices,
   request: unknown
 ): Promise<BotSendResult> {
   const input = parseSendInput(request);
   const chat = input ? chats.get(input.chatId) : undefined;
   if (!input || !chat) return INVALID;
   if (chat.archivedAt !== undefined) return { ok: false, error: 'chat-archived' };
+  // 引用不合法时整条拒绝：此时什么都还没发给 worker
+  const refused = composerRefs.check(chat, input);
+  if (refused) return { ok: false, error: refused };
   // 人类在已搁置的聊天里发言：回到进行中
   wakeChat(chats, chat.id);
   const options = {
@@ -670,11 +705,19 @@ export async function sendBotMessage(
     ...(input.images ? { images: input.images } : {}),
   };
   if (chat.kind === 'group') {
+    const refs: HumanEntryRefs | undefined =
+      input.chats || input.skill
+        ? {
+            ...(input.chats ? { chats: input.chats } : {}),
+            ...(input.skill ? { skill: input.skill } : {}),
+          }
+        : undefined;
     return groupSender
-      ? groupSender(chat, input.text, options)
+      ? groupSender(chat, input.text, options, refs)
       : { ok: false, error: 'group-not-ready' };
   }
-  return host.deliver(chat.id, chat.members[0], input.text, options);
+  const text = await composerRefs.expandDirect(chat, input);
+  return host.deliver(chat.id, chat.members[0], text, options);
 }
 
 /** 桌面 BOT_CHAT_TIMELINE 与手机 bot-timeline 共用 */
@@ -689,6 +732,22 @@ export function readBotTimeline({ chats }: BotServices, request: unknown): BotTi
         : chats.readEntries(input.chatId, input),
     lastSeq: chats.lastSeq(input.chatId),
   };
+}
+
+/** @文件补全：根目录只来自聊天工作区，renderer 不能指定 */
+function searchChatFiles({ chats, host }: BotServices, request: unknown): BotFileSearchResult {
+  const input = objectInput(request);
+  if (
+    !input ||
+    Object.keys(input).some((key) => key !== 'chatId' && key !== 'query') ||
+    !isBotId(input.chatId) ||
+    typeof input.query !== 'string' ||
+    input.query.length > 200 ||
+    !chats.get(input.chatId)
+  )
+    return INVALID;
+  const root = host.workspacePath(input.chatId);
+  return root ? { ok: true, files: searchFiles(root, input.query) } : UNAVAILABLE;
 }
 
 const objectInput = (value: unknown): Record<string, unknown> | undefined =>
@@ -1308,6 +1367,9 @@ export function registerBotHandlers(): void {
 
   handle(IPC_CHANNELS.BOT_SEARCH, 'read', (_sender, request, services) =>
     searchChats(services, request)
+  );
+  handle(IPC_CHANNELS.BOT_FILE_SEARCH, 'read', (_sender, request, services) =>
+    searchChatFiles(services, request)
   );
   handle(IPC_CHANNELS.BOT_ARTIFACTS_LIST, 'read', (_sender, request, services) =>
     listArtifacts(services, request)

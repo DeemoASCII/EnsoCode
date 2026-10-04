@@ -775,6 +775,7 @@ export const IPC_PRODUCT_COVERAGE = {
   BOT_ARTIFACTS_LIST: excluded('Bot mode artifact cards UI.'),
   BOT_ARTIFACT_READ: excluded('Bot mode artifact preview UI.'),
   BOT_ARTIFACT_OPEN: excluded('Bot mode artifact reveal / open UI.'),
+  BOT_FILE_SEARCH: excluded('Bot mode composer @file completion.'),
   COMPUTER_CAPABILITIES: surfaces('coding-tools.computer'),
   COMPUTER_OPEN_PERMISSIONS: surfaces('coding-tools.computer'),
 } satisfies Record<keyof typeof IPC_CHANNELS, CoverageDisposition>;

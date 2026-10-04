@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { IPC_CHANNELS } from '@shared/types';
@@ -230,6 +230,71 @@ describe('bots IPC', () => {
     expect(options.bot.systemPrompt).toContain('Calm.');
     expect(options.bot.instruction.content).toContain('Bot mode');
     expect(mocks.promptSession).toHaveBeenCalledWith(identity, 'hello', undefined, 'd1');
+  });
+
+  it('输入框引用：越权与不存在的标识在发给 worker 之前拒绝；技能与聊天摘录由 Main 展开', async () => {
+    const alice = await createBot('Alice');
+    const bob = await createBot('Bob');
+    const direct = async (members: string[]) =>
+      (
+        (
+          await call(IPC_CHANNELS.BOT_CHAT_CREATE, {
+            kind: 'direct',
+            members,
+            workspace: { kind: 'member-home' },
+          })
+        ).chat as { id: string }
+      ).id;
+    const chatId = await direct([alice]);
+    const otherId = await direct([bob]);
+    const home = join(mocks.root, 'bots', alice, 'workspace');
+    mkdirSync(join(home, 'src'), { recursive: true });
+    writeFileSync(join(home, 'src', 'a.ts'), 'x');
+    writeFileSync(join(mocks.root, 'outside.txt'), 'x');
+    const skillDir = join(mocks.root, 'skills', 'review');
+    mkdirSync(skillDir, { recursive: true });
+    writeFileSync(join(skillDir, 'SKILL.md'), '---\nname: review\n---\nReview carefully.');
+    mocks.settings.skills = [
+      { id: 's-review', name: 'review', description: '', path: skillDir, source: 'x' },
+    ];
+
+    const send = (extra: Record<string, unknown>) =>
+      call(IPC_CHANNELS.BOT_SEND, {
+        chatId,
+        text: 'hi',
+        deliveryId: crypto.randomUUID(),
+        ...extra,
+      });
+    expect(await send({ chats: ['99999999-9999-4999-8999-999999999999'] })).toEqual({
+      ok: false,
+      error: 'chat-ref-not-found',
+    });
+    expect(await send({ files: ['../../outside.txt'] })).toEqual({
+      ok: false,
+      error: 'file-outside-workspace',
+    });
+    expect(await send({ skill: 's-review' })).toEqual({ ok: false, error: 'skill-unavailable' });
+    expect(mocks.spawnSession).not.toHaveBeenCalled();
+    expect(mocks.promptSession).not.toHaveBeenCalled();
+
+    expect(
+      await call(IPC_CHANNELS.BOT_FILE_SEARCH, {
+        chatId: '99999999-9999-4999-8999-999999999999',
+        query: '',
+      })
+    ).toEqual({ ok: false, error: 'invalid' });
+    expect(await call(IPC_CHANNELS.BOT_FILE_SEARCH, { chatId, query: 'a', root: '/' })).toEqual({
+      ok: false,
+      error: 'invalid',
+    });
+    const found = await call(IPC_CHANNELS.BOT_FILE_SEARCH, { chatId, query: 'a.ts' });
+    expect(found).toMatchObject({ ok: true, files: [{ relativePath: 'src/a.ts' }] });
+
+    const sent = await send({ files: ['src/a.ts'], chats: [otherId], text: '看 @src/a.ts' });
+    expect(sent).toMatchObject({ ok: true });
+    const text = mocks.promptSession.mock.calls[0][1] as string;
+    expect(text.startsWith('看 @src/a.ts\n\n<chat-reference id="')).toBe(true);
+    expect(text).toContain('title="Bob" kind="direct"');
   });
 
   it('核心笔记：入参收窄、version 防覆盖、只支持群笔记，保存后注入新会话系统提示词', async () => {

@@ -146,7 +146,12 @@ interface BotsState {
   markRead: (key: string, marker: number) => void;
   /** 手动标为未读：已读记号退回一格 */
   markUnread: (chatId: string) => void;
-  send: (chatId: string, text: string, images: AttachedImage[]) => Promise<BotSendResult>;
+  send: (
+    chatId: string,
+    text: string,
+    images: AttachedImage[],
+    refs?: { files?: string[]; chats?: string[]; skill?: string }
+  ) => Promise<BotSendResult>;
   stop: (chatId: string) => Promise<void>;
   /** 打开与成员的私聊；没有就建一个 */
   openDirect: (botId: string) => Promise<string | null>;
@@ -577,11 +582,14 @@ export const useBotsStore = create<BotsState>()((set, get) => {
       set({ reads: next });
     },
 
-    send: async (chatId, text, images) => {
+    send: async (chatId, text, images, refs = {}) => {
       const result = await window.electronAPI.bots.send({
         chatId,
         text,
         ...(images.length > 0 ? { images } : {}),
+        ...(refs.files?.length ? { files: refs.files } : {}),
+        ...(refs.chats?.length ? { chats: refs.chats } : {}),
+        ...(refs.skill ? { skill: refs.skill } : {}),
         deliveryId: crypto.randomUUID(),
       });
       if (result.ok && result.conversationId) {

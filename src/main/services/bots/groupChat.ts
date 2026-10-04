@@ -23,8 +23,10 @@ import type {
   BotChat,
   BotId,
   DelegationState,
+  GroupEntry,
   GroupEntryInput,
   GroupTaskStatus,
+  HumanEntryRefs,
 } from '../../../shared/types/bot';
 import type {
   BotActionResult,
@@ -88,6 +90,8 @@ interface GroupChatDeps {
   responder?: GroupResponderSelector;
   /** 接力整批结束（无人在回复、无排队、无待路由消息）；用户停止的批次不报 */
   onBatchSettled?: (batch: GroupBatchSettled) => void;
+  /** 输入框引用（@聊天 / $技能）：按被投递成员展开，附在增量之后 */
+  refsAppendix?: (chat: BotChat, botId: BotId, entries: readonly GroupEntry[]) => Promise<string>;
   /** 某会话某一轮（BotTurnFinished.turnKey）新建委派的目标成员；正文 @ 他们不再接力 */
   delegatedTargets?: (conversationId: string, turnKey: string) => readonly string[];
   /** 压缩后补群状态用：进行中的委派与看板未完成任务 */
@@ -200,7 +204,12 @@ export class GroupChatService {
     };
   }
 
-  send(chatId: string, text: string, options: BotDeliverOptions = {}): Promise<BotSendResult> {
+  send(
+    chatId: string,
+    text: string,
+    options: BotDeliverOptions = {},
+    refs?: HumanEntryRefs
+  ): Promise<BotSendResult> {
     return this.lock(chatId, async () => {
       if (this.disposed) return { ok: false, error: 'disabled' };
       const chat = this.deps.chats.get(chatId);
@@ -216,6 +225,7 @@ export class GroupChatService {
         kind: 'human',
         text,
         mentions: parseMentions(text, members).ids,
+        ...(refs ? { refs } : {}),
         id: entryId,
         at: Date.now(),
       });
@@ -606,8 +616,9 @@ export class GroupChatService {
 
   private async deliver(chat: BotChat, botId: string, options?: BotDeliverOptions, note?: string) {
     const cursor = chat.sessions[botId]?.cursor ?? 0;
+    const entries = this.deps.chats.readAfter(chat.id, cursor);
     const delta = buildGroupDelta({
-      entries: this.deps.chats.readAfter(chat.id, cursor),
+      entries,
       botId,
       cursor,
       members: this.members(chat),
@@ -615,9 +626,13 @@ export class GroupChatService {
     });
     const sessionId = chat.sessions[botId]?.conversationId;
     const compacted = sessionId !== undefined && this.compacted.has(sessionId);
+    const appendix = this.deps.refsAppendix
+      ? await this.deps.refsAppendix(chat, botId, entries).catch(() => '')
+      : '';
     const text = [
       compacted ? this.stateBlock(chat, botId) : '',
       delta.text,
+      appendix,
       note ? `<routing-note>${note}</routing-note>` : '',
     ]
       .filter(Boolean)

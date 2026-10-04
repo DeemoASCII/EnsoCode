@@ -163,6 +163,22 @@ interface Delegation {
 
 先确认能发给 worker 再做 optimistic echo；被拒绝时不回显（AGENTS.md 约束）。
 
+### 输入框：@文件 / @聊天 / $技能 / 语音 / 草稿
+
+`BotComposer` 仍是轻量 textarea，补齐 Code 输入框的几项能力，全部只传标识符：
+
+- **@文件**：复用 `useMentionSearch`（新增 `searchFiles` 选项替代按 cwd 搜索）；补全走 `BOT_FILE_SEARCH {chatId, query}`，根目录由 Main 按聊天工作区推导（`host.workspacePath`），入参多一个键即拒绝。选中后正文内联 `@相对路径`（与 Code 同格式，模型用自己的读文件工具读），同时把路径放进 `send.files`；Main 发送前逐个 `realpath` 校验仍在工作区内且存在（`..`、绝对路径、指向外部的软链都拒绝，`file-outside-workspace`）。
+- **@聊天**：候选是其他未归档的 Bot 聊天，选中成为 chip，`send.chats` 只带 chatId（每条最多 3 个）。Main 校验存在且不是本聊天（`chat-ref-not-found` / `chat-ref-self`），投递时生成 `<chat-reference id title kind>` 摘录：私聊取成员当前会话当前分支（每轮人类输入 + 该轮最后一条有正文的回复，剥掉笔记块、嵌套引用、技能块折成 `[skill: 名称]`），群聊取时间线 human / bot 条目；都取最近 3 轮（从倒数第 3 条人类消息起），单条裁到 1200 字，整段超 4000 字从最早的丢并注明省略条数；正文里的 `<chat-reference` 被中和，不能提前闭合。气泡里摘录块折叠成 chip。
+- **$技能**：候选是成员 `skillIds` 对应的设置技能（群聊为各成员并集，并标出谁有）；一条消息一个技能，`send.skill` 只带技能 id。Main 按 Code 侧约定（pi `/skill:` 展开格式：`<skill name location>References are relative to …</skill>` + 正文）自己读 `SKILL.md` 拼块：私聊必须是该成员的技能，否则 `skill-unavailable`；群聊只要有成员可用即可，人类条目只存 `refs: {chats, skill}`，`groupChat.deliver` 按**被投递成员**各自的技能集合展开——有就给技能块，没有就给一行 `<skill-unavailable>`；输入框里 @ 到的成员没有该技能时先提示。
+- **语音**：复用 Code 的 `VoiceInputButton`（同一开关、模型就绪判定与按住说话快捷键），识别结果插到光标处。
+- **草稿**：按聊天存 `localStorage['enso-bot-draft:<chatId>']`（正文、文件、聊天引用、技能；图片不存），坏数据回落为空、配额满不抛；输入框按 chatId 设 key 重新挂载，草稿不跨聊天。`seedBotDraft` 供引导流程和回退回填写入。
+
+所有引用校验都在 `host.deliver` / `groups.send` 之前完成，被拒绝的消息不会到 worker（Bot 输入框没有 optimistic echo，失败时输入回滚）。
+
+**测试**：`shared/bots/composerRefs`（最近 3 轮、单条 / 整段裁剪、标签中和、拼拆互逆、技能块格式）、`services/bots/composerRefs`（越界路径与软链、不存在 / 自引用聊天、成员没有的技能、私聊展开、群时间线摘录、群里按成员解析）、`parseSendInput`（只收标识符、上限、脏输入）、`groupChat`（人类条目只存引用、投递附展开）、bots IPC（越权在 spawn / prompt 之前拒绝、文件补全不接受根目录参数）、`botDraft`（按聊天持久化、坏数据、配额）。
+
+**真机**（隔离 userData，Max claude-sonnet-4-6 + hei qwen3.8-max-0902）：两位成员私聊里 `@launch` 补全出 `docs/launch-plan.md`，各自读出自己工作区的代号；Qwen 私聊 @ Clau 的聊天、Clau 私聊 @ Qwen 的聊天，都准确总结了对方聊天并指出两边代号不同；`$grill-me` 在私聊气泡显示技能 chip、模型按技能只问一个问题；群聊 `@Clau @Qwen` + 引用 + `$grill-me`（Qwen 未配该技能，输入框先提示），jsonl 里 Clau 收到技能块、Qwen 收到 `<skill-unavailable>`，两人都收到同一份摘录；草稿刷新页面后仍在。
+
 ### 群聊发送与路由
 
 `groupRouter` 是纯函数，输入是人类消息和当前状态，输出是回复队列：

@@ -10,8 +10,10 @@ import { CHAT_COL } from '@/components/chat/MessageTimeline';
 import { ResizeHandle } from '@/components/chat/ResizeHandle';
 import { sidePanelWidthTransition } from '@/components/sidepanel/sidePanelWidthAnim';
 import { addToast } from '@/components/ui/toast';
+import { useSpeechStatus } from '@/hooks/useSpeechStatus';
 import { useI18n } from '@/i18n';
 import { cn } from '@/lib/utils';
+import { startDesktopVoiceSession } from '@/lib/voiceSession';
 import { useBotsStore } from '@/stores/bots';
 import { activeDelegations, pendingOwners } from '@/stores/bots/delegations';
 import { chatSummary, type PendingItem, pendingItems } from '@/stores/bots/selectors';
@@ -23,7 +25,12 @@ import {
 } from '@/stores/sidePanel/width';
 import { ArtifactCards } from './ArtifactCards';
 import { BotAvatar, GroupAvatar } from './BotAvatar';
-import { BotComposer } from './BotComposer';
+import {
+  BotComposer,
+  type BotComposerPayload,
+  type ChatRefOption,
+  type SkillOption,
+} from './BotComposer';
 import { BotProfilePanel } from './BotProfilePanel';
 import { chatErrorText, chatTitle } from './botText';
 import { DelegationCard } from './DelegationCard';
@@ -58,6 +65,14 @@ export function BotChatView({ chat }: { chat: BotChat }) {
   const markRead = useBotsStore((s) => s.markRead);
   const panelOpen = useBotsStore((s) => s.panelOpen);
   const panelWidth = useBotsStore((s) => s.panelWidth);
+  const skillCatalog = useSettingsStore((s) => s.skills);
+  const voiceInputEnabled = useSettingsStore((s) => s.voiceInputEnabled);
+  const voiceModel = useSettingsStore((s) => s.voiceModel);
+  const { status: speechStatus } = useSpeechStatus(voiceInputEnabled);
+  const voiceReady =
+    voiceInputEnabled &&
+    speechStatus?.state !== 'unsupported' &&
+    speechStatus?.models.find((model) => model.id === voiceModel)?.state === 'ready';
   const [resizing, setResizing] = useState(false);
   const [workspaceW, setWorkspaceW] = useState(0);
   const asideRef = useRef<HTMLElement>(null);
@@ -85,6 +100,27 @@ export function BotChatView({ chat }: { chat: BotChat }) {
   const byId = useMemo(() => new Map(bots.map((bot) => [bot.id, bot])), [bots]);
   const names = useMemo(() => Object.fromEntries(bots.map((bot) => [bot.id, bot.name])), [bots]);
   const members = chat.members.map((id) => byId.get(id)).filter((bot): bot is BotProfile => !!bot);
+  const memberKey = members.map((bot) => `${bot.id}:${bot.skillIds.join(',')}`).join('|');
+  // biome-ignore lint/correctness/useExhaustiveDependencies: memberKey 概括成员与技能变化
+  const skillOptions = useMemo<SkillOption[]>(
+    () =>
+      skillCatalog.flatMap((skill) => {
+        const owners = members
+          .filter((bot) => bot.skillIds.includes(skill.id))
+          .map((bot) => bot.id);
+        return owners.length
+          ? [{ id: skill.id, name: skill.name, description: skill.description, owners }]
+          : [];
+      }),
+    [skillCatalog, memberKey]
+  );
+  const chatOptions = useMemo<ChatRefOption[]>(
+    () =>
+      chats
+        .filter((item) => item.id !== chat.id && item.archivedAt === undefined)
+        .map((item) => ({ id: item.id, title: chatTitle(item, bots, t), kind: item.kind })),
+    [chats, chat.id, bots, t]
+  );
   const summary = chatSummary(chat, { sessions, timeline, queue, names });
   const chatDelegations = useMemo(
     () => delegations.filter((item) => item.chatId === chat.id),
@@ -176,11 +212,8 @@ export function BotChatView({ chat }: { chat: BotChat }) {
     return null;
   })();
 
-  const send = async (
-    text: string,
-    images: Parameters<typeof window.electronAPI.bots.send>[0]['images']
-  ) => {
-    const result = await useBotsStore.getState().send(chat.id, text, images ?? []);
+  const send = async ({ text, images, ...refs }: BotComposerPayload) => {
+    const result = await useBotsStore.getState().send(chat.id, text, images, refs);
     if (!result.ok) {
       addToast({
         type: 'error',
@@ -274,13 +307,18 @@ export function BotChatView({ chat }: { chat: BotChat }) {
           <div className={cn(CHAT_COL, 'pb-4')}>
             <PendingBars items={pending} bots={byId} showNames={chat.kind === 'group'} />
             <BotComposer
-              draftKey={`bot:${chat.id}`}
+              key={chat.id}
+              chatId={chat.id}
               placeholder={
                 direct
                   ? t('Message {{name}}…', { name: direct.name })
                   : t('@ a member, or just say it…')
               }
               members={chat.kind === 'group' ? members : undefined}
+              chatOptions={chatOptions}
+              skills={skillOptions}
+              voice={voiceReady ? startDesktopVoiceSession : undefined}
+              requestMicAccess={window.electronAPI.speech.requestMicAccess}
               running={summary.running || Boolean(runtime?.current || runtime?.routing)}
               disabled={archived}
               hint={hint}

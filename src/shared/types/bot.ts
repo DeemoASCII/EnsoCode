@@ -220,8 +220,29 @@ interface GroupEntryBase {
   at: number;
 }
 
+export interface HumanEntryRefs {
+  chats?: BotId[];
+  skill?: string;
+}
+
+function parseHumanRefs(value: unknown): { refs?: HumanEntryRefs } {
+  if (!isObject(value)) return {};
+  const chats = strings(value.chats).filter(isBotId).slice(0, 3);
+  const refs: HumanEntryRefs = {
+    ...(chats.length ? { chats } : {}),
+    ...(isText(value.skill) ? { skill: value.skill } : {}),
+  };
+  return refs.chats || refs.skill ? { refs } : {};
+}
+
 export type GroupEntry =
-  | (GroupEntryBase & { kind: 'human'; text: string; mentions: BotId[] })
+  | (GroupEntryBase & {
+      kind: 'human';
+      text: string;
+      mentions: BotId[];
+      /** 输入框 @聊天（chatId）与 $技能（技能 id）；Main 投递时按成员展开 */
+      refs?: HumanEntryRefs;
+    })
   | (GroupEntryBase & {
       kind: 'bot';
       botId: BotId;
@@ -474,7 +495,13 @@ export function parseGroupEntry(value: unknown): GroupEntry | undefined {
   switch (value.kind) {
     case 'human':
       return typeof value.text === 'string'
-        ? { ...base, kind: 'human', text: value.text, mentions: strings(value.mentions) }
+        ? {
+            ...base,
+            kind: 'human',
+            text: value.text,
+            mentions: strings(value.mentions),
+            ...parseHumanRefs(value.refs),
+          }
         : undefined;
     case 'bot':
       return isBotId(value.botId) &&

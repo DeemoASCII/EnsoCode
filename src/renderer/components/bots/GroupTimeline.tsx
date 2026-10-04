@@ -1,6 +1,6 @@
 import type { ProjectedMessage } from '@shared/types/agent';
 import type { BotChat, BotProfile, BotRoutedBy, Delegation, GroupEntry } from '@shared/types/bot';
-import { ChevronDown, ChevronRight, Loader2 } from 'lucide-react';
+import { ChevronDown, ChevronRight, Loader2, MessagesSquare, Sparkles } from 'lucide-react';
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Markdown } from '@/components/chat/Markdown';
 import { useI18n } from '@/i18n';
@@ -16,8 +16,10 @@ import {
   type TurnStep,
   turnSteps,
 } from '@/stores/bots/groupTimeline';
+import { useSettingsStore } from '@/stores/settings';
 import { ArtifactCards } from './ArtifactCards';
 import { BotAvatar } from './BotAvatar';
+import { chatTitle } from './botText';
 import { DelegationCard } from './DelegationCard';
 import { RoutineProposalCard } from './RoutineCards';
 import { SilenceNote } from './SilenceNote';
@@ -305,9 +307,12 @@ function EntryRow({
     case 'human':
       return (
         <div className="flex max-w-[80%] flex-col items-end self-end">
-          <div className="whitespace-pre-wrap break-words rounded-xl rounded-tr-sm bg-primary px-3 py-2 text-primary-foreground text-sm">
-            <MentionText text={entry.text} bots={bots} />
-          </div>
+          {entry.text && (
+            <div className="whitespace-pre-wrap break-words rounded-xl rounded-tr-sm bg-primary px-3 py-2 text-primary-foreground text-sm">
+              <MentionText text={entry.text} bots={bots} />
+            </div>
+          )}
+          {entry.refs && <HumanRefs refs={entry.refs} />}
           {!continued && (
             <span className="mt-0.5 text-[11px] text-muted-foreground">{timeOf(entry.at)}</span>
           )}
@@ -465,6 +470,42 @@ function TurnProcess({
           </button>
         </div>
       )}
+    </div>
+  );
+}
+
+/** 人类消息的 @聊天 / $技能 引用（时间线只存标识，名称在这里查） */
+function HumanRefs({
+  refs,
+}: {
+  refs: NonNullable<Extract<GroupEntry, { kind: 'human' }>['refs']>;
+}) {
+  const { t } = useI18n();
+  const chats = useBotsStore((s) => s.chats);
+  const bots = useBotsStore((s) => s.bots);
+  const skills = useSettingsStore((s) => s.skills);
+  const chip = 'inline-flex h-6 max-w-56 items-center gap-1 rounded-md px-1.5 text-xs';
+  return (
+    <div className="mt-1 flex flex-wrap justify-end gap-1.5">
+      {refs.skill && (
+        <span className={cn(chip, 'bg-info/15 text-info')}>
+          <Sparkles className="h-3 w-3 shrink-0" />
+          <span className="min-w-0 truncate">
+            {skills.find((skill) => skill.id === refs.skill)?.name ?? refs.skill}
+          </span>
+        </span>
+      )}
+      {refs.chats?.map((id) => {
+        const chat = chats.find((item) => item.id === id);
+        return (
+          <span key={id} className={cn(chip, 'bg-muted')} title={t('Referenced chat')}>
+            <MessagesSquare className="h-3 w-3 shrink-0" />
+            <span className="min-w-0 truncate">
+              {chat ? chatTitle(chat, bots, t) : t('Unavailable chat')}
+            </span>
+          </span>
+        );
+      })}
     </div>
   );
 }

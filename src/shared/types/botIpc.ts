@@ -236,7 +236,22 @@ export interface BotSendRequest {
   text: string;
   images?: AttachedImage[];
   deliveryId: string;
+  /** 输入框 @文件：工作区相对路径（正文里已有 @path），Main 校验在聊天工作区内 */
+  files?: string[];
+  /** 输入框 @聊天：被引用的 Bot 聊天 id（≤3），Main 投递时注入其最近 3 轮摘录 */
+  chats?: string[];
+  /** 输入框 $技能：技能 id；私聊须是成员技能，群聊按被投递成员各自解析 */
+  skill?: string;
 }
+
+/** @文件补全：工作区根由 Main 按 chatId 推导 */
+export interface BotFileSearchRequest {
+  chatId: string;
+  query: string;
+}
+export type BotFileSearchResult =
+  | { ok: true; files: { relativePath: string; name: string }[] }
+  | BotIpcError;
 
 /** 全文搜索：query 去首尾空白后 1..200 字符；limit 缺省 50，上限 100 */
 export const BOT_SEARCH_QUERY_MAX = 200;

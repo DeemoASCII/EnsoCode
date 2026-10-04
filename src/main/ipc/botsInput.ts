@@ -1,3 +1,4 @@
+import { CHAT_REF_MAX_PER_MESSAGE } from '@shared/bots/composerRefs';
 import type { PersonaSuggestInput } from '@shared/bots/personaSuggest';
 import {
   APPROVAL_MODES,
@@ -338,13 +339,47 @@ function parseImages(value: unknown): AttachedImage[] | null {
   return images;
 }
 
-export function parseSendInput(
-  value: unknown
-): { chatId: string; text: string; images?: AttachedImage[]; deliveryId: string } | null {
+const SEND_FILES_MAX = 50;
+
+function parseSendRefs(
+  input: Record<string, unknown>
+): { files?: string[]; chats?: string[]; skill?: string } | null {
+  const refs: { files?: string[]; chats?: string[]; skill?: string } = {};
+  if (input.files !== undefined) {
+    const files = input.files;
+    if (
+      !Array.isArray(files) ||
+      files.length > SEND_FILES_MAX ||
+      !files.every((file) => nonEmpty(file) && file.length <= 1024)
+    )
+      return null;
+    if (files.length) refs.files = [...new Set(files as string[])];
+  }
+  if (input.chats !== undefined) {
+    const chats = Array.isArray(input.chats) ? [...new Set(input.chats)] : null;
+    if (!chats || chats.length > CHAT_REF_MAX_PER_MESSAGE || !chats.every(isBotId)) return null;
+    if (chats.length) refs.chats = chats;
+  }
+  if (input.skill !== undefined) {
+    if (!nonEmpty(input.skill) || input.skill.length > 200) return null;
+    refs.skill = input.skill;
+  }
+  return refs;
+}
+
+export function parseSendInput(value: unknown): {
+  chatId: string;
+  text: string;
+  images?: AttachedImage[];
+  deliveryId: string;
+  files?: string[];
+  chats?: string[];
+  skill?: string;
+} | null {
   const input = record(value);
   if (
     !input ||
-    !onlyKeys(input, ['chatId', 'text', 'images', 'deliveryId']) ||
+    !onlyKeys(input, ['chatId', 'text', 'images', 'deliveryId', 'files', 'chats', 'skill']) ||
     !isBotId(input.chatId) ||
     typeof input.text !== 'string' ||
     !isDeliveryId(input.deliveryId)
@@ -352,13 +387,15 @@ export function parseSendInput(
     return null;
   }
   const images = input.images === undefined ? undefined : parseImages(input.images);
-  if (images === null) return null;
-  if (!input.text.trim() && !images?.length) return null;
+  const refs = parseSendRefs(input);
+  if (images === null || refs === null) return null;
+  if (!input.text.trim() && !images?.length && !refs.chats && !refs.skill) return null;
   return {
     chatId: input.chatId,
     text: input.text,
     ...(images?.length ? { images } : {}),
     deliveryId: input.deliveryId,
+    ...refs,
   };
 }
 

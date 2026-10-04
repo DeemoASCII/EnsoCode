@@ -1,3 +1,4 @@
+import { splitChatReferences } from '@shared/bots/composerRefs';
 import { stripBotNotesUpdate } from '@shared/bots/notes';
 import { isBtwIsolationPrompt } from '@shared/btw';
 import { type PlanNoteKind, parsePlanMessage, splitPlanPrefix } from '@shared/planMode';
@@ -27,6 +28,7 @@ import {
   ListTodo,
   LoaderCircle,
   type LucideIcon,
+  MessagesSquare,
   PackageMinus,
   Pencil,
   RefreshCw,
@@ -490,6 +492,29 @@ function UserText({
   const withoutNotes = botHost ? stripBotNotesUpdate(text) : text;
   if (withoutNotes !== text)
     return <UserText text={withoutNotes} searchQuery={searchQuery} activeNth={activeNth} />;
+  // Bot 输入框 @聊天：Main 追加的摘录块折叠成 chip
+  const chatRefs = botHost ? splitChatReferences(text) : null;
+  if (chatRefs?.refs.length) {
+    return (
+      <div className="flex w-full flex-col items-end gap-1.5">
+        {chatRefs.body && (
+          <UserText text={chatRefs.body} searchQuery={searchQuery} activeNth={activeNth} />
+        )}
+        <div className="flex flex-wrap justify-end gap-1.5">
+          {chatRefs.refs.map((ref) => (
+            <span
+              key={ref.id}
+              title={t('Referenced chat')}
+              className="inline-flex h-6 max-w-56 items-center gap-1 rounded-md bg-muted px-1.5 text-xs"
+            >
+              <MessagesSquare className="h-3 w-3 shrink-0" />
+              <span className="min-w-0 truncate">{ref.title}</span>
+            </span>
+          ))}
+        </div>
+      </div>
+    );
+  }
   const planPrefix = splitPlanPrefix(text);
   if (planPrefix.note) {
     const remainder = planPrefix.rest.trim();

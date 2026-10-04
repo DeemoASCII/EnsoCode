@@ -214,6 +214,37 @@ describe('send / timeline / workspace / history inputs', () => {
     expect(parseSendInput({ chatId: A, text: 'x', deliveryId: 'd', images: [{}] })).toBeNull();
   });
 
+  it('输入框引用只收标识符：文件相对路径、最多 3 个聊天、一个技能 id', () => {
+    expect(
+      parseSendInput({
+        chatId: A,
+        text: '',
+        deliveryId: 'd',
+        files: ['src/a.ts'],
+        chats: [B, B],
+        skill: 'skill-1',
+      })
+    ).toEqual({
+      chatId: A,
+      text: '',
+      deliveryId: 'd',
+      files: ['src/a.ts'],
+      chats: [B],
+      skill: 'skill-1',
+    });
+    const send = (extra: Record<string, unknown>) =>
+      parseSendInput({ chatId: A, text: 'x', deliveryId: 'd', ...extra });
+    const C = '33333333-3333-4333-8333-333333333333';
+    const D = '44444444-4444-4444-8444-444444444444';
+    expect(send({ chats: [A, B, C, D] })).toBeNull();
+    expect(send({ chats: ['../x'] })).toBeNull();
+    expect(send({ files: [1] })).toBeNull();
+    expect(send({ files: Array.from({ length: 51 }, (_, i) => `f${i}`) })).toBeNull();
+    expect(send({ skill: '' })).toBeNull();
+    expect(send({ cwd: '/etc' })).toBeNull();
+    expect(parseSendInput({ chatId: A, text: ' ', deliveryId: 'd', files: ['a'] })).toBeNull();
+  });
+
   it('时间线分页把 limit 收在 1..200', () => {
     expect(parseTimelineInput({ chatId: A })).toEqual({ chatId: A, limit: 100 });
     expect(parseTimelineInput({ chatId: A, beforeSeq: 5, limit: 999 })).toEqual({

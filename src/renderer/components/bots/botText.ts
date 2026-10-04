@@ -31,6 +31,14 @@ export function chatErrorText(error: string, t: TFunction): string {
       return t('This chat was changed elsewhere. Refresh and try again.');
     case 'budget-exceeded':
       return t("This member's daily budget is used up. Try again tomorrow or raise the budget.");
+    case 'chat-ref-not-found':
+      return t('The referenced chat no longer exists.');
+    case 'chat-ref-self':
+      return t('A chat cannot reference itself.');
+    case 'file-outside-workspace':
+      return t("The file is not inside this chat's workspace.");
+    case 'skill-unavailable':
+      return t('This skill is not available to the member.');
     default:
       return error;
   }
