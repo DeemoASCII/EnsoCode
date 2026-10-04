@@ -2502,14 +2502,12 @@ export const zhTranslations: Record<string, string> = {
   'Failed · interrupted · canceled': '失败 · 中断 · 取消',
   'Choose a member.': '请选择成员。',
   'Create team from template': '从模板创建团队',
-  'Creates the members and their group chat in one go. Members follow the default model; pick skills and MCP per member, or let AI set them.':
-    '一次性创建成员和群聊。成员跟随默认模型；技能和 MCP 可逐个成员选择，也可让 AI 自动设置。',
+  'Creates the members and their group chat in one go. Members follow the default model; expand a member to set tools, approval, delegation, skills and MCP, or let AI set them.':
+    '一次性创建成员和群聊。成员跟随默认模型；展开成员可设置工具、审批、委派、技能和 MCP，也可让 AI 自动设置。',
   'AI auto-configure': 'AI 自动设置',
-  'Skills & MCP': '技能与 MCP',
   'No skills or MCP': '未选技能和 MCP',
   '{{n}} skills · {{m}} MCP': '{{n}} 个技能 · {{m}} 个 MCP',
-  'Set skills and MCP for {{n}} members': '已为 {{n}} 位成员设置技能和 MCP',
-  'No skills or MCP fit these members': '没有适合这些成员的技能或 MCP',
+  'Configured abilities for {{n}} members': '已为 {{n}} 位成员设置能力',
   'Suggestions failed for {{n}} members': '{{n}} 位成员的推荐失败',
   'Import team (JSON)': '导入团队（JSON）',
   'This team file is too large.': '团队文件过大。',

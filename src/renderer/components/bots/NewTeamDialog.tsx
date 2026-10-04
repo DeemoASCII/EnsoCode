@@ -2,6 +2,8 @@ import {
   selectTeamMembers,
   type TeamFileError,
   type TeamMemberAssets,
+  type TeamMemberSpec,
+  type TeamRefList,
   type TeamRename,
   type TeamSpec,
 } from '@shared/bots/team';
@@ -45,7 +47,7 @@ import { TEAM_TEMPLATES, teamTemplateSpec } from '@/stores/bots/teamTemplates';
 import { useSettingsStore } from '@/stores/settings';
 import { AssetPickers, suggestErrorText } from './BotAbilities';
 import { BotAvatar } from './BotAvatar';
-import { FieldLabel, nameError } from './BotFields';
+import { ApprovalSelect, FieldLabel, nameError, Segmented } from './BotFields';
 import { botErrorText, chatErrorText, localProjects } from './botText';
 
 type Assets = Record<string, { skillIds: string[]; mcpServerIds: string[] }>;
@@ -138,6 +140,11 @@ export function NewTeamDialog({
 
   const patchTeam = (patch: (team: TeamSpec) => TeamSpec) =>
     setPreview((current) => (current ? { ...current, team: patch(current.team) } : current));
+  const patchMember = (key: string, next: Partial<TeamMemberSpec>) =>
+    patchTeam((team) => ({
+      ...team,
+      members: team.members.map((m) => (m.key === key ? { ...m, ...next } : m)),
+    }));
 
   const picked = useMemo(
     () => (preview ? selectTeamMembers(preview.team, preview.picked) : null),
@@ -168,7 +175,7 @@ export function NewTeamDialog({
   const setMemberAssets = (key: string, next: Partial<typeof NO_ASSETS>) =>
     setAssets((current) => ({ ...current, [key]: { ...(current[key] ?? NO_ASSETS), ...next } }));
 
-  /** 逐个成员问 Bot 助理模型，只取技能 / MCP 推荐；工具与审批由模板决定 */
+  /** 逐个成员问 Bot 助理模型：取工具、审批、技能、MCP；委派名单按团队内成员手动设 */
   const autoAssets = async () => {
     if (!picked) return;
     setSuggesting(true);
@@ -194,18 +201,29 @@ export function NewTeamDialog({
       let failed = 0;
       let firstError: string | undefined;
       const next: Assets = { ...assets };
+      const memberPatches = new Map<string, Partial<TeamMemberSpec>>();
       for (const { key, result } of results) {
         if (!result?.ok) {
           failed++;
           if (result && !firstError) firstError = suggestErrorText(result, t);
           continue;
         }
-        const skillIds = result.suggestion.skillIds?.value ?? assetsOf(key).skillIds;
-        const mcpServerIds = result.suggestion.mcpServerIds?.value ?? assetsOf(key).mcpServerIds;
+        const { suggestion } = result;
+        const patch: Partial<TeamMemberSpec> = {};
+        if (suggestion.tools) patch.tools = suggestion.tools.value;
+        if (suggestion.approvalMode) patch.approvalMode = suggestion.approvalMode.value;
+        if (Object.keys(patch).length > 0) memberPatches.set(key, patch);
+        const skillIds = suggestion.skillIds?.value ?? assetsOf(key).skillIds;
+        const mcpServerIds = suggestion.mcpServerIds?.value ?? assetsOf(key).mcpServerIds;
         next[key] = { skillIds: [...skillIds], mcpServerIds: [...mcpServerIds] };
-        if (skillIds.length + mcpServerIds.length > 0) set++;
+        if (skillIds.length + mcpServerIds.length > 0 || memberPatches.has(key)) set++;
       }
       setAssets(next);
+      if (memberPatches.size > 0)
+        patchTeam((team) => ({
+          ...team,
+          members: team.members.map((m) => ({ ...m, ...memberPatches.get(m.key) })),
+        }));
       if (failed > 0)
         addToast({
           type: 'error',
@@ -217,8 +235,8 @@ export function NewTeamDialog({
           type: set > 0 ? 'success' : 'info',
           title:
             set > 0
-              ? t('Set skills and MCP for {{n}} members', { n: set })
-              : t('No skills or MCP fit these members'),
+              ? t('Configured abilities for {{n}} members', { n: set })
+              : t('Current abilities already match the suggestion.'),
         });
     } finally {
       setSuggesting(false);
@@ -266,7 +284,7 @@ export function NewTeamDialog({
           <DialogTitle>{t('Create team from template')}</DialogTitle>
           <DialogDescription>
             {t(
-              'Creates the members and their group chat in one go. Members follow the default model; pick skills and MCP per member, or let AI set them.'
+              'Creates the members and their group chat in one go. Members follow the default model; expand a member to set tools, approval, delegation, skills and MCP, or let AI set them.'
             )}
           </DialogDescription>
         </DialogHeader>
@@ -331,10 +349,13 @@ export function NewTeamDialog({
               </div>
 
               <div>
-                <div className="flex items-start justify-between gap-2">
-                  <FieldLabel hint={t('Uncheck members you do not need; the owner stays')}>
-                    {t('Members')}
-                  </FieldLabel>
+                <div className="mb-2 flex items-center justify-between gap-2">
+                  <span className="flex items-baseline gap-2">
+                    <span className="text-muted-foreground text-xs">{t('Members')}</span>
+                    <span className="text-[11px] text-muted-foreground/70">
+                      {t('Uncheck members you do not need; the owner stays')}
+                    </span>
+                  </span>
                   <Button
                     size="xs"
                     variant="outline"
@@ -345,7 +366,7 @@ export function NewTeamDialog({
                     {t('AI auto-configure')}
                   </Button>
                 </div>
-                <div className="space-y-1">
+                <div className="space-y-1.5">
                   {preview.team.members.map((member) => {
                     const checked = preview.picked.includes(member.key);
                     const boss = member.key === preview.team.bossKey;
@@ -408,18 +429,6 @@ export function NewTeamDialog({
                             )}
                           </div>
                           <p className="text-muted-foreground text-xs">{member.scope}</p>
-                          <p className="text-[11px] text-muted-foreground/80">
-                            {member.tools === 'readonly' ? t('Read-only') : t('All tools')} ·{' '}
-                            {t(APPROVAL_MODE_META[member.approvalMode].labelKey)}
-                            {shown.length > 0 && (
-                              <>
-                                {' · '}
-                                {t('Delegates to {{names}}', {
-                                  names: shown.map(nameOf).join(lang === 'zh' ? '、' : ', '),
-                                })}
-                              </>
-                            )}
-                          </p>
                           {renamed && renamed.to === member.name && (
                             <p className="text-warning text-xs">
                               {t('"{{from}}" is taken, renamed to "{{to}}"', renamed)}
@@ -430,24 +439,75 @@ export function NewTeamDialog({
                             type="button"
                             disabled={!checked}
                             onClick={() => setExpanded(open ? null : member.key)}
-                            className="flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground disabled:pointer-events-none"
+                            className="flex items-start gap-1 text-left text-[11px] text-muted-foreground hover:text-foreground disabled:pointer-events-none"
                           >
                             {open ? (
-                              <ChevronDown className="h-3 w-3" />
+                              <ChevronDown className="mt-px h-3 w-3 shrink-0" />
                             ) : (
-                              <ChevronRight className="h-3 w-3" />
+                              <ChevronRight className="mt-px h-3 w-3 shrink-0" />
                             )}
-                            {t('Skills & MCP')}
-                            {' · '}
-                            {chosen.skillIds.length + chosen.mcpServerIds.length === 0
-                              ? t('No skills or MCP')
-                              : t('{{n}} skills · {{m}} MCP', {
-                                  n: chosen.skillIds.length,
-                                  m: chosen.mcpServerIds.length,
-                                })}
+                            <span>
+                              {member.tools === 'readonly' ? t('Read-only') : t('All tools')}
+                              {' · '}
+                              {t(APPROVAL_MODE_META[member.approvalMode].labelKey)}
+                              {shown.length > 0 &&
+                                ` · ${t('Delegates to {{names}}', {
+                                  names: shown.map(nameOf).join(lang === 'zh' ? '、' : ', '),
+                                })}`}
+                              {' · '}
+                              {chosen.skillIds.length + chosen.mcpServerIds.length === 0
+                                ? t('No skills or MCP')
+                                : t('{{n}} skills · {{m}} MCP', {
+                                    n: chosen.skillIds.length,
+                                    m: chosen.mcpServerIds.length,
+                                  })}
+                            </span>
                           </button>
                           {open && (
-                            <div className="space-y-3 pt-1">
+                            <div className="space-y-3 rounded-lg bg-muted/40 p-2.5">
+                              <div>
+                                <FieldLabel>{t('Tools')}</FieldLabel>
+                                <Segmented
+                                  value={member.tools}
+                                  options={[
+                                    { value: 'all', label: t('All tools') },
+                                    { value: 'readonly', label: t('Read-only') },
+                                  ]}
+                                  onChange={(tools) => patchMember(member.key, { tools })}
+                                />
+                              </div>
+                              <div>
+                                <FieldLabel>{t('Approval mode')}</FieldLabel>
+                                <ApprovalSelect
+                                  value={member.approvalMode}
+                                  onChange={(approvalMode) =>
+                                    patchMember(member.key, { approvalMode })
+                                  }
+                                  zIndex={Z_INDEX.DROPDOWN_IN_MODAL}
+                                />
+                              </div>
+                              <TeamRefField
+                                label={t('Can delegate to')}
+                                value={member.delegation.canDelegateTo}
+                                options={preview.picked.filter((key) => key !== member.key)}
+                                nameOf={nameOf}
+                                onChange={(canDelegateTo) =>
+                                  patchMember(member.key, {
+                                    delegation: { ...member.delegation, canDelegateTo },
+                                  })
+                                }
+                              />
+                              <TeamRefField
+                                label={t('Accepts delegation from')}
+                                value={member.delegation.acceptFrom}
+                                options={preview.picked.filter((key) => key !== member.key)}
+                                nameOf={nameOf}
+                                onChange={(acceptFrom) =>
+                                  patchMember(member.key, {
+                                    delegation: { ...member.delegation, acceptFrom },
+                                  })
+                                }
+                              />
                               <AssetPickers
                                 value={chosen}
                                 onChange={(next) => setMemberAssets(member.key, next)}
@@ -564,5 +624,65 @@ export function NewTeamDialog({
         </DialogFooter>
       </DialogContent>
     </Dialog>
+  );
+}
+
+/** 团队内委派名单：「全部成员」或勾选的成员 key */
+function TeamRefField({
+  label,
+  value,
+  options,
+  nameOf,
+  onChange,
+}: {
+  label: string;
+  value: TeamRefList;
+  options: string[];
+  nameOf: (key: string) => string;
+  onChange: (next: TeamRefList) => void;
+}) {
+  const { t } = useI18n();
+  const chip = (active: boolean) =>
+    cn(
+      'rounded-full border px-2 py-0.5 text-xs transition-colors',
+      active ? 'border-info bg-info/10 text-foreground' : 'text-muted-foreground hover:bg-muted'
+    );
+  return (
+    <div>
+      <FieldLabel>{label}</FieldLabel>
+      <div className="flex flex-wrap gap-1.5">
+        <button
+          type="button"
+          className={chip(value === 'any')}
+          onClick={() => onChange(value === 'any' ? [] : 'any')}
+        >
+          {t('All members')}
+        </button>
+        {options.map((key) => {
+          const active = value === 'any' || value.includes(key);
+          return (
+            <button
+              key={key}
+              type="button"
+              className={chip(value !== 'any' && active)}
+              onClick={() =>
+                onChange(
+                  value === 'any'
+                    ? [key]
+                    : active
+                      ? value.filter((k) => k !== key)
+                      : [...value, key]
+                )
+              }
+            >
+              {nameOf(key)}
+            </button>
+          );
+        })}
+      </div>
+      {value !== 'any' && value.length === 0 && (
+        <p className="mt-1 text-muted-foreground text-xs">{t('None selected')}</p>
+      )}
+    </div>
   );
 }
