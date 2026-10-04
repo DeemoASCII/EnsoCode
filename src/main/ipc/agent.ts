@@ -145,7 +145,13 @@ import { titleModelCandidates } from '../services/titleSummary';
 import { ingestSessionJsonl } from '../services/usage/ledgerStore';
 import { sendToAllWindows } from '../windows/createAppWindow';
 import { isMainWebContents } from '../windows/MainWindow';
-import { botModeEnabled, getBotServices, groupHistoryTool, groupTasksTool } from './bots';
+import {
+  botModeEnabled,
+  getBotServices,
+  groupHistoryTool,
+  groupTasksTool,
+  routineProposeTool,
+} from './bots';
 import { agentSessionIndex, capabilityGateway, handleCapabilityInvoke } from './capabilities';
 import { readSettings, readSshTimeoutSeconds } from './settings';
 import {
@@ -1149,6 +1155,8 @@ export function registerAgentHandlers(): void {
           result = groupTasksTool(services, identity.sessionId, conversation.bot, input);
         } else if (op === 'group_history' && conversation?.bot) {
           result = groupHistoryTool(services, identity.sessionId, conversation.bot, input);
+        } else if (op === 'routine_propose' && conversation?.bot) {
+          result = routineProposeTool(services, identity.sessionId, conversation.bot, input);
         } else if (
           op === 'delegate' &&
           typeof input.to === 'string' &&

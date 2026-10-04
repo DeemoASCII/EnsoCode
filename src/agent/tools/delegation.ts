@@ -1,7 +1,12 @@
 import type { ToolDefinition } from '@earendil-works/pi-coding-agent';
 import type { MemoryInvoker } from './memory';
 
-export type DelegationOp = 'delegate' | 'check_delegation' | 'group_tasks' | 'group_history';
+export type DelegationOp =
+  | 'delegate'
+  | 'check_delegation'
+  | 'group_tasks'
+  | 'group_history'
+  | 'routine_propose';
 
 export function normalizeDelegationParams(raw: unknown): unknown {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return raw;

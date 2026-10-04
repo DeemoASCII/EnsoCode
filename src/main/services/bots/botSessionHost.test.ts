@@ -491,6 +491,7 @@ describe('BotSessionHost.deliver', () => {
     expect(runtime.spawns[0].systemPrompt).toContain('Be kind.');
     expect(runtime.spawns[0].instructionText).toContain('Bot mode');
     expect(runtime.spawns[0]).not.toHaveProperty('groupTasks');
+    expect(runtime.spawns[0]).toMatchObject({ routines: true });
     expect(runtime.prompts).toEqual([{ id: result.conversationId, text: 'hi' }]);
 
     await host.deliver(chat.id, alice.id, 'more');
@@ -720,7 +721,7 @@ it('群聊成员会话挂群任务看板，私聊不挂', async () => {
   })!;
   const result = await host.deliver(group.id, alice.id, 'hi');
   if (!result.ok) throw new Error(result.error);
-  expect(runtime.spawns[0]).toMatchObject({ groupTasks: true });
+  expect(runtime.spawns[0]).toMatchObject({ groupTasks: true, routines: true });
   expect(runtime.spawns[0].instructionText).toContain('group_tasks');
 });
 

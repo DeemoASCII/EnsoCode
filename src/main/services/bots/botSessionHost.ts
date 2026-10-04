@@ -49,6 +49,8 @@ export interface BotSpawnSpec {
   instructionText: string;
   /** 群聊成员会话：挂 group_tasks 工具 */
   groupTasks?: boolean;
+  /** 私聊 / 群聊成员会话（委派会话走 independentSpecs，不挂）：挂 routine_propose */
+  routines?: boolean;
 }
 
 export interface BotRuntimePort {
@@ -774,6 +776,7 @@ export class BotSessionHost {
         systemPrompt: buildBotSystemPrompt(bot, this.deps.bots.readPersona(bot.id)),
         instructionText: buildBotModeInstruction({ self: bot, kind: chat.kind, roster }),
         ...(chat.kind === 'group' ? { groupTasks: true } : {}),
+        routines: true,
       },
     };
   }

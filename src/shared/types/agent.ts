@@ -1037,6 +1037,8 @@ export type AgentCommand =
       botMode?: boolean;
       /** Bot 群聊成员会话：挂 group_tasks / group_history 工具（私聊 / 委派子会话不挂） */
       botGroupTasks?: boolean;
+      /** Bot 私聊 / 群聊成员会话（非委派）：挂 routine_propose 工具 */
+      botRoutines?: boolean;
       /** 受保护动作底线（Bot 会话恒开；Code 会话由设置项决定） */
       protectedActions?: boolean;
       /** 期望的 Plan 模式；与会话 jsonl 折叠结果不同时由 worker 追加切换条目 */
@@ -1645,7 +1647,7 @@ export type AgentWorkerEvent =
       identity: SessionIdentity;
       seq: number;
       requestId: string;
-      op: 'delegate' | 'check_delegation' | 'group_tasks' | 'group_history';
+      op: 'delegate' | 'check_delegation' | 'group_tasks' | 'group_history' | 'routine_propose';
       params: unknown;
     }
   | {
@@ -2794,6 +2796,7 @@ export function parseAgentCommand(value: unknown): AgentCommand | null {
           'systemPrompt',
           'botMode',
           'botGroupTasks',
+          'botRoutines',
           'protectedActions',
           'planMode',
         ]) ||
@@ -2842,6 +2845,7 @@ export function parseAgentCommand(value: unknown): AgentCommand | null {
         (value.systemPrompt !== undefined && !isNonEmptyString(value.systemPrompt)) ||
         (value.botMode !== undefined && typeof value.botMode !== 'boolean') ||
         (value.botGroupTasks !== undefined && typeof value.botGroupTasks !== 'boolean') ||
+        (value.botRoutines !== undefined && typeof value.botRoutines !== 'boolean') ||
         (value.protectedActions !== undefined && typeof value.protectedActions !== 'boolean')
       ) {
         return null;
@@ -3418,7 +3422,8 @@ export function parseAgentWorkerEvent(value: unknown): AgentWorkerEvent | null {
         (value.op === 'delegate' ||
           value.op === 'check_delegation' ||
           value.op === 'group_tasks' ||
-          value.op === 'group_history')
+          value.op === 'group_history' ||
+          value.op === 'routine_propose')
         ? (value as unknown as AgentWorkerEvent)
         : null;
     case 'computer-invoke':

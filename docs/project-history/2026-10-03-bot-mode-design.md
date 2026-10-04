@@ -151,7 +151,7 @@ interface Delegation {
 
 ### Routine（例行任务）
 
-存放在 `userData/bots/<botId>/routines.json`：`{id, title, prompt, schedule: cron, chatId, enabled, lastRunAt, lastResult}`。触发后作为一条系统发起的消息投进指定聊天。
+存放在 `userData/bots/<botId>/routines.json`：`{id, title, prompt, schedule: cron, chatId, enabled, lastRunAt, lastResult}`。触发后作为一条系统发起的消息投进指定聊天。（2026-10 起 `enabled` 改为状态与审批版本，另有运行历史，见文末「例行任务生命周期」。）
 
 ## 关键流程
 
@@ -270,7 +270,7 @@ Main 在 `spawnSession` 里根据 `ConversationAuthority.bot` 组装提示词，
 
 ### 例行任务
 
-`routineScheduler` 在 Main 里用 cron 解析器计算下次触发时间，用单个 timer 驱动。触发时如果目标聊天正在忙就排队。如果应用没在运行，错过的触发不补跑，只在 UI 上标出「错过 N 次」。headless 托盘模式下照常运行。
+`routineScheduler` 在 Main 里用 cron 解析器计算下次触发时间，用单个 timer 驱动。触发时如果目标聊天正在忙就排队。应用关闭期间错过的触发默认只补跑最近一次（可在例程上关闭），其余标「错过 N 次」，详见文末「例行任务生命周期」。headless 托盘模式下照常运行。
 
 群信息面板的「例行」页签列出所有 `chatId = 本群` 的例行任务（跨成员，renderer 侧用 `BOT_ROUTINES_LIST` 全量结果按 chatId 过滤聚合，不改 IPC），显示成员、标题、cron 描述、启停、上次运行与结果；新建时选本群成员、目标聊天固定为本群，编辑时成员不可改（例行任务按成员存放），删除 / 启停 / 立即运行复用原通道。
 
@@ -438,3 +438,43 @@ Main 在 `spawnSession` 里根据 `ConversationAuthority.bot` 组装提示词，
 - 不做：群成员会话里的委派子会话产物、轮次进行中的实时卡片（轮次结束后出现）、搜索委派子会话与系统条目。
 
 真机（隔离 userData，Claude opus-4-6 + 阿里云 qwen3.8-max）：群里两位成员分别写 `notes.md` / `demo.html` / `docs/report.md`，卡片出现，Markdown 与 HTML（含 `<script>`，未执行）预览正常，越界 `rel` 被拒；私聊 qwen 写 `mango.txt` / `logo.svg`（SVG 图片预览）、Claude 用 bash 生成 `sample.pdf`（独立窗口内置查看器）；⌘K 搜到群消息、私聊当前会话与「新对话」后的历史会话，跳转、滚动定位与高亮正常。
+
+## 例行任务生命周期（2026-10 补充）
+
+参考 akeru-bot `packages/contracts/src/routines.ts` 与 `apps/server/src/routines/*`（运行键 `routine:<id>:<scheduledFor>`、草稿审批、试运行跳过审批）。
+
+**数据**
+
+- `BotRoutine` 去掉 `enabled`，改为 `status: draft | enabled | paused | blocked`，新增 `procedureVersion`、`approvedVersion?`、`doneBy?`（执行成员）、`catchUp`（默认开）、`proposedBy?`、`blockedReason?`、`cursor?`（已处理到的调度时刻）。旧数据按 `enabled` 解析为 `enabled / paused`、版本 1 且已批准。
+- 标题 / 提示词 / 调度 / 目标聊天 / 执行者变化时 `procedureVersion + 1`；补跑开关、启停不升版本。只有 `approvedVersion === procedureVersion` 且 `status = enabled` 才按调度运行，手动运行还允许 `paused`。
+- 用户在 UI 新建 / 编辑即批准当前版本（`approvedVersion = procedureVersion`，清阻塞原因）；成员经 `routine_propose` 新建是 `draft`；同一聊天里同名（不分大小写）视为改动，流程变了则升版本回到 `draft`，未变不写盘。拒绝从未批准过的直接删除，否则转 `paused`（仍未批准，用户编辑保存即批准）。
+- 运行历史 `userData/bots/<botId>/routine-runs.jsonl`：一次运行一个 `runId = routine:<routineId>:<scheduledFor>`，同 runId 后写覆盖（开始写占用，结算再写一次），字段 `trigger (scheduled|manual|catchup|dry-run)`、`executorId`、`chatId`、`startedAt / finishedAt`、`result (ok|error|budget|skipped-busy|interrupted|blocked)`、`conversationId`、`error`。超过 1000 行压缩为每个例程最近 50 条（未结算的保留）；删例程同时删历史；删成员随目录删除。
+
+**调度、占用与补跑**
+
+- `runId` 同时是投递的 `deliveryId`。执行前先写占用：同一 `(routineId, scheduledFor)` 已有记录就跳过，杜绝重复执行；同一例程上一次还没结算时到点，写一条 `skipped-busy`（不排队、不重入）；手动 / 试运行遇到运行中直接返回 `busy`。
+- 启动时先对账：未结算的占用一律标 `interrupted`（试运行不改例程的上次结果），该时刻不会再补跑。然后对每个可调度例程算 `(cursor ?? lastRunAt ?? createdAt, now]` 内错过的时刻：开补跑时只补最近一次（`trigger = catchup`），其余计入 `missed`；关补跑则全部计入 `missed`。游标前移到最近时刻；下一次正常调度清掉 `missed`。重新启用 / 批准 / 改调度时游标置为当前，暂停、阻塞、待批准期间的时刻不补。
+- 手动运行更新上次结果但不动游标；试运行（`dry-run`）对草稿也可用，不改上次结果、游标与错过次数，投递正文带 `dry-run="true"` 属性和一行英文试运行说明，群里 system 条目写「例行任务：X（试运行）」；聊天里的注入卡片显示「例行任务试运行」。
+- 投递返回 `duplicate`（该 deliveryId 已被会话处理过）时直接按失败结算，不再等结束事件。
+
+**依赖检查与阻塞**
+
+- 归属成员不存在或已归档：不调度也不能手动运行（沿用「成员归档 = 例行任务暂停」）。
+- 每次运行前（含试运行）检查：执行成员存在且未归档、目标聊天存在且未归档、执行成员在聊天里；`doneBy` 另需满足归属成员 → 执行成员的 `canDelegateTo / acceptFrom`。不满足时 `status = blocked` + `blockedReason`，写一条 `blocked` 历史，推 `routine` 事件；草稿试运行失败只返回原因、不改状态。用户保存 / 批准后也立即检查一次。
+- 收件箱复用 `routine` 事件：renderer store 拉全量例程，`draft` 与 `blocked` 各出一张卡片（批准 / 拒绝 / 试运行，或原因 + 重新启用），计入 Bot 待处理数；重新启用仍不满足时提示原因。
+
+**成员提议：`routine_propose`**
+
+- 只挂在成员自己的私聊 / 群聊会话（spawn 标记 `botRoutines`，由 `BotSpawnSpec.routines` 在非委派会话置位；委派会话走 independentSpecs，不挂）。参数 `title / prompt / schedule / doneBy?` 全部声明 `string`；`prepareArguments` 在 schema 校验前归一化（`name / task / instructions / cron / when / done_by / executor` 等别名、数字转串、去空白、`doneBy` 去 `@`、null 与空串删除）。经 `delegation-invoke`（op=`routine_propose`）进 Main。
+- Main 只认会话权威绑定：有 `chatId`、无 `delegationId`、成员与聊天都未归档、成员在聊天里、且是该成员在该聊天的当前会话；参数里的聊天一律忽略。`schedule` 接受 5 段 cron 或简单描述（`shared/bots/routineSchedule.ts`：每天 / 工作日 / 每周几（可多天）+ 时间、每小时，中英文，`下午 / 晚上` 与 `am/pm` 修正），无法识别返回带示例的错误。`doneBy` 按名字在本聊天成员里找（不分大小写），找不到、已归档或 ACL 不允许都拒绝。
+- 结果是待批准草稿；群聊再写一条带 `routine: {botId, id}` 引用的 system 条目（「X 提议了 / 修改了例行任务「T」（每天 10:15，由 Y 执行），等待批准」），时间线据此渲染卡片：仍待批准时可批准 / 拒绝 / 试运行，之后显示当前状态。私聊只进收件箱与资料页列表。
+
+**IPC 与 UI**
+
+- 新增 `BOT_ROUTINE_REVIEW {botId, id, approve}`、`BOT_ROUTINE_RUNS {botId, id}`（最近 20 条）；`BOT_ROUTINE_RUN_NOW` 增加 `dryRun?`，同步预检后返回 `not-approved / blocked(+reason) / busy / unavailable / not-found`；`BOT_ROUTINE_SAVE` 增加 `doneBy?: string | null`（缺省沿用原执行者）与 `catchUp?`，执行成员必须在目标聊天里，ACL 不允许返回 `acl`。入参全部按 `unknown` 收窄。
+- `RoutineList`：状态徽标、成员提议提示、阻塞原因、错过次数与「不补跑」标记；草稿显示批准 / 拒绝，其余显示启停开关与立即运行；所有状态都可试运行；「历史」展开最近 20 次（时间、触发方式、结果、耗时、打开聊天、错误）。编辑器调度默认用简单选择器（每天 / 工作日 / 每周几多选 + 时间），可切到 cron 高级输入；新增执行者（目标聊天里的其他成员）与补跑开关。
+- 不做：手机端例行任务管理；成员通过工具删除 / 暂停例行任务；保留被拒绝改动之前的旧版本流程（拒绝后需用户编辑或删除）。
+
+**测试**：`routineSchedule`（简单描述与选择器往返）、`parseBotRoutine / parseBotRoutineRun`（旧数据迁移、脏输入）、`BotRoutineRunLog`（覆盖、坏行、压缩、对账源）、`BotRoutineStore`（版本、提议 / 审批 / 拒绝、游标）、`RoutineScheduler`（补跑只一次且重启不重复、关补跑、对账 interrupted、skipped-busy、草稿只可试运行、成员改动回到待批准、依赖阻塞、`routineBlock` ACL）、`RoutineRunner`（执行者身份、派生 deliveryId、试运行标注、duplicate）、`routine_propose` 归一化与 schema、bots IPC（越权会话 / 委派会话 / 他人绑定、坏调度、doneBy 不存在 / 不在聊天 / ACL、审批与历史收窄、阻塞）。
+
+**真机**（隔离 userData，Max claude-sonnet-4-6 + hei qwen3.8-max）：两位成员在私聊里各自调用 `routine_propose`（Claude 传 `weekdays 09:30`，qwen 传 `0 18 * * 1,3,5`），收件箱出现两张待批准卡片；先试运行（聊天里显示「例行任务试运行」、不改上次结果），再批准、立即运行，历史各两条均成功。群里 Claude 提议「每天 10:15 由阿Q执行」，时间线卡片上试运行 → 由 qwen 成员发出、system 条目带「（试运行）」→ 批准。把例程改成每分钟后退出应用，越过 4 个时刻再启动：只出现一条 `catchup`（最近时刻），之后按分钟正常调度。归档执行成员后手动运行被拒并转为阻塞，收件箱显示原因；取消归档后「重新启用」恢复。

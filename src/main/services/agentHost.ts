@@ -699,6 +699,8 @@ export function spawnSession(
       mcpServerIds: string[];
       /** 群聊成员会话：worker 挂 group_tasks */
       groupTasks?: boolean;
+      /** 私聊 / 群聊成员会话（非委派）：worker 挂 routine_propose */
+      routines?: boolean;
     };
   }
 ): { ok: boolean; error?: string } {
@@ -824,6 +826,7 @@ export function spawnSession(
     ...(systemPrompt.content ? { systemPrompt: systemPrompt.content } : {}),
     ...(options?.bot ? { botMode: true } : {}),
     ...(options?.bot?.groupTasks ? { botGroupTasks: true } : {}),
+    ...(options?.bot?.routines ? { botRoutines: true } : {}),
     ...(options?.bot || state?.protectedActionsInCode === true ? { protectedActions: true } : {}),
   });
   if (sent.ok) {

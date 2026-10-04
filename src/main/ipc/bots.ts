@@ -233,6 +233,7 @@ function createRuntime(botsRoot: string): BotRuntimePort {
             skillIds: spec.bot.skillIds,
             mcpServerIds: spec.bot.mcpServerIds,
             ...(spec.groupTasks ? { groupTasks: true } : {}),
+            ...(spec.routines ? { routines: true } : {}),
           },
         }
       );
