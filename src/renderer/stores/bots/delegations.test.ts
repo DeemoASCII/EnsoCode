@@ -9,6 +9,7 @@ import {
   delegationOwners,
   formatElapsed,
   interruptedDelegations,
+  isRetried,
   openTarget,
   pendingOwners,
 } from './delegations';
@@ -81,6 +82,19 @@ describe('activeDelegations', () => {
       record({ id: 'd', chatId: 'c2' }),
     ];
     expect(activeDelegations(list, 'c1').map((item) => item.id)).toEqual(['b', 'a']);
+  });
+});
+
+describe('isRetried', () => {
+  it('只认 retryOf 指向：同任务的新委派不算重试，重试链各自只标被指向的那条', () => {
+    const original = record({ state: 'failed' });
+    const lookalike = record({ id: 'd2', createdAt: 60, state: 'canceled' });
+    expect(isRetried(original, [original, lookalike])).toBe(false);
+    const retry = record({ id: 'd3', createdAt: 70, state: 'failed', retryOf: 'd1' });
+    const list = [original, lookalike, retry];
+    expect(isRetried(original, list)).toBe(true);
+    expect(isRetried(lookalike, list)).toBe(false);
+    expect(isRetried(retry, list)).toBe(false);
   });
 });
 

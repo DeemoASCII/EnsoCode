@@ -38,8 +38,13 @@ export function activeDelegations(
     .sort((a, b) => a.createdAt - b.createdAt);
 }
 
-/** 之后出现了同父会话、同目标、同任务的新委派（用户或成员已重试） */
+/** 已有委派以 retryOf 指向它（Main 也据此拒绝再次重试） */
 export function isRetried(item: Delegation, delegations: readonly Delegation[]): boolean {
+  return delegations.some((other) => other.retryOf === item.id);
+}
+
+/** 之后出现了同父会话、同目标、同任务的新委派（成员自己重新委派） */
+function isRedone(item: Delegation, delegations: readonly Delegation[]): boolean {
   return delegations.some(
     (other) =>
       other.createdAt > item.createdAt &&
@@ -61,7 +66,8 @@ export function interruptedDelegations(
         item.state === 'failed' &&
         item.failure === 'interrupted' &&
         !dismissed.includes(item.id) &&
-        !isRetried(item, delegations)
+        !isRetried(item, delegations) &&
+        !isRedone(item, delegations)
     )
     .sort((a, b) => (b.finishedAt ?? b.createdAt) - (a.finishedAt ?? a.createdAt));
 }

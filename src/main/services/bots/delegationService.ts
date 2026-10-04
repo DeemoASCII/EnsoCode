@@ -124,7 +124,7 @@ export class DelegationService {
   delegate(
     parentConversationId: string,
     input: DelegateInput,
-    options: { standalone?: boolean } = {}
+    options: { standalone?: boolean; retryOf?: string } = {}
   ): DelegateResult {
     if (this.disposed) return { ok: false, error: 'disabled' };
     const conversation = this.deps.authority.conversation(parentConversationId);
@@ -210,6 +210,7 @@ export class DelegationService {
       },
       ...(batchId ? { batchId } : {}),
       ...(taskId ? { taskId } : {}),
+      ...(options.retryOf ? { retryOf: options.retryOf } : {}),
     };
     this.save(record);
     const timer = setTimeout(
@@ -277,8 +278,13 @@ export class DelegationService {
 
   retry(id: string): DelegateResult {
     const record = this.deps.store.get(id);
-    if (!record || active(record))
-      return { ok: false, error: 'Only finished delegations can be retried.' };
+    if (!record || (record.state !== 'failed' && record.state !== 'canceled'))
+      return {
+        ok: false,
+        error: 'Only failed, canceled or interrupted delegations can be retried.',
+      };
+    if (this.deps.store.list().some((item) => item.retryOf === id))
+      return { ok: false, error: 'This delegation has already been retried.' };
     // 任务仍空闲（已退回待办）时沿用关联；已完成 / 取消 / 被别人接手则不再绑定
     const taskId =
       record.taskId && this.deps.tasks?.gate(record.chatId, record.taskId, record.parentBotId).ok
@@ -293,7 +299,7 @@ export class DelegationService {
         context: record.context,
         ...(taskId ? { taskId } : {}),
       },
-      { standalone: true }
+      { standalone: true, retryOf: id }
     );
   }
 

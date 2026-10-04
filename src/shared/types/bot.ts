@@ -109,6 +109,8 @@ export interface Delegation {
   batchId?: string;
   /** 关联的群任务看板任务 id；委派终态时同步任务状态 */
   taskId?: string;
+  /** 由哪条委派重试而来；被指向的记录视为已重试，不能再次重试 */
+  retryOf?: string;
 }
 
 export function parseDelegation(value: unknown): Delegation | undefined {
@@ -158,6 +160,7 @@ export function parseDelegation(value: unknown): Delegation | undefined {
   if (isTime(value.finishedAt)) record.finishedAt = value.finishedAt;
   if (isText(value.batchId)) record.batchId = value.batchId;
   if (isBotId(value.taskId)) record.taskId = value.taskId;
+  if (isText(value.retryOf)) record.retryOf = value.retryOf;
   if (value.effectivePermissions !== undefined) {
     const permissions = value.effectivePermissions;
     if (

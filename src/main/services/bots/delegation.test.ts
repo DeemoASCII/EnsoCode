@@ -33,6 +33,11 @@ describe('delegation policy', () => {
     expect(parseDelegation({ ...record, deliveredAt: 'broken' })).toBeUndefined();
     expect(parseDelegation({ ...record, finishedAt: -1 })).toBeUndefined();
   });
+  it('keeps a string retryOf and drops malformed ones', () => {
+    expect(parseDelegation({ ...record, retryOf: b })?.retryOf).toBe(b);
+    expect(parseDelegation({ ...record, retryOf: 3 })).not.toHaveProperty('retryOf');
+    expect(parseDelegation({ ...record, retryOf: '' })).not.toHaveProperty('retryOf');
+  });
   it('rejects self, archived, denied, out-of-group, depth and concurrency', () => {
     const parent = profile(a),
       target = profile(b);

@@ -450,3 +450,54 @@ it('fails the delegation with the budget reason when the target is over its dail
   expect(f.prompts.filter((p) => p.text.includes('<delegation-task'))).toHaveLength(0);
   f.service.dispose();
 });
+
+it('retries only failed / canceled / interrupted records, links retryOf, and refuses superseded ones', async () => {
+  const f = fixture();
+  const sent = f.service.delegate(f.parent, { to: 'Bob', task: 'one' });
+  if (!sent.ok) throw new Error(sent.error);
+  await vi.advanceTimersByTimeAsync(0);
+  expect(f.service.retry(sent.delegationId)).toMatchObject({ ok: false });
+  f.finish(f.store.get(sent.delegationId)!.childConversationId);
+  await vi.advanceTimersByTimeAsync(0);
+  expect(f.store.get(sent.delegationId)?.state).toBe('completed');
+  expect(f.service.retry(sent.delegationId)).toMatchObject({ ok: false });
+  expect(f.service.retry('missing')).toMatchObject({ ok: false });
+
+  const failed = f.service.delegate(f.parent, { to: 'Bob', task: 'two' });
+  if (!failed.ok) throw new Error(failed.error);
+  f.service.cancel(failed.delegationId);
+  const retried = f.service.retry(failed.delegationId);
+  if (!retried.ok) throw new Error(retried.error);
+  expect(f.store.get(retried.delegationId)).toMatchObject({ retryOf: failed.delegationId });
+  expect(f.store.get(retried.delegationId)).not.toHaveProperty('batchId');
+  expect(f.service.retry(failed.delegationId)).toEqual({
+    ok: false,
+    error: 'This delegation has already been retried.',
+  });
+  f.service.cancel(retried.delegationId);
+  const chained = f.service.retry(retried.delegationId);
+  if (!chained.ok) throw new Error(chained.error);
+  expect(f.store.get(chained.delegationId)?.retryOf).toBe(retried.delegationId);
+  f.service.dispose();
+
+  const restarted = new DelegationService(f.deps);
+  expect(f.store.get(chained.delegationId)).toMatchObject({
+    state: 'failed',
+    failure: 'interrupted',
+  });
+  const resumed = restarted.retry(chained.delegationId);
+  expect(resumed.ok && f.store.get(resumed.delegationId)?.retryOf).toBe(chained.delegationId);
+  restarted.dispose();
+});
+
+it('retry is bound by the per-parent concurrency cap', async () => {
+  const f = fixture();
+  const first = f.service.delegate(f.parent, { to: 'Bob', task: 'one' });
+  if (!first.ok) throw new Error(first.error);
+  f.service.cancel(first.delegationId);
+  for (const task of ['two', 'three', 'four'])
+    expect(f.service.delegate(f.parent, { to: 'Bob', task }).ok).toBe(true);
+  expect(f.service.retry(first.delegationId)).toMatchObject({ ok: false });
+  expect(f.store.list().some((item) => item.retryOf === first.delegationId)).toBe(false);
+  f.service.dispose();
+});
