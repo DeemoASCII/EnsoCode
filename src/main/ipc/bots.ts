@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { mkdirSync, rmSync } from 'node:fs';
 import path from 'node:path';
+import { botBrowserKey } from '@shared/bots/browser';
 import { checkAvatarImage } from '@shared/bots/cardPng';
 import { applyChatFlags, wakeOnActivity } from '@shared/bots/chatFlags';
 import { BOT_NOTES_MAX_CHARS } from '@shared/bots/notes';
@@ -106,6 +107,7 @@ import {
 } from '../services/bots/sessionMessages';
 import { createSmartRouter } from '../services/bots/smartRouter';
 import { createTeam } from '../services/bots/teamCreate';
+import { browserHost } from '../services/browserHost';
 import { searchFiles } from '../services/fileSearch';
 import { resolveGlobalInstruction } from '../services/instructionStore';
 import { setBotAvatarResolver } from '../services/localImageProtocol';
@@ -1448,6 +1450,7 @@ export function registerBotHandlers(): void {
       }
       if (!host.discardChat(chatId)) return INVALID;
       tasks.forget(chatId);
+      await browserHost.closeSession(botBrowserKey(chatId));
       await removeBotMemorySpace(app.getPath('userData'), `chat:${chatId}`);
       return { ok: true };
     }

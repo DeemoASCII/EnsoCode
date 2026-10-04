@@ -1,3 +1,4 @@
+import { botBrowserChatId } from '@shared/bots/browser';
 import { projectDisplayName } from '@shared/projectName';
 import type { BrowserSearchTab, SettingsSearchEntry } from '@shared/searchAnything';
 import {
@@ -255,7 +256,7 @@ export function WorkspaceSearchDialog({
     }
     void window.electronAPI.browser
       .listSearchableTabs()
-      .then(setBrowserTabs)
+      .then((tabs) => setBrowserTabs(tabs.filter((tab) => !botBrowserChatId(tab.conversationId))))
       .catch(() => {
         setBrowserTabs([]);
       });

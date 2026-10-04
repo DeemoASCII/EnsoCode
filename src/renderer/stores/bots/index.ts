@@ -1,3 +1,4 @@
+import { botBrowserChatId } from '@shared/bots/browser';
 import { visibleInbox } from '@shared/bots/inbox';
 import type { AttachedImage } from '@shared/types/agent';
 import type {
@@ -74,6 +75,9 @@ const TIMELINE_AROUND = 40;
 const READS_KEY = 'enso-bot-reads';
 const PANEL_KEY = 'enso-bot-panel';
 const PANEL_WIDTH_KEY = 'enso-bot-panel-width';
+const PANEL_TAB_KEY = 'enso-bot-panel-tab';
+/** 聊天 → 共享浏览器 tabId（agent 先开的 tab 是随机 id，重启后按它恢复） */
+const BROWSER_TABS_KEY = 'enso-bot-browser-tabs';
 const VIEW_KEY = 'enso-bot-view';
 /** 旧版收件箱忽略记录（localStorage），首次连上 Main 收件箱时迁移后删除 */
 const LEGACY_DISMISSED_KEY = 'enso-bot-dismissed-delegations';
@@ -95,6 +99,26 @@ function loadView(): BotView {
   if (raw === 'inbox') return { kind: 'inbox' };
   return raw ? { kind: 'chat', chatId: raw } : null;
 }
+
+export type BotPanelTab = 'info' | 'browser';
+
+function loadBrowserTabs(): Record<string, string> {
+  try {
+    const parsed: unknown = JSON.parse(localStorage.getItem(BROWSER_TABS_KEY) ?? '{}');
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+    return Object.fromEntries(
+      Object.entries(parsed).filter(
+        (entry): entry is [string, string] => typeof entry[1] === 'string'
+      )
+    );
+  } catch {
+    return {};
+  }
+}
+
+/** 聊天共享浏览器当前 tab；没有记录时用按聊天固定的 id，首次打开即创建 */
+export const botBrowserTabId = (tabs: Record<string, string>, chatId: string): string =>
+  tabs[chatId] ?? `browser:bot-${chatId}`;
 
 function loadDismissed(key: string): string[] {
   try {
@@ -131,6 +155,8 @@ interface BotsState {
   /** 聊天右侧的成员资料 / 群信息面板 */
   panelOpen: boolean;
   panelWidth: number;
+  panelTab: BotPanelTab;
+  browserTabs: Record<string, string>;
   searchOpen: boolean;
   focus: BotFocus | null;
 
@@ -159,6 +185,7 @@ interface BotsState {
   loadOlderSession: (conversationId: string) => Promise<void>;
   setView: (view: BotView) => void;
   togglePanel: () => void;
+  setPanelTab: (tab: BotPanelTab) => void;
   nudgePanelWidth: (delta: number, workspaceWidth: number) => void;
   markRead: (key: string, marker: number) => void;
   /** 手动标为未读：已读记号退回一格 */
@@ -323,6 +350,26 @@ export const useBotsStore = create<BotsState>()((set, get) => {
   const subscribe = () => {
     let active = true;
     const offBot = window.electronAPI.bots.onEvent(onBotEvent);
+    const setBrowserTab = (chatId: string, tabId: string | null) => {
+      const { [chatId]: _old, ...rest } = get().browserTabs;
+      const browserTabs = tabId ? { ...rest, [chatId]: tabId } : rest;
+      localStorage.setItem(BROWSER_TABS_KEY, JSON.stringify(browserTabs));
+      set({ browserTabs });
+    };
+    // 成员用浏览器工具时：记下共享 tab，正看着这个聊天就把右侧面板切到浏览器
+    const offReveal = window.electronAPI.browser.onReveal((event) => {
+      const chatId = botBrowserChatId(event.conversationId);
+      if (!chatId || !event.tabId) return;
+      setBrowserTab(chatId, event.tabId);
+      const { view } = get();
+      if (view?.kind !== 'chat' || view.chatId !== chatId) return;
+      if (!get().panelOpen) get().togglePanel();
+      get().setPanelTab('browser');
+    });
+    const offClosed = window.electronAPI.browser.onTabClosed((event) => {
+      const chatId = botBrowserChatId(event.conversationId);
+      if (chatId && get().browserTabs[chatId] === event.tabId) setBrowserTab(chatId, null);
+    });
     const offAgent = window.electronAPI.agent.onEvent((event) => {
       const { sessions } = get();
       const result = applyBotAgentEvent(sessions, event);
@@ -370,6 +417,8 @@ export const useBotsStore = create<BotsState>()((set, get) => {
       active = false;
       offBot();
       offAgent();
+      offReveal();
+      offClosed();
     };
   };
 
@@ -393,6 +442,8 @@ export const useBotsStore = create<BotsState>()((set, get) => {
     view: loadView(),
     panelOpen: localStorage.getItem(PANEL_KEY) !== '0',
     panelWidth: Number(localStorage.getItem(PANEL_WIDTH_KEY)) || SIDE_PANEL_DEFAULT_WIDTH,
+    panelTab: localStorage.getItem(PANEL_TAB_KEY) === 'browser' ? 'browser' : 'info',
+    browserTabs: loadBrowserTabs(),
     searchOpen: false,
     focus: null,
 
@@ -712,6 +763,11 @@ export const useBotsStore = create<BotsState>()((set, get) => {
       const panelOpen = !get().panelOpen;
       localStorage.setItem(PANEL_KEY, panelOpen ? '1' : '0');
       set({ panelOpen });
+    },
+
+    setPanelTab: (panelTab) => {
+      localStorage.setItem(PANEL_TAB_KEY, panelTab);
+      set({ panelTab });
     },
 
     nudgePanelWidth: (delta, workspaceWidth) => {

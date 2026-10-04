@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
+import { browserSessionKey } from '@shared/bots/browser';
 import type { ChildSessionIdentity, SessionIdentity } from '@shared/builtinAgents';
 import { resolveSshTarget } from '@shared/ssh';
 import {
@@ -566,6 +567,15 @@ function botControlError(sessionId: unknown): { ok: false; error: string } | und
     : undefined;
 }
 
+/** 浏览器会话键：Bot 聊天（含委派子会话）共享一个，其余按会话隔离 */
+function browserKeyFor(sessionId: string): string {
+  return browserSessionKey(sessionId, sourceAuthority?.conversation(sessionId)?.bot, (id) =>
+    getBotServices()?.delegations.chatIdOf(id)
+  );
+}
+
+const sharesBrowser = (sessionId: string) => browserKeyFor(sessionId) !== sessionId;
+
 function wirePairAgentBridge(): void {
   setPairAgentBridge({
     prompt: (sessionId, text, images) => {
@@ -1063,12 +1073,17 @@ export function registerAgentHandlers(): void {
       return;
     }
     // 回合结束：agent 开的无头 tab 关掉（用户正看的 / 锁住的不动）；parent-ended 强关
-    if (workerEvent.type === 'turn-completed' || workerEvent.type === 'turn-failed') {
+    // Bot 聊天的浏览器由成员共享，随聊天删除才关
+    if (
+      (workerEvent.type === 'turn-completed' || workerEvent.type === 'turn-failed') &&
+      !sharesBrowser(workerEvent.identity.sessionId)
+    ) {
       void browserHost.closeForSession(workerEvent.identity.sessionId);
     }
     if (workerEvent.type === 'parent-ended') {
       forgetParentToolProfile(workerEvent.identity.sessionId);
-      void browserHost.closeForSession(workerEvent.identity.sessionId, { force: true });
+      if (!sharesBrowser(workerEvent.identity.sessionId))
+        void browserHost.closeForSession(workerEvent.identity.sessionId, { force: true });
       computerHost.close(workerEvent.identity.sessionId);
       distillSessionMemory(workerEvent.identity);
     }
@@ -1089,7 +1104,7 @@ export function registerAgentHandlers(): void {
     }
     if (workerEvent.type === 'browser-invoke') {
       const { identity, requestId, op, params } = workerEvent;
-      void browserHost.invoke(identity.sessionId, op, params).then(
+      void browserHost.invoke(browserKeyFor(identity.sessionId), op, params).then(
         (result) => sendBrowserResultToSession(identity, requestId, { ok: true, result }),
         (error: unknown) =>
           sendBrowserResultToSession(identity, requestId, {

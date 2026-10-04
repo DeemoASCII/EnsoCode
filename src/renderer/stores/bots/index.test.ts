@@ -45,6 +45,10 @@ async function fixture() {
       lastSeq: 0,
     })
   );
+  const browserListeners = {
+    reveal: new Set<(event: { conversationId: string; tabId: string }) => void>(),
+    closed: new Set<(event: { conversationId: string; tabId: string }) => void>(),
+  };
   vi.stubGlobal('window', {
     electronAPI: {
       bots: {
@@ -65,6 +69,16 @@ async function fixture() {
         },
         requestSnapshot,
       },
+      browser: {
+        onReveal: (listener: (event: { conversationId: string; tabId: string }) => void) => {
+          browserListeners.reveal.add(listener);
+          return () => browserListeners.reveal.delete(listener);
+        },
+        onTabClosed: (listener: (event: { conversationId: string; tabId: string }) => void) => {
+          browserListeners.closed.add(listener);
+          return () => browserListeners.closed.delete(listener);
+        },
+      },
     },
   });
   const { useBotsStore: store } = await import('./index');
@@ -80,6 +94,7 @@ async function fixture() {
     timeline,
     listeners,
     botListeners,
+    browserListeners,
     bot: (event: BotEvent) => {
       for (const listener of botListeners) (listener as (event: BotEvent) => void)(event);
     },
@@ -94,6 +109,31 @@ afterEach(() => {
 });
 
 describe('Bot mode subscription lifecycle', () => {
+  it('成员浏览器工具打开共享 tab：记下 tab，正看该聊天时切到浏览器面板；关闭后回落默认', async () => {
+    const f = await fixture();
+    f.store.setState({ view: { kind: 'chat', chatId: 'c' }, panelOpen: false, panelTab: 'info' });
+    for (const listener of f.browserListeners.reveal)
+      listener({ conversationId: 's', tabId: 'browser:code' });
+    expect(f.store.getState().browserTabs).toEqual({});
+    for (const listener of f.browserListeners.reveal)
+      listener({ conversationId: 'bot-chat:c', tabId: 'browser:7' });
+    expect(f.store.getState().browserTabs).toEqual({ c: 'browser:7' });
+    expect(f.store.getState().panelOpen).toBe(true);
+    expect(f.store.getState().panelTab).toBe('browser');
+    for (const listener of f.browserListeners.closed)
+      listener({ conversationId: 'bot-chat:c', tabId: 'browser:7' });
+    expect(f.store.getState().browserTabs).toEqual({});
+  });
+
+  it('别的聊天的浏览器不抢当前面板', async () => {
+    const f = await fixture();
+    f.store.setState({ view: { kind: 'chat', chatId: 'c' }, panelTab: 'info' });
+    for (const listener of f.browserListeners.reveal)
+      listener({ conversationId: 'bot-chat:other', tabId: 'browser:9' });
+    expect(f.store.getState().browserTabs).toEqual({ other: 'browser:9' });
+    expect(f.store.getState().panelTab).toBe('info');
+  });
+
   it('重复 bind 不重复订阅；全部清理后才解绑', async () => {
     const f = await fixture();
     const off = f.store.getState().bind();

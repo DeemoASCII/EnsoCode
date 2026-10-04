@@ -1,7 +1,7 @@
 import type { BotChat, BotProfile } from '@shared/types/bot';
 import { findVirtualModel } from '@shared/virtualModels';
 import { motion } from 'framer-motion';
-import { MessageSquarePlus, Shield, Sparkles } from 'lucide-react';
+import { Globe, Info, MessageSquarePlus, Shield, Sparkles } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ApprovalBar } from '@/components/chat/ApprovalBar';
 import { APPROVAL_MODE_META } from '@/components/chat/ApprovalModePicker';
@@ -27,6 +27,7 @@ import {
 import { ArtifactCards } from './ArtifactCards';
 import { botAvatarSrc } from './avatarImage';
 import { BotAvatar, GroupAvatar } from './BotAvatar';
+import { BotBrowserPanel } from './BotBrowserPanel';
 import {
   BotComposer,
   type BotComposerPayload,
@@ -67,6 +68,7 @@ export function BotChatView({ chat }: { chat: BotChat }) {
   const runtime = useBotsStore((s) => s.runtime[chat.id]);
   const markRead = useBotsStore((s) => s.markRead);
   const panelOpen = useBotsStore((s) => s.panelOpen);
+  const panelTab = useBotsStore((s) => s.panelTab);
   const panelWidth = useBotsStore((s) => s.panelWidth);
   const skillCatalog = useSettingsStore((s) => s.skills);
   const voiceInputEnabled = useSettingsStore((s) => s.voiceInputEnabled);
@@ -360,7 +362,31 @@ export function BotChatView({ chat }: { chat: BotChat }) {
           className={cn('flex h-full min-h-0 flex-col', !panelOpen && 'invisible')}
           style={{ width }}
         >
-          {direct ? (
+          <div className="flex h-10 shrink-0 items-center gap-1 border-b px-2">
+            {(['info', 'browser'] as const).map((tab) => (
+              <button
+                key={tab}
+                type="button"
+                onClick={() => useBotsStore.getState().setPanelTab(tab)}
+                className={cn(
+                  'flex h-7 items-center gap-1.5 rounded-md px-2.5 text-xs transition-colors',
+                  panelTab === tab
+                    ? 'bg-muted font-medium text-foreground'
+                    : 'text-muted-foreground hover:text-foreground'
+                )}
+              >
+                {tab === 'info' ? (
+                  <Info className="h-3.5 w-3.5" />
+                ) : (
+                  <Globe className="h-3.5 w-3.5" />
+                )}
+                {tab === 'info' ? t(direct ? 'Member' : 'Group info') : t('Browser')}
+              </button>
+            ))}
+          </div>
+          {panelTab === 'browser' ? (
+            <BotBrowserPanel chatId={chat.id} visible={panelOpen} />
+          ) : direct ? (
             <BotProfilePanel
               botId={direct.id}
               chat={chat}

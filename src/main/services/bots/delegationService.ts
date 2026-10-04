@@ -314,6 +314,11 @@ export class DelegationService {
     return { ok: true, delegations: records };
   }
 
+  /** 委派所属聊天（共享浏览器等按聊天归属的资源用） */
+  chatIdOf(id: string): string | null {
+    return this.deps.store.get(id)?.chatId ?? null;
+  }
+
   cancel(id: string): { ok: boolean; error?: string } {
     const record = this.deps.store.get(id);
     if (!record) return { ok: false, error: 'Delegation not found.' };
