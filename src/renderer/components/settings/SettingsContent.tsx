@@ -95,7 +95,13 @@ export function SettingsContent() {
     return () => window.clearTimeout(timer);
   }, [flashRowId]);
 
-  const allCategories: Array<{ id: SettingsCategory; icon: React.ElementType; label: string }> = [
+  const allCategories: Array<{
+    id: SettingsCategory;
+    icon: React.ElementType;
+    label: string;
+    /** 子菜单：缩进挂在父分类下 */
+    sub?: boolean;
+  }> = [
     { id: 'general', icon: Settings, label: t('General') },
     { id: 'shortcuts', icon: Keyboard, label: t('Shortcuts') },
     { id: 'voice', icon: Mic, label: t('Voice input') },
@@ -114,8 +120,8 @@ export function SettingsContent() {
     { id: 'ssh', icon: Terminal, label: t('SSH') },
     { id: 'usage', icon: BarChart3, label: t('Usage') },
     { id: 'resources', icon: Gauge, label: t('Resources') },
-    { id: 'bots', icon: BotMessageSquare, label: t('Bot mode') },
     { id: 'experimental', icon: FlaskConical, label: t('Experimental') },
+    { id: 'bots', icon: BotMessageSquare, label: t('Bot mode'), sub: true },
   ];
   const categories = visibleCategories(allCategories, disabledBuiltinTools, botModeEnabled);
 
@@ -140,6 +146,7 @@ export function SettingsContent() {
             onClick={() => setActiveCategory(category.id)}
             className={cn(
               'flex w-full items-center gap-2 rounded-md px-3 py-2 text-sm transition-colors',
+              category.sub && 'pl-8',
               activeCategory === category.id
                 ? 'bg-accent text-accent-foreground'
                 : 'text-muted-foreground hover:bg-accent/50 hover:text-foreground'
