@@ -24,11 +24,9 @@ const settle = async () => {
 
 function fixture(names = ['林经理', '阿后']) {
   const bots = new BotStore(join(root, 'bots'));
-  const ids = names.map((name, index) => {
-    const created = bots.create(
-      { name, ...(index === 0 ? { tools: 'readonly' as const } : {}) },
-      []
-    );
+  // 全员只读：本文件只验证委派接力与回传，工作区写锁见 botSessionHost.lock.test
+  const ids = names.map((name) => {
+    const created = bots.create({ name, tools: 'readonly' }, []);
     if (!created.ok) throw new Error('bots');
     return created.bot.id;
   });

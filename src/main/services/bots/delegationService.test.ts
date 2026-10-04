@@ -543,8 +543,9 @@ describe('stopping the parent turn', () => {
   async function started(f: ReturnType<typeof fixture>) {
     await f.host.deliverConversation(f.parent, 'go');
     await vi.advanceTimersByTimeAsync(0);
-    const drop = f.service.delegate(f.parent, { to: 'Bob', task: 'drop' });
     const kept = f.service.delegate(f.parent, { to: 'Bob', task: 'kept', keep: true });
+    // 两个子委派同在父工作区写：kept 先占写锁在跑，drop 排队
+    const drop = f.service.delegate(f.parent, { to: 'Bob', task: 'drop' });
     if (!drop.ok || !kept.ok) throw new Error('delegate');
     await vi.advanceTimersByTimeAsync(0);
     return { drop: drop.delegationId, kept: kept.delegationId };
@@ -625,13 +626,19 @@ describe('stopping the parent turn', () => {
     });
     f.finish(f.parent);
     await vi.advanceTimersByTimeAsync(0);
-    expect(f.store.get(ids.drop)?.state).toBe('running');
+    expect([f.store.get(ids.kept)?.state, f.store.get(ids.drop)?.state]).toEqual([
+      'running',
+      'queued',
+    ]);
     // 下一轮被停止只影响下一轮自己发起的委派
     await f.host.deliverConversation(f.parent, 'again');
     await vi.advanceTimersByTimeAsync(0);
     await f.host.abortConversation(f.parent);
     await vi.advanceTimersByTimeAsync(0);
-    expect(f.store.get(ids.drop)?.state).toBe('running');
+    expect([f.store.get(ids.kept)?.state, f.store.get(ids.drop)?.state]).toEqual([
+      'running',
+      'queued',
+    ]);
     f.service.dispose();
   });
 

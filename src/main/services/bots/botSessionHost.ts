@@ -1,4 +1,6 @@
 import { randomUUID } from 'node:crypto';
+import { realpathSync } from 'node:fs';
+import { resolve } from 'node:path';
 import type {
   AgentWorkerEvent,
   AttachedImage,
@@ -116,6 +118,12 @@ export interface BotSessionHostDeps {
   now?: () => number;
 }
 
+/** 委派会话的来源：工作区写锁沿委派链共用，等待提示落到发起委派的群 */
+export interface BotDelegationOrigin {
+  parentConversationId: string;
+  chatId: string | null;
+}
+
 export interface BotDeliverOptions {
   images?: AttachedImage[];
   deliveryId?: string;
@@ -161,6 +169,8 @@ interface Delivery extends BotDeliverOptions {
   botId: string;
   conversationId: string;
   text: string;
+  /** 已为这次工作区等待写过提示 */
+  waitNoted?: true;
 }
 
 interface LastAssistant {
@@ -172,6 +182,14 @@ interface LastAssistant {
 }
 
 type Workspace = { ok: true; cwd: string; projectId: string } | Fail;
+
+const realpathOr = (path: string): string => {
+  try {
+    return realpathSync(path);
+  } catch {
+    return resolve(path);
+  }
+};
 
 /** (chatId, botId) → 根会话：建会话、spawn/恢复、投递、并发排队、回合结果回调 */
 export class BotSessionHost {
@@ -216,6 +234,9 @@ export class BotSessionHost {
   private readonly silent = new Map<string, number>();
   /** 等待人类答复的审批 / 提问：期间不算静默 */
   private readonly waiting = new Map<string, Set<string>>();
+  /** 会话工作区的真实路径（工作区写锁的键） */
+  private readonly workspaceKeys = new Map<string, string | null>();
+  private readonly origins = new Map<string, BotDelegationOrigin>();
   private watchdog: ReturnType<typeof setInterval> | undefined;
 
   onDeliveryStarted(
@@ -287,7 +308,11 @@ export class BotSessionHost {
     return this.slots.has(conversationId) ? this.turnKeys.get(conversationId) : undefined;
   }
 
-  registerDelegation(conversationId: string, bot: BotProfile): boolean {
+  registerDelegation(
+    conversationId: string,
+    bot: BotProfile,
+    origin?: BotDelegationOrigin
+  ): boolean {
     const conversation = this.deps.authority.conversation(conversationId);
     const project = conversation && this.deps.authority.project(conversation.projectId);
     if (
@@ -297,6 +322,7 @@ export class BotSessionHost {
       project.kind === 'ssh'
     )
       return false;
+    if (origin) this.origins.set(conversationId, origin);
     this.independentSpecs.set(conversationId, {
       conversationId,
       projectId: project.projectId,
@@ -580,19 +606,26 @@ export class BotSessionHost {
       }
       if (
         options.onlyIfIdle &&
-        (this.isBusy(conversationId) || this.runningCount() >= this.maxRunning)
+        (this.isBusy(conversationId) ||
+          this.runningCount() >= this.maxRunning ||
+          this.workspaceHolder(conversationId))
       )
         return { ok: false, error: 'session-busy' };
       await this.prepareBudget(botId);
       if (this.budgetExceeded(botId, binding.chatId, conversationId))
         return { ok: false, error: BOT_BUDGET_ERROR };
       if (this.turnActive(conversationId) && !options.queueIfBusy) return this.steer(delivery);
+      const holder = this.turnActive(conversationId)
+        ? undefined
+        : this.workspaceHolder(conversationId);
       if (
         this.turnActive(conversationId) ||
         this.queue.some((item) => item.conversationId === conversationId) ||
-        this.runningCount() >= this.maxRunning
+        this.runningCount() >= this.maxRunning ||
+        holder
       ) {
         this.queue.push(delivery);
+        if (holder) this.noteWorkspaceWait(delivery, holder);
         this.deps.emit({ kind: 'queue', chatId });
         return { ok: true, conversationId, queued: true };
       }
@@ -1016,12 +1049,14 @@ export class BotSessionHost {
   /** 私聊重试：像一次投递那样占用回合（新 turnKey、计入并发、正常结算） */
   retryConversation(conversationId: string): Promise<BotDeliverResult> {
     return this.withLock(conversationId, async (): Promise<BotDeliverResult> => {
-      if (this.runningCount() >= this.maxRunning) return { ok: false, error: 'session-busy' };
+      if (this.runningCount() >= this.maxRunning || this.workspaceHolder(conversationId))
+        return { ok: false, error: 'session-busy' };
       const ready = await this.controllable(conversationId);
       if ('ok' in ready) return ready;
       if (!this.deps.runtime.retry) return { ok: false, error: 'unsupported' };
       if (await this.overBudget(ready.botId, ready.chatId))
         return { ok: false, error: BOT_BUDGET_ERROR };
+      if (this.workspaceHolder(conversationId)) return { ok: false, error: 'session-busy' };
       const slot = { sawRunning: false };
       this.slots.set(conversationId, slot);
       this.turnKeys.set(conversationId, randomUUID());
@@ -1136,9 +1171,7 @@ export class BotSessionHost {
     if (this.disposed) return;
     const touched = new Set<string>();
     while (this.queue.length > 0) {
-      const index = this.queue.findIndex(
-        (item) => !item.queueIfBusy || !this.turnActive(item.conversationId)
-      );
+      const index = this.queue.findIndex((item) => this.dequeueable(item));
       if (index < 0) break;
       const next = this.queue[index];
       const active = this.turnActive(next.conversationId);
@@ -1164,8 +1197,9 @@ export class BotSessionHost {
       this.slots.set(next.conversationId, { sawRunning: false });
       if (next.deliveryId) this.activeDeliveries.set(next.conversationId, next.deliveryId);
       void this.withLock(next.conversationId, async () => {
-        this.slots.delete(next.conversationId);
         await this.prepareBudget(next.botId);
+        // 预算备好后才让出占位：期间别的投递抢不走并发位与工作区写锁
+        this.slots.delete(next.conversationId);
         const started: BotDeliverResult = this.budgetExceeded(
           next.botId,
           next.chatId || null,
@@ -1187,6 +1221,68 @@ export class BotSessionHost {
       });
     }
     for (const chatId of touched) this.deps.emit({ kind: 'queue', chatId });
+  }
+
+  /** 活轮里可 steer 的插话，或工作区没被别的写成员占着的新轮 */
+  private dequeueable(item: Delivery): boolean {
+    if (this.turnActive(item.conversationId)) return !item.queueIfBusy;
+    const holder = this.workspaceHolder(item.conversationId);
+    if (holder) this.noteWorkspaceWait(item, holder);
+    return !holder;
+  }
+
+  /** 写成员会话的工作区真实路径；只读成员不参与写锁 */
+  private writeKey(id: string): string | undefined {
+    if (this.effectiveBot(id)?.tools !== 'all') return undefined;
+    let key = this.workspaceKeys.get(id);
+    if (key === undefined) {
+      const conversation = this.deps.authority.conversation(id);
+      const path =
+        conversation && this.deps.authority.project(conversation.projectId)?.canonicalPath;
+      key = path ? realpathOr(path) : null;
+      this.workspaceKeys.set(id, key);
+    }
+    return key ?? undefined;
+  }
+
+  /** 同一工作区上正在跑轮、且不在同一条委派链上的写成员会话 */
+  private workspaceHolder(id: string): string | undefined {
+    const key = this.writeKey(id);
+    if (!key) return undefined;
+    for (const other of new Set([...this.slots.keys(), ...this.running])) {
+      if (other === id || this.writeKey(other) !== key) continue;
+      if (!this.ancestors(id).includes(other) && !this.ancestors(other).includes(id)) return other;
+    }
+    return undefined;
+  }
+
+  /** 委派链上的祖先会话：子委派借用祖先持有的写锁，父轮等子结果时不会死锁 */
+  private ancestors(id: string): string[] {
+    const chain: string[] = [];
+    for (
+      let parent = this.origins.get(id)?.parentConversationId;
+      parent && parent !== id && !chain.includes(parent);
+      parent = this.origins.get(parent)?.parentConversationId
+    )
+      chain.push(parent);
+    return chain;
+  }
+
+  /** 同一次等待只在群时间线写一次提示；委派会话落到发起委派的群 */
+  private noteWorkspaceWait(item: Delivery, holder: string): void {
+    if (item.waitNoted) return;
+    item.waitNoted = true;
+    const binding = this.binding(item.conversationId);
+    const chatId = binding?.chatId ?? this.origins.get(item.conversationId)?.chatId;
+    if (!chatId || this.deps.chats.get(chatId)?.kind !== 'group') return;
+    const name = this.effectiveBot(holder)?.name ?? '?';
+    const saved = this.deps.chats.appendEntry(chatId, {
+      kind: 'system',
+      id: randomUUID(),
+      at: Date.now(),
+      text: `等待 ${name} 释放工作目录`,
+    });
+    if (saved) this.deps.emit({ kind: 'timeline', chatId, seq: saved.seq });
   }
 
   private finish(
@@ -1261,6 +1357,7 @@ export class BotSessionHost {
     this.live.clear();
     this.bindings.clear();
     this.independentSpecs.clear();
+    this.origins.clear();
     this.liveProfiles.clear();
     this.listeners.clear();
     this.discardListeners.clear();
@@ -1310,6 +1407,8 @@ export class BotSessionHost {
     this.independentSpecs.delete(id);
     this.liveProfiles.delete(id);
     this.deliveries.delete(id);
+    this.workspaceKeys.delete(id);
+    this.origins.delete(id);
   }
 
   private discardConversation(conversation: ConversationAuthority): void {

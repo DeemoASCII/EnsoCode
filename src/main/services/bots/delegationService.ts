@@ -200,7 +200,13 @@ export class DelegationService {
       delegationId: id,
     });
     const effective = delegatedBotPermissions(parent, target);
-    if (!child || !this.deps.host.registerDelegation(child.conversationId, effective))
+    if (
+      !child ||
+      !this.deps.host.registerDelegation(child.conversationId, effective, {
+        parentConversationId,
+        chatId,
+      })
+    )
       return { ok: false, error: 'Delegation workspace unavailable.' };
     const record: Delegation = {
       id,
