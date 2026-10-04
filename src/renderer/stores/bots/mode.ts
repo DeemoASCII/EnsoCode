@@ -1,4 +1,7 @@
+import type { BotEvent } from '@shared/types/botIpc';
 import { create } from 'zustand';
+import { useBotsStore } from '@/stores/bots';
+import { openTarget } from '@/stores/bots/delegations';
 import { useRemoteNodesStore } from '@/stores/remoteNodes';
 import { useSettingsStore } from '@/stores/settings';
 
@@ -33,4 +36,18 @@ export function useBotModeActive(): boolean {
   const local = useRemoteNodesStore((s) => s.activeNodeId === 'local');
   const mode = useAppModeStore((s) => s.mode);
   return enabled && local && mode === 'bot';
+}
+
+/** 系统通知点击：切回本机 Bot 模式并打开对应聊天（委派子会话归到委派所属聊天，找不到则收件箱） */
+export async function openBotNotification(event: BotEvent): Promise<void> {
+  if (!useSettingsStore.getState().botModeEnabled) return;
+  const chatId = typeof event.chatId === 'string' ? event.chatId : undefined;
+  const conversationId =
+    typeof event.conversationId === 'string' ? event.conversationId : undefined;
+  const bots = useBotsStore.getState();
+  if (!chatId) await bots.refreshDelegations();
+  if (useRemoteNodesStore.getState().activeNodeId !== 'local')
+    useRemoteNodesStore.getState().switchNode('local');
+  useAppModeStore.getState().setMode('bot');
+  bots.setView(openTarget({ chatId, conversationId }, useBotsStore.getState().delegations));
 }

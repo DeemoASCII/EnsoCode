@@ -4,10 +4,12 @@ import { describe, expect, it } from 'vitest';
 import { emptyProjection } from '@/stores/sessions/reducer';
 import {
   activeDelegations,
+  botPendingCount,
   delegationActions,
   delegationOwners,
   formatElapsed,
   interruptedDelegations,
+  openTarget,
   pendingOwners,
 } from './delegations';
 import { pendingItems } from './selectors';
@@ -98,6 +100,47 @@ describe('interruptedDelegations', () => {
       )
     ).toEqual([]);
     expect(interruptedDelegations([{ ...interrupted, chatId: null }], [])).toEqual([]);
+  });
+});
+
+describe('botPendingCount', () => {
+  it('所有 bot 会话（含委派子会话）的待审批/提问 + 未忽略的中断委派', () => {
+    const sessions = {
+      p1: { ...emptyProjection, pendingAsks: [{ requestId: 'a' } as AskRequestInfo] },
+      k1: { ...emptyProjection, pendingApprovals: [{ requestId: 'r' } as ApprovalRequestInfo] },
+      orphan: { ...emptyProjection, pendingAsks: [{ requestId: 'o' } as AskRequestInfo] },
+    };
+    const interrupted = record({
+      id: 'd2',
+      childConversationId: 'k2',
+      state: 'failed',
+      failure: 'interrupted',
+    });
+    const state = {
+      sessions,
+      chats: [chat],
+      delegations: [record({}), interrupted],
+      dismissedDelegations: [],
+    };
+    expect(botPendingCount(state)).toBe(3);
+    expect(botPendingCount({ ...state, dismissedDelegations: ['d2'] })).toBe(2);
+    expect(
+      botPendingCount({ sessions: {}, chats: [], delegations: [], dismissedDelegations: [] })
+    ).toBe(0);
+  });
+});
+
+describe('openTarget', () => {
+  it('通知点击：有聊天打开聊天，委派子会话打开委派所属聊天，否则打开收件箱', () => {
+    const list = [record({}), record({ id: 'd3', childConversationId: 'k3', chatId: null })];
+    expect(openTarget({ chatId: 'c9', conversationId: 'k1' }, list)).toEqual({
+      kind: 'chat',
+      chatId: 'c9',
+    });
+    expect(openTarget({ conversationId: 'k1' }, list)).toEqual({ kind: 'chat', chatId: 'c1' });
+    expect(openTarget({ conversationId: 'k3' }, list)).toEqual({ kind: 'inbox' });
+    expect(openTarget({ conversationId: 'zz' }, list)).toEqual({ kind: 'inbox' });
+    expect(openTarget({}, list)).toEqual({ kind: 'inbox' });
   });
 });
 

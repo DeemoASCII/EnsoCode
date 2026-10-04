@@ -232,15 +232,19 @@ function broadcastAgentEvent(event: RendererAgentEvent): void {
   } catch {
     // renderer 已崩但 webContents 对象还在：Render frame was disposed
   }
-  const binding =
-    'identity' in event && event.identity
-      ? sourceAuthority?.conversation(rootSessionId(event.identity))?.bot
-      : undefined;
-  if (binding && (event.type === 'approval-request' || event.type === 'ask-request')) {
+  const conversationId =
+    'identity' in event && event.identity ? rootSessionId(event.identity) : undefined;
+  const binding = conversationId ? sourceAuthority?.conversation(conversationId)?.bot : undefined;
+  if (
+    binding &&
+    conversationId &&
+    (event.type === 'approval-request' || event.type === 'ask-request')
+  ) {
     const enabled = botModeEnabled();
     void maybeNotifyBot(event, {
       enabled,
       chatId: binding.chatId,
+      conversationId,
       name: (enabled ? getBotServices()?.bots.get(binding.botId)?.name : undefined) ?? '成员',
     }).catch((error) => console.warn('[bots] notification failed', error));
   } else maybeNotify(event);

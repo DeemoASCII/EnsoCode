@@ -48,7 +48,12 @@ import {
 } from '@/lib/sidePanelDock';
 import { cn } from '@/lib/utils';
 import { useBotsStore } from '@/stores/bots';
-import { isBotModeActive, useAppModeStore, useBotModeActive } from '@/stores/bots/mode';
+import {
+  isBotModeActive,
+  openBotNotification,
+  useAppModeStore,
+  useBotModeActive,
+} from '@/stores/bots/mode';
 import { bindPairCatalogSync } from '@/stores/pairCatalog';
 import { useRemoteNodesStore } from '@/stores/remoteNodes';
 import { useSessionsStore } from '@/stores/sessions';
@@ -170,6 +175,19 @@ export default function App() {
       useAppModeStore.getState().setMode('code');
     }
   }, [appMode, botModeEnabled, remoteNodeActive]);
+
+  // Bot 模式开关打开即常驻订阅：Code 模式下也要实时计数待处理，并响应通知点击跳转
+  useEffect(() => {
+    if (!botModeEnabled) return;
+    const unbind = useBotsStore.getState().bind();
+    const offOpen = window.electronAPI.bots.onEvent((event) => {
+      if (event.kind === 'open') void openBotNotification(event);
+    });
+    return () => {
+      unbind();
+      offOpen();
+    };
+  }, [botModeEnabled]);
 
   const handleResize = useCallback((deltaX: number) => {
     setWidth((w) => Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, w + deltaX)));

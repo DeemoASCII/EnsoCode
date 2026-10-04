@@ -4,7 +4,7 @@ import type { BotEvent, BotQueueItem, BotSendResult } from '@shared/types/botIpc
 import { create } from 'zustand';
 import { applyHistoryPage, emptyProjection } from '@/stores/sessions/reducer';
 import { resizeSidePanelWidth, SIDE_PANEL_DEFAULT_WIDTH } from '@/stores/sidePanel/width';
-import { isActiveDelegation } from './delegations';
+import { botPendingCount, isActiveDelegation } from './delegations';
 import { mergeLatest, mergeOlder } from './groupTimeline';
 import { applyBotAgentEvent, type BotSessions, seedHistory } from './projection';
 import { chatSummary } from './selectors';
@@ -88,7 +88,7 @@ interface BotsState {
   panelOpen: boolean;
   panelWidth: number;
 
-  /** 订阅 Bot 事件与 agent 事件流并拉一次全量；返回清理函数 */
+  /** 订阅 Bot 事件与 agent 事件流并拉一次全量；引用计数，重复 bind 共用一份订阅；返回清理函数 */
   bind: () => () => void;
   refreshCatalog: () => Promise<void>;
   refreshChats: () => Promise<void>;
@@ -118,6 +118,8 @@ export const useBotsStore = create<BotsState>()((set, get) => {
   const historyInFlight = new Set<string>();
   const seeding = new Map<string, Promise<void>>();
   let storedReads = loadReads();
+  let bindings = 0;
+  let unbind: (() => void) | null = null;
 
   const saveReads = (reads: Record<string, number>) => {
     storedReads = reads;
@@ -191,6 +193,46 @@ export const useBotsStore = create<BotsState>()((set, get) => {
     }
   };
 
+  const subscribe = () => {
+    let active = true;
+    const offBot = window.electronAPI.bots.onEvent(onBotEvent);
+    const offAgent = window.electronAPI.agent.onEvent((event) => {
+      const { sessions } = get();
+      const result = applyBotAgentEvent(sessions, event);
+      if (result.sessions !== sessions) set({ sessions: result.sessions });
+      for (const id of result.resync) void window.electronAPI.agent.requestSnapshot(id);
+    });
+    // 解绑期间（关闭 Bot 模式）seeding 保留已完成的加载；重绑时缓存必须重新向权威源补齐。
+    for (const [id, cached] of Object.entries(get().sessions)) {
+      void window.electronAPI.agent.requestSnapshot(id);
+      void window.electronAPI.bots
+        .sessionHistory({ conversationId: id })
+        .then((result) => {
+          if (!active || !result.ok) return;
+          // 热会话的快照/事件优先；已冷回收的会话没有快照，用 jsonl 并清掉旧代运行状态。
+          patchSession(id, (current) =>
+            current === cached ? seedHistory(emptyProjection, result) : current
+          );
+        })
+        .catch(() => {});
+    }
+    void (async () => {
+      await Promise.all([get().refreshCatalog(), get().refreshChats(), get().refreshDelegations()]);
+      const groups = get().chats.filter((chat) => chat.kind === 'group');
+      await Promise.all([
+        ...groups.map((chat) => get().loadLatest(chat.id)),
+        trackChats(get().chats),
+      ]);
+      if (storedReads === null) seedReads();
+      set({ loaded: true });
+    })();
+    return () => {
+      active = false;
+      offBot();
+      offAgent();
+    };
+  };
+
   return {
     enabled: false,
     loaded: false,
@@ -210,46 +252,17 @@ export const useBotsStore = create<BotsState>()((set, get) => {
     panelWidth: Number(localStorage.getItem(PANEL_WIDTH_KEY)) || SIDE_PANEL_DEFAULT_WIDTH,
 
     bind: () => {
-      let active = true;
-      const offBot = window.electronAPI.bots.onEvent(onBotEvent);
-      const offAgent = window.electronAPI.agent.onEvent((event) => {
-        const { sessions } = get();
-        const result = applyBotAgentEvent(sessions, event);
-        if (result.sessions !== sessions) set({ sessions: result.sessions });
-        for (const id of result.resync) void window.electronAPI.agent.requestSnapshot(id);
-      });
-      // Code 模式会解绑订阅，但 seeding 保留已完成的加载；重入时缓存必须重新向权威源补齐。
-      for (const [id, cached] of Object.entries(get().sessions)) {
-        void window.electronAPI.agent.requestSnapshot(id);
-        void window.electronAPI.bots
-          .sessionHistory({ conversationId: id })
-          .then((result) => {
-            if (!active || !result.ok) return;
-            // 热会话的快照/事件优先；已冷回收的会话没有快照，用 jsonl 并清掉旧代运行状态。
-            patchSession(id, (current) =>
-              current === cached ? seedHistory(emptyProjection, result) : current
-            );
-          })
-          .catch(() => {});
-      }
-      void (async () => {
-        await Promise.all([
-          get().refreshCatalog(),
-          get().refreshChats(),
-          get().refreshDelegations(),
-        ]);
-        const groups = get().chats.filter((chat) => chat.kind === 'group');
-        await Promise.all([
-          ...groups.map((chat) => get().loadLatest(chat.id)),
-          trackChats(get().chats),
-        ]);
-        if (storedReads === null) seedReads();
-        set({ loaded: true });
-      })();
+      bindings += 1;
+      if (!unbind) unbind = subscribe();
+      let released = false;
       return () => {
-        active = false;
-        offBot();
-        offAgent();
+        if (released) return;
+        released = true;
+        bindings -= 1;
+        if (bindings === 0) {
+          unbind?.();
+          unbind = null;
+        }
       };
     },
 
@@ -498,3 +511,5 @@ export const useBotsStore = create<BotsState>()((set, get) => {
     },
   };
 });
+
+export const useBotPendingCount = (): number => useBotsStore(botPendingCount);

@@ -41,16 +41,43 @@ beforeEach(() => {
   vi.clearAllMocks();
   env.focused = false;
 });
-it('notifies background bot questions and focuses the chat on click', async () => {
-  await maybeNotifyBot(event, { enabled: true, chatId: 'chat', name: 'Alice' });
+it('notifies background bot questions and opens the chat on click', async () => {
+  await maybeNotifyBot(event, {
+    enabled: true,
+    chatId: 'chat',
+    name: 'Alice',
+    conversationId: 's',
+  });
   expect(env.show).toHaveBeenCalledOnce();
   env.click();
   expect(env.focus).toHaveBeenCalledOnce();
-  expect(env.send).toHaveBeenCalledWith(undefined, 'bots:event', { kind: 'chat', chatId: 'chat' });
+  expect(env.send).toHaveBeenCalledWith(undefined, 'bots:event', {
+    kind: 'open',
+    chatId: 'chat',
+    conversationId: 's',
+  });
+});
+it('delegated child sessions without a chat still request navigation by conversation', async () => {
+  await maybeNotifyBot(event, { enabled: true, chatId: null, name: 'Alice', conversationId: 's' });
+  env.click();
+  expect(env.send).toHaveBeenCalledWith(undefined, 'bots:event', {
+    kind: 'open',
+    conversationId: 's',
+  });
 });
 it('does not notify foreground or disabled bot mode', async () => {
-  await maybeNotifyBot(event, { enabled: false, chatId: 'chat', name: 'Alice' });
+  await maybeNotifyBot(event, {
+    enabled: false,
+    chatId: 'chat',
+    name: 'Alice',
+    conversationId: 's',
+  });
   env.focused = true;
-  await maybeNotifyBot(event, { enabled: true, chatId: 'chat', name: 'Alice' });
+  await maybeNotifyBot(event, {
+    enabled: true,
+    chatId: 'chat',
+    name: 'Alice',
+    conversationId: 's',
+  });
   expect(env.show).not.toHaveBeenCalled();
 });

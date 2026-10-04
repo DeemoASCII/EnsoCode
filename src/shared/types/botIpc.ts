@@ -79,12 +79,16 @@ export type BotEventKind =
   | 'delegation'
   | 'routine'
   /** 群任务看板变化（带 chatId）；手机端协议不转发 */
-  | 'tasks';
+  | 'tasks'
+  /** 点击系统通知：切到 Bot 模式并打开 chatId 或 conversationId 所属聊天；只发给主窗口 */
+  | 'open';
 
 /** main → renderer：Bot 数据变化提示，renderer 按 kind/chatId 重新拉取 */
 export interface BotEvent {
   kind: BotEventKind;
   chatId?: string;
+  /** kind 为 'open' 时：触发通知的成员会话 */
+  conversationId?: string;
   seq?: number;
 }
 

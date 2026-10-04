@@ -1,5 +1,6 @@
 import type { BotChat, Delegation, DelegationState } from '@shared/types/bot';
-import { type SessionOwner, sessionOwners } from './selectors';
+import type { BotSessions } from './projection';
+import { pendingItems, type SessionOwner, sessionOwners } from './selectors';
 
 export const isActiveDelegation = (state: DelegationState) =>
   state === 'queued' || state === 'running';
@@ -68,6 +69,30 @@ export function delegationActions(state: DelegationState): { cancel: boolean; re
     cancel: isActiveDelegation(state),
     retry: state === 'failed' || state === 'canceled',
   };
+}
+
+/** Bot 待处理数：收件箱入口与标题栏徽标共用 */
+export function botPendingCount(state: {
+  sessions: BotSessions;
+  chats: readonly BotChat[];
+  delegations: readonly Delegation[];
+  dismissedDelegations: readonly string[];
+}): number {
+  return (
+    pendingItems(state.sessions, pendingOwners(state.chats, state.delegations)).length +
+    interruptedDelegations(state.delegations, state.dismissedDelegations).length
+  );
+}
+
+/** 通知点击的跳转目标：委派子会话没有聊天绑定时归到委派所属聊天，都找不到就去收件箱 */
+export function openTarget(
+  event: { chatId?: string; conversationId?: string },
+  delegations: readonly Delegation[]
+): { kind: 'chat'; chatId: string } | { kind: 'inbox' } {
+  const chatId =
+    event.chatId ??
+    delegations.find((item) => item.childConversationId === event.conversationId)?.chatId;
+  return chatId ? { kind: 'chat', chatId } : { kind: 'inbox' };
 }
 
 export function formatElapsed(ms: number): string {

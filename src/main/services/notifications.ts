@@ -85,7 +85,7 @@ function notify(
 
 export async function maybeNotifyBot(
   event: RendererAgentEvent,
-  bot: { enabled: boolean; chatId: string | null; name: string }
+  bot: { enabled: boolean; chatId: string | null; name: string; conversationId: string }
 ): Promise<void> {
   if (!bot.enabled) return;
   if (event.type !== 'approval-request' && event.type !== 'ask-request') return;
@@ -98,7 +98,11 @@ export async function maybeNotifyBot(
       : `${event.request.tool} · ${event.request.summary}`;
   notify(event.identity.sessionId, title, body.slice(0, 100), () => {
     const win = focusMainWindow();
-    if (bot.chatId) sendToWindow(win, IPC_CHANNELS.BOT_EVENT, { kind: 'chat', chatId: bot.chatId });
+    sendToWindow(win, IPC_CHANNELS.BOT_EVENT, {
+      kind: 'open',
+      ...(bot.chatId ? { chatId: bot.chatId } : {}),
+      conversationId: bot.conversationId,
+    });
   });
 }
 

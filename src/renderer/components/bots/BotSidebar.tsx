@@ -26,8 +26,8 @@ import { addToast } from '@/components/ui/toast';
 import { useI18n } from '@/i18n';
 import { formatRelativeTime } from '@/lib/time';
 import { cn } from '@/lib/utils';
-import { useBotsStore } from '@/stores/bots';
-import { interruptedDelegations, pendingOwners } from '@/stores/bots/delegations';
+import { useBotPendingCount, useBotsStore } from '@/stores/bots';
+import { pendingOwners } from '@/stores/bots/delegations';
 import { type ChatSummary, chatSummary, pendingItems, sortChats } from '@/stores/bots/selectors';
 import { isUnread } from '@/stores/bots/unread';
 import { BotAvatar, GroupAvatar } from './BotAvatar';
@@ -51,7 +51,6 @@ export function BotSidebar({ width, onCollapse, onNewMember, onNewGroup }: BotSi
   const queue = useBotsStore((s) => s.queue);
   const sessions = useBotsStore((s) => s.sessions);
   const delegations = useBotsStore((s) => s.delegations);
-  const dismissed = useBotsStore((s) => s.dismissedDelegations);
   const timelines = useBotsStore((s) => s.timelines);
   const reads = useBotsStore((s) => s.reads);
   const view = useBotsStore((s) => s.view);
@@ -98,7 +97,7 @@ export function BotSidebar({ width, onCollapse, onNewMember, onNewGroup }: BotSi
     });
   const archivedChats = rows.filter((row) => row.chat.archivedAt !== undefined);
   const archivedBots = bots.filter((bot) => bot.archivedAt !== undefined);
-  const inboxCount = pending.length + interruptedDelegations(delegations, dismissed).length;
+  const inboxCount = useBotPendingCount();
   const activeChatId = view?.kind === 'chat' ? view.chatId : null;
 
   const updateChat = async (chat: BotChat, patch: { pinned?: boolean; archived?: boolean }) => {
@@ -254,17 +253,22 @@ export function BotSidebar({ width, onCollapse, onNewMember, onNewGroup }: BotSi
           >
             <Users className="h-4 w-4" />
           </button>
-          <button
-            type="button"
-            className={cn(ICON_BUTTON_CLASS, view?.kind === 'inbox' && 'bg-muted text-foreground')}
-            onClick={() => setView({ kind: 'inbox' })}
-            title={t('Inbox')}
-          >
-            <Inbox className="h-4 w-4" />
-            {inboxCount > 0 && (
-              <CountBadge count={inboxCount} className="-top-0.5 -right-1 absolute" />
-            )}
-          </button>
+          {(inboxCount > 0 || view?.kind === 'inbox') && (
+            <button
+              type="button"
+              className={cn(
+                ICON_BUTTON_CLASS,
+                view?.kind === 'inbox' && 'bg-muted text-foreground'
+              )}
+              onClick={() => setView({ kind: 'inbox' })}
+              title={t('Inbox')}
+            >
+              <Inbox className="h-4 w-4" />
+              {inboxCount > 0 && (
+                <CountBadge count={inboxCount} className="-top-0.5 -right-1 absolute" />
+              )}
+            </button>
+          )}
           <button
             type="button"
             className={cn(ICON_BUTTON_CLASS, showArchived && 'bg-muted text-foreground')}

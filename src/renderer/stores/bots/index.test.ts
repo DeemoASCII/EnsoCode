@@ -31,6 +31,7 @@ async function fixture() {
     removeItem: vi.fn(),
   });
   const listeners = new Set<(event: RendererAgentEvent) => void>();
+  const botListeners = new Set<unknown>();
   const sessionHistory = vi
     .fn()
     .mockResolvedValue({ ok: true, baseIndex: 0, messages: [message('old')] });
@@ -38,7 +39,10 @@ async function fixture() {
   vi.stubGlobal('window', {
     electronAPI: {
       bots: {
-        onEvent: () => () => {},
+        onEvent: (listener: unknown) => {
+          botListeners.add(listener);
+          return () => botListeners.delete(listener);
+        },
         list: async () => ({ ok: true, enabled: true, bots: [] }),
         chats: async () => ({ ok: true, enabled: true, chats: [chat], queue: [] }),
         delegations: async () => ({ ok: true, delegations: [] }),
@@ -62,6 +66,8 @@ async function fixture() {
     off,
     sessionHistory,
     requestSnapshot,
+    listeners,
+    botListeners,
     emit: (event: RendererAgentEvent) => {
       for (const listener of listeners) listener(event);
     },
@@ -73,6 +79,19 @@ afterEach(() => {
 });
 
 describe('Bot mode subscription lifecycle', () => {
+  it('重复 bind 不重复订阅；全部清理后才解绑', async () => {
+    const f = await fixture();
+    const off = f.store.getState().bind();
+    expect(f.listeners.size).toBe(1);
+    expect(f.botListeners.size).toBe(1);
+    f.off();
+    expect(f.listeners.size).toBe(1);
+    off();
+    off();
+    expect(f.listeners.size).toBe(0);
+    expect(f.botListeners.size).toBe(0);
+  });
+
   it('Code 模式错过轮次后重新挂载，缓存必须从磁盘补齐（worker 已冷）', async () => {
     const f = await fixture();
     f.store.setState((s) => ({

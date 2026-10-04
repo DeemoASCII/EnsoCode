@@ -1,11 +1,10 @@
 import { Bot, Inbox, PanelLeft, Settings, UserPlus, Users } from 'lucide-react';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { ResizeHandle } from '@/components/chat/ResizeHandle';
 import { Button } from '@/components/ui/button';
 import { useI18n } from '@/i18n';
-import { useBotsStore } from '@/stores/bots';
-import { interruptedDelegations, pendingOwners } from '@/stores/bots/delegations';
-import { pendingItems } from '@/stores/bots/selectors';
+import { cn } from '@/lib/utils';
+import { useBotPendingCount, useBotsStore } from '@/stores/bots';
 import { BotChatView } from './BotChatView';
 import { BotInbox } from './BotInbox';
 import { BotSidebar, CountBadge } from './BotSidebar';
@@ -28,23 +27,13 @@ export function BotView({ sidebarWidth, collapsed, onToggleCollapse, onResize }:
   const view = useBotsStore((s) => s.view);
   const chats = useBotsStore((s) => s.chats);
   const bots = useBotsStore((s) => s.bots);
-  const sessions = useBotsStore((s) => s.sessions);
-  const delegations = useBotsStore((s) => s.delegations);
-  const dismissed = useBotsStore((s) => s.dismissedDelegations);
   const loaded = useBotsStore((s) => s.loaded);
   const setView = useBotsStore((s) => s.setView);
   const [newMember, setNewMember] = useState(false);
   const [newGroup, setNewGroup] = useState(false);
-
-  useEffect(() => useBotsStore.getState().bind(), []);
+  const inboxCount = useBotPendingCount();
 
   const chat = view?.kind === 'chat' ? chats.find((item) => item.id === view.chatId) : undefined;
-  const inboxCount = useMemo(
-    () =>
-      pendingItems(sessions, pendingOwners(chats, delegations)).length +
-      interruptedDelegations(delegations, dismissed).length,
-    [sessions, chats, delegations, dismissed]
-  );
 
   // 记住的聊天已被删除：回到空态
   useEffect(() => {
@@ -71,17 +60,19 @@ export function BotView({ sidebarWidth, collapsed, onToggleCollapse, onResize }:
           >
             <Users className="h-4 w-4" />
           </button>
-          <button
-            type="button"
-            className={RAIL_BUTTON}
-            onClick={() => setView({ kind: 'inbox' })}
-            title={t('Inbox')}
-          >
-            <Inbox className="h-4 w-4" />
-            {inboxCount > 0 && (
-              <CountBadge count={inboxCount} className="-top-0.5 -right-1 absolute" />
-            )}
-          </button>
+          {(inboxCount > 0 || view?.kind === 'inbox') && (
+            <button
+              type="button"
+              className={cn(RAIL_BUTTON, view?.kind === 'inbox' && 'bg-muted text-foreground')}
+              onClick={() => setView({ kind: 'inbox' })}
+              title={t('Inbox')}
+            >
+              <Inbox className="h-4 w-4" />
+              {inboxCount > 0 && (
+                <CountBadge count={inboxCount} className="-top-0.5 -right-1 absolute" />
+              )}
+            </button>
+          )}
           <div className="flex-1" />
           <button
             type="button"
