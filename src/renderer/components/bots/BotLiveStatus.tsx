@@ -1,10 +1,10 @@
+import { type LiveState, type LiveStep, liveActivity } from '@shared/bots/liveActivity';
 import { type ReactNode, useEffect, useMemo, useState } from 'react';
 import { useI18n } from '@/i18n';
 import { toolLabel } from '@/lib/toolLabels';
 import { cn } from '@/lib/utils';
 import { useBotsStore } from '@/stores/bots';
 import { formatElapsed } from '@/stores/bots/delegations';
-import { type LiveState, type LiveStep, liveActivity } from '@/stores/bots/liveActivity';
 
 const STATE_LABELS: Record<Exclude<LiveState, 'queued'>, string> = {
   thinking: 'Thinking',

@@ -1,5 +1,6 @@
 import {
   type CatalogEntry,
+  type PairBotActivity,
   type PairBotChatState,
   type PairBotChatSummary,
   type PairBotInboxItem,
@@ -19,7 +20,7 @@ import { Button } from '@/components/ui/button';
 import { applyAppBadge, attentionBadgeCount } from './attentionBadge';
 import { BotDrawerPanel } from './BotDrawerPanel';
 import { BotOutbox, type OutboxItem, phoneOutboxStorage } from './botOutbox';
-import { type GroupTimelineState, mergeGroupTimeline } from './botState';
+import { chatActivities, type GroupTimelineState, mergeGroupTimeline } from './botState';
 import { ChatScreen } from './ChatScreen';
 import { type ConnState, PairClient, type SessionView } from './client';
 import { formatOnlineConnectionLabel } from './connectionLabel';
@@ -156,6 +157,11 @@ export function App() {
   const [bots, setBots] = useState<PairBotMember[]>([]);
   const [botChats, setBotChats] = useState<PairBotChatSummary[]>([]);
   const [botInbox, setBotInbox] = useState<PairBotInboxItem[]>([]);
+  /** 成员实时运行态；offset = 本机时钟 − host 时钟 */
+  const [botActivity, setBotActivity] = useState<{ items: PairBotActivity[]; offset: number }>({
+    items: [],
+    offset: 0,
+  });
   const [botSegment, setBotSegment] = useState(false);
   /** 打开中的 Bot 聊天；非 null 时主屏显示 Bot 视图，Code 的 activeId 原样保留 */
   const [botChatId, setBotChatId] = useState<string | null>(null);
@@ -196,6 +202,8 @@ export function App() {
       : []
   );
   const botRefreshRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** 见过的会话 → 成员（委派子会话不在时间线里，结束后「查看过程」仍要显示名字） */
+  const sessionBotsRef = useRef(new Map<string, string>());
   /** 群时间线上滑分页：同一 beforeSeq 只发一次 */
   const olderRequestRef = useRef<string | null>(null);
   /** VAPID 公钥（桌面下发）；用 ref 避免重建连接 effect */
@@ -317,12 +325,17 @@ export function App() {
         if (enabled) return;
         setBotChats([]);
         setBotInbox([]);
+        setBotActivity({ items: [], offset: 0 });
         setBotChatId(null);
         setProcessId(null);
         setBotSegment(false);
       },
       onBotChats: setBotChats,
       onBotInbox: setBotInbox,
+      onBotActivity: (items, offset) => {
+        for (const item of items) sessionBotsRef.current.set(item.conversationId, item.botId);
+        setBotActivity({ items, offset });
+      },
       onGroupTimeline: (frame) =>
         setTimelines((prev) => ({
           ...prev,
@@ -605,6 +618,7 @@ export function App() {
     setProcessId(null);
     setTimelines({});
     setChatStates({});
+    setBotActivity({ items: [], offset: 0 });
     setMemberViews({});
     setBotNotice(null);
     setActiveId(nextActiveId);
@@ -722,6 +736,8 @@ export function App() {
           timeline={timelines[chat.id]}
           state={chatStates[chat.id]}
           pending={pending}
+          activities={chatActivities(botActivity.items, chat.id)}
+          clockOffset={botActivity.offset}
           connState={state}
           stateLabel={connectionLabel}
           notice={botNotice}
@@ -753,8 +769,13 @@ export function App() {
     const processBotId = timelines[chat.id]?.entries.find(
       (entry) => entry.kind === 'bot' && entry.conversationId === processId
     );
+    const liveBotId = processId ? sessionBotsRef.current.get(processId) : undefined;
     const member = botById.get(
-      process ? (processBotId?.kind === 'bot' ? processBotId.botId : '') : chat.members[0]
+      process
+        ? processBotId?.kind === 'bot'
+          ? processBotId.botId
+          : (liveBotId ?? '')
+        : chat.members[0]
     );
     return (
       <ChatScreen
@@ -956,6 +977,7 @@ export function App() {
                     chats={botChats}
                     activeChatId={botChatId}
                     inbox={botInbox}
+                    activities={botActivity.items}
                     onDismiss={
                       deviceReadOnly ? undefined : (key) => send({ type: 'bot-inbox-dismiss', key })
                     }

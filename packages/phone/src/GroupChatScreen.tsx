@@ -1,4 +1,5 @@
 import type {
+  PairBotActivity,
   PairBotChatState,
   PairBotChatSummary,
   PairBotMember,
@@ -11,6 +12,7 @@ import { ApprovalBar } from '@/components/chat/ApprovalBar';
 import { AskBar } from '@/components/chat/AskBar';
 import { Markdown } from '@/components/chat/Markdown';
 import { cn } from '@/lib/utils';
+import { BotActivityRow } from './BotActivityRow';
 import { BotAvatar } from './BotAvatar';
 import {
   activeMention,
@@ -34,6 +36,9 @@ interface Props {
   timeline: GroupTimelineState | undefined;
   state: PairBotChatState | undefined;
   pending: MemberPending[];
+  /** 本群成员（含委派子会话）的实时运行态 */
+  activities: PairBotActivity[];
+  clockOffset: number;
   connState: ConnState;
   stateLabel: string;
   notice: string | null;
@@ -123,7 +128,7 @@ export function GroupChatScreen(props: Props) {
     } else if (stickRef.current) {
       el.scrollTop = el.scrollHeight;
     }
-  }, [firstSeq, lastSeq, state?.current]);
+  }, [firstSeq, lastSeq, state?.current, props.activities.length]);
 
   const loadOlder = () => {
     const el = scrollRef.current;
@@ -270,7 +275,16 @@ export function GroupChatScreen(props: Props) {
           </p>
         ) : null}
         {entries.map(renderEntry)}
-        {current && (
+        {props.activities.map((item) => (
+          <BotActivityRow
+            key={item.conversationId}
+            item={item}
+            bots={bots}
+            clockOffset={props.clockOffset}
+            onOpen={props.onOpenProcess}
+          />
+        ))}
+        {current && props.activities.length === 0 && (
           <div className="flex items-center gap-2">
             <BotAvatar bot={current} size="sm" busy />
             <span className="text-muted-foreground text-xs">{current.name} 正在回复…</span>

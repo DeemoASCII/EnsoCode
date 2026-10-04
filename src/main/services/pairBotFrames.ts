@@ -1,11 +1,14 @@
 import type {
   HostToPhone,
+  PairBotActivity,
   PairBotChatSummary,
   PairBotMember,
   PairBotRunState,
   PairGroupEntry,
 } from '@enso/pair';
+import type { LiveActivity } from '@shared/bots/liveActivity';
 import type { BotChat, BotProfile, GroupEntry } from '@shared/types/bot';
+import type { BotQueueItem } from '@shared/types/botIpc';
 
 /** Bot 模式下行帧的纯投影：只放展示字段，人设/模型/权限配置不出 Main */
 
@@ -116,4 +119,48 @@ export function botSessionAccess(
   if (!conversation?.bot) return 'none';
   if (!enabled) return 'deny';
   return alive ? 'live' : 'cold';
+}
+
+export interface ActivityBinding {
+  botId: string;
+  chatId: string | null;
+  ownerBotId?: string;
+}
+
+/** 正在跑的会话 + 排队中的会话 → 手机运行态；不是 Bot 会话的丢弃 */
+export function pairActivityItems(
+  running: ReadonlyArray<{ conversationId: string; activity: LiveActivity }>,
+  queue: readonly BotQueueItem[],
+  bindingOf: (conversationId: string) => ActivityBinding | undefined
+): PairBotActivity[] {
+  const items: PairBotActivity[] = [];
+  const seen = new Set<string>();
+  for (const { conversationId, activity } of running) {
+    const binding = bindingOf(conversationId);
+    if (!binding) continue;
+    seen.add(conversationId);
+    items.push({
+      conversationId,
+      ...binding,
+      state: activity.state,
+      ...(activity.startedAt !== undefined ? { startedAt: activity.startedAt } : {}),
+      steps: activity.steps.map(({ id: _id, ...step }) => step),
+      more: activity.more,
+    });
+  }
+  for (const item of queue) {
+    if (seen.has(item.conversationId)) continue;
+    const binding = bindingOf(item.conversationId);
+    if (!binding) continue;
+    seen.add(item.conversationId);
+    items.push({
+      conversationId: item.conversationId,
+      ...binding,
+      state: 'queued',
+      ...(item.reason ? { reason: item.reason } : {}),
+      steps: [],
+      more: 0,
+    });
+  }
+  return items;
 }

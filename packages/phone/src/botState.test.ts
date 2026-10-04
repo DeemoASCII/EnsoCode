@@ -1,8 +1,17 @@
-import type { PairBotChatSummary, PairBotMember, PairGroupEntry } from '@enso/pair';
+import type {
+  PairBotActivity,
+  PairBotChatSummary,
+  PairBotMember,
+  PairGroupEntry,
+} from '@enso/pair';
 import { describe, expect, it } from 'vitest';
 import {
   activeMention,
+  activityLine,
+  activityStateText,
   botChatSections,
+  chatActivities,
+  formatElapsed,
   inboxLabel,
   insertMention,
   mentionOptions,
@@ -165,5 +174,57 @@ describe('inboxLabel', () => {
     expect(inboxLabel({ ...item, kind: 'approval' }, 0)).toBe('需要审批');
     expect(inboxLabel({ ...item, kind: 'routine-blocked' }, 0)).toBe('例行任务被阻塞');
     expect(inboxLabel({ ...item, kind: 'silence', since: 1_000 }, 92_500)).toBe('已安静 91 秒');
+  });
+});
+
+describe('成员运行态', () => {
+  const act = (patch: Partial<PairBotActivity>): PairBotActivity => ({
+    conversationId: 'c',
+    botId: 'b',
+    chatId: 'g',
+    state: 'thinking',
+    steps: [],
+    more: 0,
+    ...patch,
+  });
+
+  it('状态文案含排队原因', () => {
+    expect(activityStateText(act({ state: 'tool' }))).toBe('调用工具');
+    expect(activityStateText(act({ state: 'typing' }))).toBe('输出中');
+    expect(activityStateText(act({ state: 'retrying' }))).toBe('重试中');
+    expect(activityStateText(act({ state: 'queued', reason: 'turn' }))).toBe('排队 · 等上一轮结束');
+    expect(activityStateText(act({ state: 'queued', reason: 'capacity' }))).toBe('排队 · 并发已满');
+    expect(activityStateText(act({ state: 'queued' }))).toBe('排队中');
+  });
+
+  it('一行摘要优先显示运行中的工具', () => {
+    expect(
+      activityLine(
+        act({
+          state: 'tool',
+          steps: [
+            { name: 'read', detail: 'a.ts', status: 'done' },
+            { name: 'bash', detail: 'pnpm test', status: 'running' },
+          ],
+        })
+      )
+    ).toBe('bash pnpm test');
+    expect(activityLine(act({ state: 'thinking' }))).toBe('思考中');
+  });
+
+  it('按聊天筛选，运行中在前', () => {
+    const items = [
+      act({ conversationId: 'q', state: 'queued' }),
+      act({ conversationId: 'x', chatId: 'other' }),
+      act({ conversationId: 'r', state: 'tool' }),
+    ];
+    expect(chatActivities(items, 'g').map((item) => item.conversationId)).toEqual(['r', 'q']);
+  });
+
+  it('耗时格式', () => {
+    expect(formatElapsed(-5)).toBe('0s');
+    expect(formatElapsed(8_400)).toBe('8s');
+    expect(formatElapsed(65_000)).toBe('1m05s');
+    expect(formatElapsed(3_723_000)).toBe('1h02m');
   });
 });

@@ -1,7 +1,12 @@
-import type { PairBotChatSummary, PairBotInboxItem, PairBotMember } from '@enso/pair';
+import type {
+  PairBotActivity,
+  PairBotChatSummary,
+  PairBotInboxItem,
+  PairBotMember,
+} from '@enso/pair';
 import { cn } from '@/lib/utils';
 import { BotAvatar } from './BotAvatar';
-import { botChatSections, inboxLabel } from './botState';
+import { activityLine, botChatSections, chatActivities, inboxLabel } from './botState';
 
 interface Props {
   bots: PairBotMember[];
@@ -11,11 +16,22 @@ interface Props {
   /** 收件箱（未结束且未忽略）；提示类条目可忽略 */
   inbox?: PairBotInboxItem[];
   onDismiss?(key: string): void;
+  /** 成员实时运行态：有就替换聊天行的末条摘要 */
+  activities?: PairBotActivity[];
 }
 
 const STATUS_TEXT = { running: '工作中', queued: '排队中' } as const;
 
-function lastLine(chat: PairBotChatSummary, byId: Map<string, PairBotMember>): string {
+function lastLine(
+  chat: PairBotChatSummary,
+  byId: Map<string, PairBotMember>,
+  live: PairBotActivity | undefined
+): string {
+  if (live) {
+    const line = activityLine(live);
+    const who = byId.get(live.botId)?.name;
+    return chat.kind === 'group' && who ? `${who}：${line}` : line;
+  }
   if (chat.status !== 'idle') return STATUS_TEXT[chat.status];
   const last = chat.last;
   if (!last) return chat.kind === 'group' ? `${chat.members.length} 位成员` : '';
@@ -31,11 +47,15 @@ export function BotDrawerPanel({
   onSelect,
   inbox = [],
   onDismiss,
+  activities = [],
 }: Props) {
   const byId = new Map(bots.map((bot) => [bot.id, bot]));
   const { groups, directs } = botChatSections(chats, bots);
   const row = (chat: PairBotChatSummary) => {
     const member = chat.kind === 'direct' ? byId.get(chat.members[0]) : undefined;
+    const live = chatActivities(activities, chat.id)[0];
+    const busy = live ? live.state !== 'queued' : chat.status === 'running';
+    const idle = !live && chat.status === 'idle';
     return (
       <button
         key={chat.id}
@@ -47,7 +67,7 @@ export function BotDrawerPanel({
         )}
       >
         {member ? (
-          <BotAvatar bot={member} busy={chat.status === 'running'} />
+          <BotAvatar bot={member} busy={busy} />
         ) : (
           <span className="flex shrink-0 -space-x-2">
             {chat.members.slice(0, 3).map((id) => (
@@ -60,12 +80,9 @@ export function BotDrawerPanel({
             {member?.name ?? (chat.title || '群聊')}
           </span>
           <span
-            className={cn(
-              'block truncate text-xs',
-              chat.status === 'idle' ? 'text-muted-foreground' : 'text-brand'
-            )}
+            className={cn('block truncate text-xs', idle ? 'text-muted-foreground' : 'text-brand')}
           >
-            {lastLine(chat, byId) || member?.title || '\u00a0'}
+            {lastLine(chat, byId, live) || member?.title || '\u00a0'}
           </span>
         </span>
       </button>

@@ -319,6 +319,11 @@ export class DelegationService {
     return this.deps.store.get(id)?.chatId ?? null;
   }
 
+  /** 委派发起成员 */
+  parentBotOf(id: string): string | undefined {
+    return this.deps.store.get(id)?.parentBotId;
+  }
+
   cancel(id: string): { ok: boolean; error?: string } {
     const record = this.deps.store.get(id);
     if (!record) return { ok: false, error: 'Delegation not found.' };

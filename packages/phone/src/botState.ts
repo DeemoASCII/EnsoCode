@@ -1,5 +1,6 @@
 import type {
   HostToPhone,
+  PairBotActivity,
   PairBotChatSummary,
   PairBotInboxItem,
   PairBotMember,
@@ -118,4 +119,44 @@ const INBOX_LABELS: Record<Exclude<PairBotInboxItem['kind'], 'silence'>, string>
 export function inboxLabel(item: PairBotInboxItem, now: number): string {
   if (item.kind !== 'silence') return INBOX_LABELS[item.kind];
   return `已安静 ${Math.max(0, Math.floor((now - (item.since ?? now)) / 1000))} 秒`;
+}
+
+const STATE_TEXT: Record<Exclude<PairBotActivity['state'], 'queued'>, string> = {
+  thinking: '思考中',
+  typing: '输出中',
+  tool: '调用工具',
+  retrying: '重试中',
+};
+
+export function activityStateText(item: PairBotActivity): string {
+  if (item.state !== 'queued') return STATE_TEXT[item.state];
+  return item.reason === 'turn'
+    ? '排队 · 等上一轮结束'
+    : item.reason === 'capacity'
+      ? '排队 · 并发已满'
+      : '排队中';
+}
+
+/** 一行摘要：运行中的工具（名 + 参数）优先，否则状态 */
+export function activityLine(item: PairBotActivity): string {
+  const step = item.steps.findLast((s) => s.status === 'running');
+  return step ? `${step.name} ${step.detail}`.trim() : activityStateText(item);
+}
+
+/** 某聊天里成员（含委派子会话）的运行态，运行中在前 */
+export function chatActivities(
+  items: readonly PairBotActivity[],
+  chatId: string
+): PairBotActivity[] {
+  return items
+    .filter((item) => item.chatId === chatId)
+    .sort((a, b) => Number(a.state === 'queued') - Number(b.state === 'queued'));
+}
+
+export function formatElapsed(ms: number): string {
+  const s = Math.max(0, Math.floor(ms / 1000));
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m${String(s % 60).padStart(2, '0')}s`;
+  return `${Math.floor(m / 60)}h${String(m % 60).padStart(2, '0')}m`;
 }

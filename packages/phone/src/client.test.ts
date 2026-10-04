@@ -889,6 +889,7 @@ describe('PairClient Bot 帧', () => {
       onBotChatState: vi.fn(),
       onBotSendResult: vi.fn(),
       onBotInbox: vi.fn(),
+      onBotActivity: vi.fn(),
     };
     client = new PairClient(device, events, null, {
       load: vi.fn(async () => null),
@@ -931,6 +932,8 @@ describe('PairClient Bot 帧', () => {
     socket.receive({ type: 'bot-catalog', enabled: true, bots: [] });
     socket.receive({ type: 'bot-inbox', items: [{ key: 'k', kind: 'budget', chatId: null }] });
     socket.receive({ type: 'bot-inbox', items: 'bad' });
+    socket.receive({ type: 'bot-activity', now: Date.now() - 5000, items: [] });
+    socket.receive({ type: 'bot-activity', items: [] });
     socket.receive(timeline);
     socket.receive({ type: 'bot-event', event: { kind: 'timeline', chatId: 'c', seq: 3 } });
     socket.receive({
@@ -953,6 +956,10 @@ describe('PairClient Bot 帧', () => {
     expect(events.onBotCatalog).toHaveBeenCalledWith(true, []);
     expect(events.onBotInbox).toHaveBeenCalledTimes(1);
     expect(events.onBotInbox).toHaveBeenCalledWith([{ key: 'k', kind: 'budget', chatId: null }]);
+    expect(events.onBotActivity).toHaveBeenCalledTimes(1);
+    const [items, offset] = vi.mocked(events.onBotActivity!).mock.calls[0];
+    expect(items).toEqual([]);
+    expect(offset).toBeGreaterThanOrEqual(5000);
     expect(events.onGroupTimeline).toHaveBeenCalledWith(timeline);
     expect(events.onBotEvent).toHaveBeenCalledWith({ kind: 'timeline', chatId: 'c', seq: 3 });
     expect(events.onBotChatState).toHaveBeenCalledWith(expect.objectContaining({ chatId: 'c' }));

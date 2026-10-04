@@ -77,6 +77,8 @@ export {
   type HostToPhone,
   type IceServerEntry,
   isPhoneCommand,
+  type PairBotActivity,
+  type PairBotActivityStep,
   type PairBotChatState,
   type PairBotChatSummary,
   type PairBotEvent,

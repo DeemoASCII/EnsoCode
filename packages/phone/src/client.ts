@@ -15,6 +15,7 @@ import {
   isPairSyncCursor,
   type NudgeReason,
   openFrame,
+  type PairBotActivity,
   type PairBotChatSummary,
   type PairBotEvent,
   type PairBotInboxItem,
@@ -123,6 +124,8 @@ export interface ClientEvents {
   onBotSendResult?(frame: BotSendResultFrame): void;
   /** Bot 收件箱整表（未结束且未忽略） */
   onBotInbox?(items: PairBotInboxItem[]): void;
+  /** 成员实时运行态整表；clockOffset = 本机时钟 − host 时钟 */
+  onBotActivity?(items: PairBotActivity[], clockOffset: number): void;
 }
 
 export class PairClient {
@@ -570,6 +573,10 @@ export class PairClient {
         break;
       case 'bot-inbox':
         if (Array.isArray(payload.items)) this.events.onBotInbox?.(payload.items);
+        break;
+      case 'bot-activity':
+        if (Array.isArray(payload.items) && typeof payload.now === 'number')
+          this.events.onBotActivity?.(payload.items, Date.now() - payload.now);
         break;
       case 'command-rejected':
         if (typeof payload.command === 'string')

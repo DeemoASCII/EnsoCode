@@ -475,6 +475,7 @@ async function handleFrame(conn: Connection, frame: Uint8Array): Promise<void> {
     case 'bot-event':
     case 'bot-chat-state':
     case 'bot-send-result':
+    case 'bot-activity':
       return;
     default:
       onMessage?.({ nodeId: conn.node.nodeId, payload });

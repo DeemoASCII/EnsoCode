@@ -6,9 +6,12 @@ import type { RendererAgentEvent } from '@shared/types/agent';
 import type { BotChat } from '@shared/types/bot';
 import { app } from 'electron';
 import { requestSnapshot } from '../services/agentHost';
+import { BotActivityTracker } from '../services/bots/activityTracker';
 import {
+  type ActivityBinding,
   botSessionAccess,
   fitGroupTimelineFrame,
+  pairActivityItems,
   summarizeBotChat,
   toPairBotMember,
 } from '../services/pairBotFrames';
@@ -37,12 +40,18 @@ import { agentSessionIndex } from './capabilities';
 
 const TIMELINE_PAGE = 50;
 const PUSH_DEBOUNCE_MS = 250;
+/** 运行态节流：流式输出事件很密，按固定间隔合并 */
+const ACTIVITY_THROTTLE_MS = 500;
 
 type Services = NonNullable<ReturnType<typeof getBotServices>>;
 
 /** 本进程是否下发过 Bot 目录：关闭 Bot 模式后据此通知手机隐藏分段 */
 let announced = false;
 let pushTimer: NodeJS.Timeout | null = null;
+let activityTimer: NodeJS.Timeout | null = null;
+/** 上次下发的运行态（不含 now）：没变就不重推 */
+let activitySent = '';
+const activity = new BotActivityTracker(Date.now, (id) => Boolean(botConversation(id)));
 
 function enabledServices(): Services | null {
   return botModeEnabled() ? getBotServices() : null;
@@ -110,6 +119,37 @@ async function replyDirectory(services: Services, reply: PairReply): Promise<voi
   await reply(catalogFrame(services));
   await reply(chatsFrame(services));
   await reply(inboxFrame(services));
+  await reply(activityFrame(services));
+}
+
+function activityFrame(services: Services): Extract<HostToPhone, { type: 'bot-activity' }> {
+  const bindingOf = (id: string): ActivityBinding | undefined => {
+    const bot = botConversation(id)?.bot;
+    if (!bot) return undefined;
+    const delegationId = bot.delegationId;
+    const owner = delegationId ? services.delegations.parentBotOf(delegationId) : undefined;
+    return {
+      botId: bot.botId,
+      chatId: bot.chatId ?? (delegationId ? services.delegations.chatIdOf(delegationId) : null),
+      ...(owner ? { ownerBotId: owner } : {}),
+    };
+  };
+  const items = pairActivityItems(activity.list(), services.host.queueState(), bindingOf);
+  activitySent = JSON.stringify(items);
+  return { type: 'bot-activity', now: Date.now(), items };
+}
+
+/** 运行态节流重推；内容没变不发 */
+function scheduleActivity(): void {
+  if (activityTimer) return;
+  activityTimer = setTimeout(() => {
+    activityTimer = null;
+    const services = enabledServices();
+    if (!services || !announced) return;
+    const previous = activitySent;
+    const frame = activityFrame(services);
+    if (activitySent !== previous) broadcastPairFrame(frame);
+  }, ACTIVITY_THROTTLE_MS);
 }
 
 function inboxFrame(services: Services): HostToPhone {
@@ -267,8 +307,12 @@ export function registerPairBotHandlers(): void {
       return bot ? getBotServices()?.bots.get(bot.botId)?.name : undefined;
     },
     observe(event) {
-      if (!announced || event.type !== 'status') return;
-      if (botConversation(event.identity.sessionId) && botModeEnabled()) schedulePush();
+      if (!botModeEnabled()) return;
+      activity.apply(event);
+      if (!announced) return;
+      const id = 'identity' in event ? event.identity?.sessionId : undefined;
+      if (!id || botConversation(id)) scheduleActivity();
+      if (event.type === 'status' && id && botConversation(id)) schedulePush();
     },
   });
   observeBotEvents((event) => {
@@ -291,5 +335,6 @@ export function registerPairBotHandlers(): void {
       return;
     broadcastPairFrame({ type: 'bot-event', event: { ...event, kind: event.kind } });
     schedulePush();
+    if (event.kind === 'queue') scheduleActivity();
   });
 }

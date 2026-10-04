@@ -1,6 +1,4 @@
-import type { ProjectedMessage } from '@shared/types/agent';
-import type { SessionProjection } from '@/stores/sessions/reducer';
-import { detailOf } from './groupTimeline';
+import type { ProjectedMessage } from '../types/agent';
 
 export type LiveState = 'queued' | 'thinking' | 'typing' | 'tool' | 'retrying';
 
@@ -21,6 +19,27 @@ export interface LiveActivity {
   more: number;
 }
 
+const DETAIL_KEYS = ['path', 'command', 'pattern', 'query', 'url', 'prompt', 'name'];
+
+/** 工具参数的单行摘要（路径 / 命令 / 查询等） */
+export function detailOf(args: unknown): string {
+  if (!args || typeof args !== 'object') return '';
+  const record = args as Record<string, unknown>;
+  for (const key of DETAIL_KEYS) {
+    const value = record[key];
+    if (typeof value === 'string' && value.trim()) return value.trim().split('\n')[0].slice(0, 160);
+  }
+  return '';
+}
+
+export interface LiveSession {
+  status: string;
+  runStartedAt?: number;
+  retry?: unknown;
+  toolStartedAt?: Record<string, number>;
+  messages: readonly ProjectedMessage[];
+}
+
 const SHOWN = 3;
 const DETAIL_MAX = 80;
 const DENIED = 'User denied this operation';
@@ -33,11 +52,7 @@ const textOf = (message: ProjectedMessage) =>
 
 /** 成员当前轮的状态与最近工具步骤；空闲且未排队时为 undefined */
 export function liveActivity(
-  session:
-    | (Pick<SessionProjection, 'status' | 'runStartedAt' | 'retry' | 'toolStartedAt'> & {
-        messages: readonly ProjectedMessage[];
-      })
-    | undefined,
+  session: LiveSession | undefined,
   queued: boolean
 ): LiveActivity | undefined {
   if (session?.status !== 'running')

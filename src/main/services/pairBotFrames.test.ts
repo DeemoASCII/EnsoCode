@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   botSessionAccess,
   fitGroupTimelineFrame,
+  pairActivityItems,
   summarizeBotChat,
   toPairBotMember,
 } from './pairBotFrames';
@@ -154,5 +155,61 @@ describe('Bot 会话订阅放行', () => {
   it('开启时：worker 有投影走快照，否则读会话文件', () => {
     expect(botSessionAccess(botConversation, true, true)).toBe('live');
     expect(botSessionAccess(botConversation, true, false)).toBe('cold');
+  });
+});
+
+describe('pairActivityItems', () => {
+  const binding = (id: string) =>
+    id === 'run'
+      ? { botId: 'b1', chatId: 'g1' }
+      : id === 'child'
+        ? { botId: 'b2', chatId: 'g1', ownerBotId: 'b1' }
+        : id === 'wait'
+          ? { botId: 'b3', chatId: null }
+          : undefined;
+
+  it('运行中的步骤去掉 id；排队但未在跑的会话补 queued 与原因；未知会话丢弃', () => {
+    const items = pairActivityItems(
+      [
+        {
+          conversationId: 'run',
+          activity: {
+            state: 'tool',
+            startedAt: 10,
+            steps: [{ id: 'c1', name: 'bash', detail: 'ls', status: 'running', startedAt: 12 }],
+            more: 2,
+          },
+        },
+        { conversationId: 'code', activity: { state: 'thinking', steps: [], more: 0 } },
+      ],
+      [
+        { chatId: 'g1', botId: 'b1', conversationId: 'run', position: 0, reason: 'turn' },
+        { chatId: 'g1', botId: 'b2', conversationId: 'child', position: 1, reason: 'capacity' },
+        { chatId: '', botId: 'b3', conversationId: 'wait', position: 2 },
+      ],
+      binding
+    );
+    expect(items).toEqual([
+      {
+        conversationId: 'run',
+        botId: 'b1',
+        chatId: 'g1',
+        state: 'tool',
+        startedAt: 10,
+        steps: [{ name: 'bash', detail: 'ls', status: 'running', startedAt: 12 }],
+        more: 2,
+      },
+      {
+        conversationId: 'child',
+        botId: 'b2',
+        chatId: 'g1',
+        ownerBotId: 'b1',
+        state: 'queued',
+        reason: 'capacity',
+        steps: [],
+        more: 0,
+      },
+      { conversationId: 'wait', botId: 'b3', chatId: null, state: 'queued', steps: [], more: 0 },
+    ]);
   });
 });

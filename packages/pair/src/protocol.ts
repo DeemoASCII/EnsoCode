@@ -368,6 +368,35 @@ export interface PairBotChatState {
   pendingHuman: boolean;
 }
 
+export interface PairBotActivityStep {
+  name: string;
+  /** 参数单行摘要（≤80 字） */
+  detail: string;
+  status: 'running' | 'done' | 'error' | 'denied';
+  durationMs?: number;
+  /** 运行中步骤的开始时刻（host 时钟） */
+  startedAt?: number;
+}
+
+/** 成员会话的本轮运行态：正在跑或在排队的会话各一条 */
+export interface PairBotActivity {
+  conversationId: string;
+  botId: string;
+  /** 所属聊天；委派会话为发起委派的聊天 */
+  chatId: string | null;
+  /** 委派会话：替这位成员干活 */
+  ownerBotId?: string;
+  state: 'queued' | 'thinking' | 'typing' | 'tool' | 'retrying';
+  /** queued 的原因：turn = 等自己上一轮；capacity = 并发名额满 */
+  reason?: 'turn' | 'capacity';
+  /** 本轮开始时刻（host 时钟） */
+  startedAt?: number;
+  /** 本轮最近 3 个工具步骤 */
+  steps: PairBotActivityStep[];
+  /** 未列出的更早步骤数 */
+  more: number;
+}
+
 /**
  * 桌面下发的外观偏好，手机作为默认值（可本地覆盖）。
  * sync-terminal 表示整套 UI 配色由终端主题推导（与桌面同语义），
@@ -482,4 +511,6 @@ export type HostToPhone =
   /** 只读设备的写命令被 host 拦截（bot-send 走 bot-send-result）；旧手机忽略 */
   | { type: 'command-rejected'; command: string; error: 'read-only' }
   /** Bot 收件箱：未结束且未忽略的条目（新的在前），变化时整表重推 */
-  | { type: 'bot-inbox'; items: PairBotInboxItem[] };
+  | { type: 'bot-inbox'; items: PairBotInboxItem[] }
+  /** 成员实时运行态整表（变化时节流重推）；now 为 host 时钟，手机据此换算计时 */
+  | { type: 'bot-activity'; now: number; items: PairBotActivity[] };

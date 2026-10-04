@@ -1,3 +1,4 @@
+import { detailOf } from '@shared/bots/liveActivity';
 import type { ProjectedMessage } from '@shared/types/agent';
 import type { Delegation, GroupEntry } from '@shared/types/bot';
 
@@ -125,18 +126,6 @@ export interface TurnStep {
   name: string;
   detail: string;
   error: boolean;
-}
-
-const DETAIL_KEYS = ['path', 'command', 'pattern', 'query', 'url', 'prompt', 'name'];
-
-export function detailOf(args: unknown): string {
-  if (!args || typeof args !== 'object') return '';
-  const record = args as Record<string, unknown>;
-  for (const key of DETAIL_KEYS) {
-    const value = record[key];
-    if (typeof value === 'string' && value.trim()) return value.trim().split('\n')[0].slice(0, 160);
-  }
-  return '';
 }
 
 export function turnSteps(messages: readonly ProjectedMessage[]): TurnStep[] {

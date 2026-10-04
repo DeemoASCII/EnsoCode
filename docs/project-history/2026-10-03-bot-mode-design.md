@@ -699,3 +699,17 @@ Main 在 `spawnSession` 里根据 `ConversationAuthority.bot` 组装提示词，
 **测试**：`workspaceClaims.test`（不同文件并行、同文件等待释放、委派链不互阻、超时信息与只提示一次、中止、不同工作区、全局命令等文件释放且执行期间阻塞写、命令识别正反例、两种工具包装），`botSessionHost.lock.test`（同目录写成员直接开跑、spawn 带名字与祖先、只读不带、`onlyIfIdle` 与重试不再按忙、排队原因 turn / capacity），`agent.test`（`botWriteLock` 协议校验）。
 
 **真机**（隔离 userData，同一 git 项目，alice = Max claude-opus-5-5，bob = Grok grok-4.7-build-fast，两个私聊并发）：alice 写 shared.txt 后 `sleep 40`；bob 同时写 b.txt 立即完成（不排队），随后改 shared.txt 的 apply_patch 在 17:52:40 发出、等到 alice 本轮结束 17:52:51 才落盘。alice 新建 c.txt 后 `sleep 30` 期间，bob 的 `git commit` 在 17:53:52 发出、17:54:16 才执行（alice 17:54:15 结束）。
+
+## 手机端成员实时运行态（2026-10 补充）
+
+**动机**：手机群聊只有「XX 正在回复…」，看不到成员在干什么，委派子会话完全不可见。
+
+**协议**：新增下行帧 `bot-activity { now, items: PairBotActivity[] }`，整表、变化才推（500ms 节流，`bot-event queue` 也触发），连接 / 重同步时随目录一起发。每项 = 正在跑或在排队的 Bot 会话：`conversationId / botId / chatId`（委派会话取发起委派的聊天）/ `ownerBotId`（委派发起者）/ `state`（queued | thinking | typing | tool | retrying）/ `reason`（turn | capacity）/ `startedAt` / 最近 3 个工具步骤（名、参数摘要 ≤80、状态、耗时或开始时刻）/ `more`。`now` 为 host 时钟，手机按 `本机 − now` 换算计时，不受两端时钟差影响。旧手机与远程节点忽略该帧。
+
+**Main**：`BotActivityTracker`（`src/main/services/bots/activityTracker.ts`）从 `forwardAgentEvent` 的事件流维护 Bot 会话本轮状态，只留最后一条 user 起的消息；`status ≠ running` / turn-completed / turn-failed / worker-exited 清掉，未在跑的会话收到迟到消息不复活；快照里正在跑的会话补齐本轮消息。计算复用桌面同一个纯函数 `shared/bots/liveActivity.ts`（由 renderer 挪到 shared，`detailOf` 一起挪）。`pairActivityItems` 合并运行态与 `queueState()`，非 Bot 会话丢弃。
+
+**手机**：群聊时间线底部为每个运行 / 排队中的成员（含委派子会话「bob 替 alice」）一张卡片：状态、本轮计时、最近步骤（运行中转圈、完成、出错、已拒绝 + 耗时），点开进入该会话只读「过程」视图（委派子会话也能看）；抽屉里聊天行的摘要换成「成员：工具 参数」/ 状态。见过的会话 → 成员缓存，委派结束后过程视图仍显示成员名。
+
+**测试**：`activityTracker.test`（运行 / 步骤 / 完成清除、新一轮丢旧步骤、重试、失败与 idle、accept 过滤与快照、迟到消息、forget 与 worker 退出），`pairBotFrames.test`（去 step id、排队补原因、未知会话丢弃），手机 `botState.test`（状态文案、一行摘要、按聊天筛选排序、耗时格式）、`client.test`（帧分发与时钟差、缺 now 丢弃）。
+
+**真机**（隔离 userData，桌面 dev + 手机 PWA dev 经 enso-relay-dev 配对，alice = Max claude-opus-5-5，bob = Grok grok-4.7-build-fast）：群里让 alice 逐条跑 5 个 bash 并委派 bob 跑 3 个：手机同时出现两张卡片，alice「+2 个更早的步骤、ls ✓ 0s、sleep 8 ✓ 8s、cat nofile.txt ✗」，bob「替 alice · 调用工具 22s、sleep 12 转圈逐秒计时」；抽屉行显示「alice：bash sleep 8」；点 bob 卡片进入委派子会话过程，结束后标题仍为「bob · 过程」；回合结束卡片消失。
