@@ -29,6 +29,28 @@ beforeEach(() => {
 afterEach(() => vi.restoreAllMocks());
 
 describe('createSmartRouter', () => {
+  it('点名「大家 / 都 / everyone」时不问模型，全员按群成员顺序依次回复', async () => {
+    for (const message of [
+      '都自我介绍一下',
+      '大家说说各自的看法',
+      '各位报个到',
+      'everyone introduce yourselves',
+      'Each of you, say hi',
+    ])
+      expect(await router().select({ ...input, message }, signal)).toEqual({
+        ids: ['a', 'b', 'c'],
+      });
+    expect(judge).not.toHaveBeenCalled();
+    expect(classify).not.toHaveBeenCalled();
+  });
+
+  it('「都」不是在点名全员时照常问模型', async () => {
+    judge.mockResolvedValue('Bob');
+    for (const message of ['这些都改成蓝色', '都几点了接口还挂着', 'all tests failed'])
+      expect((await router().select({ ...input, message }, signal)).ids).toEqual(['b']);
+    expect(judge).toHaveBeenCalledTimes(3);
+  });
+
   it('未设置时走 judge（标题模型回退链），默认超时 3000ms', async () => {
     judge.mockResolvedValueOnce('Bob');
     expect(router().timeoutMs()).toBe(3000);

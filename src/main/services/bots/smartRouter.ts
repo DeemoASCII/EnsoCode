@@ -1,4 +1,5 @@
 import {
+  addressesEveryone,
   decideSmartRoute,
   guessSmartRouteIntent,
   parseSmartRouteIntent,
@@ -48,6 +49,9 @@ export function createSmartRouter(deps: SmartRouterDeps): GroupResponderSelector
   return {
     timeoutMs: () => config()?.timeoutMs ?? VIRTUAL_CLASSIFIER_DEFAULT_TIMEOUT_MS,
     async select(input: SmartRouteInput, signal: AbortSignal) {
+      // 点名全员时规则直出，不受模型挑人上限与置信度影响
+      if (addressesEveryone(input.message))
+        return { ids: input.candidates.map((candidate) => candidate.id) };
       const current = config();
       if (current?.source === 'pi-classifier') {
         const [probabilities, intents] = await Promise.all([

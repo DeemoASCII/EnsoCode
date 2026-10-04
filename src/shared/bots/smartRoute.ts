@@ -272,6 +272,16 @@ const BUILD_RE =
 const QUESTION_RE =
   /[?？]\s*$|吗|为什么|怎么|如何|是否|^\s*(?:what|how|why|when|where|which|who|is|are|does|do|should)\b/i;
 const REQUEST_RE = /请|帮我|帮忙|麻烦|给我|把|please|can you|could you|would you/i;
+const EVERYONE_ZH_RE =
+  /^[\s，,。]*(?:请|麻烦|那|好|来|下面|现在)?\s*(?:大家|各位|诸位|全体(?:成员)?|所有人|每个人|每位(?:成员)?|你们(?:都|每个人|各自|几个)?|都(?=来|说|讲|聊|谈|自我|介绍|报|发表|分享|表态|回答|回复|出来|给|写|做|看看))/;
+const EVERYONE_EN_RE =
+  /\b(?:everyone|everybody|all of you|each of you|you all|y'all|every one of you)\b/i;
+
+/** 人类没用 @ 但明确在点名全员（「大家 / 各位 / 都来…」「everyone」） */
+export function addressesEveryone(message: string): boolean {
+  const text = typeof message === 'string' ? message : '';
+  return EVERYONE_ZH_RE.test(text) || EVERYONE_EN_RE.test(text);
+}
 
 /** 意图关键词兜底（中英文）：讨论词优先；动作词且不是单纯提问（或带请求语气）→ build；其余 answer */
 export function guessSmartRouteIntent(message: string): SmartRouteIntent {
