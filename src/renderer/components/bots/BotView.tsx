@@ -4,7 +4,8 @@ import { ResizeHandle } from '@/components/chat/ResizeHandle';
 import { Button } from '@/components/ui/button';
 import { useI18n } from '@/i18n';
 import { useBotsStore } from '@/stores/bots';
-import { pendingItems, sessionOwners } from '@/stores/bots/selectors';
+import { interruptedDelegations, pendingOwners } from '@/stores/bots/delegations';
+import { pendingItems } from '@/stores/bots/selectors';
 import { BotChatView } from './BotChatView';
 import { BotInbox } from './BotInbox';
 import { BotSidebar, CountBadge } from './BotSidebar';
@@ -28,6 +29,8 @@ export function BotView({ sidebarWidth, collapsed, onToggleCollapse, onResize }:
   const chats = useBotsStore((s) => s.chats);
   const bots = useBotsStore((s) => s.bots);
   const sessions = useBotsStore((s) => s.sessions);
+  const delegations = useBotsStore((s) => s.delegations);
+  const dismissed = useBotsStore((s) => s.dismissedDelegations);
   const loaded = useBotsStore((s) => s.loaded);
   const setView = useBotsStore((s) => s.setView);
   const [newMember, setNewMember] = useState(false);
@@ -37,8 +40,10 @@ export function BotView({ sidebarWidth, collapsed, onToggleCollapse, onResize }:
 
   const chat = view?.kind === 'chat' ? chats.find((item) => item.id === view.chatId) : undefined;
   const inboxCount = useMemo(
-    () => pendingItems(sessions, sessionOwners(chats)).length,
-    [sessions, chats]
+    () =>
+      pendingItems(sessions, pendingOwners(chats, delegations)).length +
+      interruptedDelegations(delegations, dismissed).length,
+    [sessions, chats, delegations, dismissed]
   );
 
   // 记住的聊天已被删除：回到空态

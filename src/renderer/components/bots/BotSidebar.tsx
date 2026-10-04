@@ -27,13 +27,8 @@ import { useI18n } from '@/i18n';
 import { formatRelativeTime } from '@/lib/time';
 import { cn } from '@/lib/utils';
 import { useBotsStore } from '@/stores/bots';
-import {
-  type ChatSummary,
-  chatSummary,
-  pendingItems,
-  sessionOwners,
-  sortChats,
-} from '@/stores/bots/selectors';
+import { interruptedDelegations, pendingOwners } from '@/stores/bots/delegations';
+import { type ChatSummary, chatSummary, pendingItems, sortChats } from '@/stores/bots/selectors';
 import { isUnread } from '@/stores/bots/unread';
 import { BotAvatar, GroupAvatar } from './BotAvatar';
 import { chatErrorText, chatTitle } from './botText';
@@ -55,6 +50,8 @@ export function BotSidebar({ width, onCollapse, onNewMember, onNewGroup }: BotSi
   const chats = useBotsStore((s) => s.chats);
   const queue = useBotsStore((s) => s.queue);
   const sessions = useBotsStore((s) => s.sessions);
+  const delegations = useBotsStore((s) => s.delegations);
+  const dismissed = useBotsStore((s) => s.dismissedDelegations);
   const timelines = useBotsStore((s) => s.timelines);
   const reads = useBotsStore((s) => s.reads);
   const view = useBotsStore((s) => s.view);
@@ -67,13 +64,20 @@ export function BotSidebar({ width, onCollapse, onNewMember, onNewGroup }: BotSi
 
   const byId = useMemo(() => new Map(bots.map((bot) => [bot.id, bot])), [bots]);
   const names = useMemo(() => Object.fromEntries(bots.map((bot) => [bot.id, bot.name])), [bots]);
+  const pending = useMemo(
+    () => pendingItems(sessions, pendingOwners(chats, delegations)),
+    [sessions, chats, delegations]
+  );
   const rows = useMemo(
     () =>
       chats.map((chat) => ({
         chat,
-        summary: chatSummary(chat, { sessions, timeline: timelines[chat.id], queue, names }),
+        summary: {
+          ...chatSummary(chat, { sessions, timeline: timelines[chat.id], queue, names }),
+          pending: pending.filter((item) => item.chatId === chat.id).length,
+        },
       })),
-    [chats, sessions, timelines, queue, names]
+    [chats, sessions, timelines, queue, names, pending]
   );
   const groups = sortChats(rows.filter((row) => row.chat.kind === 'group' && !row.chat.archivedAt));
   const directByBot = new Map(
@@ -94,10 +98,7 @@ export function BotSidebar({ width, onCollapse, onNewMember, onNewGroup }: BotSi
     });
   const archivedChats = rows.filter((row) => row.chat.archivedAt !== undefined);
   const archivedBots = bots.filter((bot) => bot.archivedAt !== undefined);
-  const inboxCount = useMemo(
-    () => pendingItems(sessions, sessionOwners(chats)).length,
-    [sessions, chats]
-  );
+  const inboxCount = pending.length + interruptedDelegations(delegations, dismissed).length;
   const activeChatId = view?.kind === 'chat' ? view.chatId : null;
 
   const updateChat = async (chat: BotChat, patch: { pinned?: boolean; archived?: boolean }) => {

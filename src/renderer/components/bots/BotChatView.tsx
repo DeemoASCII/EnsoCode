@@ -15,18 +15,15 @@ import { addToast } from '@/components/ui/toast';
 import { useI18n } from '@/i18n';
 import { cn } from '@/lib/utils';
 import { useBotsStore } from '@/stores/bots';
-import {
-  chatSummary,
-  type PendingItem,
-  pendingItems,
-  sessionOwners,
-} from '@/stores/bots/selectors';
+import { activeDelegations, pendingOwners } from '@/stores/bots/delegations';
+import { chatSummary, type PendingItem, pendingItems } from '@/stores/bots/selectors';
 import { buildTimeline } from '@/stores/sessions/timeline';
 import { useSettingsStore } from '@/stores/settings';
 import { BotAvatar, GroupAvatar } from './BotAvatar';
 import { BotComposer } from './BotComposer';
 import { BotProfilePanel } from './BotProfilePanel';
 import { chatErrorText, chatTitle } from './botText';
+import { DelegationCard } from './DelegationCard';
 import { GroupInfoPanel } from './GroupInfoPanel';
 import { GroupTimeline } from './GroupTimeline';
 import { SessionHistoryDialog } from './SessionHistoryDialog';
@@ -49,6 +46,7 @@ export function BotChatView({ chat }: { chat: BotChat }) {
   const chats = useBotsStore((s) => s.chats);
   const sessions = useBotsStore((s) => s.sessions);
   const queue = useBotsStore((s) => s.queue);
+  const delegations = useBotsStore((s) => s.delegations);
   const timeline = useBotsStore((s) => s.timelines[chat.id]);
   const runtime = useBotsStore((s) => s.runtime[chat.id]);
   const markRead = useBotsStore((s) => s.markRead);
@@ -59,10 +57,30 @@ export function BotChatView({ chat }: { chat: BotChat }) {
   const names = useMemo(() => Object.fromEntries(bots.map((bot) => [bot.id, bot.name])), [bots]);
   const members = chat.members.map((id) => byId.get(id)).filter((bot): bot is BotProfile => !!bot);
   const summary = chatSummary(chat, { sessions, timeline, queue, names });
-  const pending = useMemo(
-    () => pendingItems(sessions, sessionOwners(chats), chat.id),
-    [sessions, chats, chat.id]
+  const chatDelegations = useMemo(
+    () => delegations.filter((item) => item.chatId === chat.id),
+    [delegations, chat.id]
   );
+  const pending = useMemo(
+    () => pendingItems(sessions, pendingOwners(chats, delegations), chat.id),
+    [sessions, chats, delegations, chat.id]
+  );
+
+  /** 只读会话的发言人：委派子会话 → 目标成员；否则按会话归属或时间线条目 */
+  const speakerOf = (conversationId: string): BotProfile | undefined => {
+    const delegated = chatDelegations.find((item) => item.childConversationId === conversationId);
+    if (delegated) return byId.get(delegated.targetBotId);
+    const owner = Object.entries(chat.sessions).find(
+      ([, session]) => session.conversationId === conversationId
+    )?.[0];
+    const entry = timeline?.entries.find(
+      (item) => item.kind === 'bot' && item.conversationId === conversationId
+    );
+    return byId.get(
+      owner ?? (entry?.kind === 'bot' ? entry.botId : chat.kind === 'direct' ? chat.members[0] : '')
+    );
+  };
+  const historySpeaker = history ? speakerOf(history.id) : undefined;
 
   useEffect(() => {
     markRead(summary.key, summary.marker);
@@ -175,13 +193,21 @@ export function BotChatView({ chat }: { chat: BotChat }) {
         </header>
 
         {direct ? (
-          <DirectTimeline chat={chat} bot={direct} />
+          <>
+            <ActiveDelegations
+              items={activeDelegations(chatDelegations, chat.id)}
+              bots={byId}
+              onOpenConversation={(id, title) => setHistory({ id, title })}
+            />
+            <DirectTimeline chat={chat} bot={direct} />
+          </>
         ) : (
           <GroupTimeline
             chat={chat}
             bots={byId}
             timeline={timeline}
             runtime={runtime}
+            delegations={chatDelegations}
             onLoadOlder={() => void useBotsStore.getState().loadOlder(chat.id)}
             onOpenConversation={(id, title) => setHistory({ id, title })}
           />
@@ -226,8 +252,46 @@ export function BotChatView({ chat }: { chat: BotChat }) {
       <SessionHistoryDialog
         conversationId={history?.id ?? null}
         title={history?.title ?? ''}
+        speaker={
+          historySpeaker
+            ? { name: historySpeaker.name, color: historySpeaker.avatar.color }
+            : undefined
+        }
         onClose={() => setHistory(null)}
       />
+    </div>
+  );
+}
+
+/** 私聊顶部：该成员发起、仍在进行的委派 */
+function ActiveDelegations({
+  items,
+  bots,
+  onOpenConversation,
+}: {
+  items: ReturnType<typeof activeDelegations>;
+  bots: Map<string, BotProfile>;
+  onOpenConversation: (conversationId: string, title: string) => void;
+}) {
+  const { t } = useI18n();
+  if (items.length === 0) return null;
+  return (
+    <div className="shrink-0 border-b bg-muted/30">
+      <div className={cn(CHAT_COL, 'py-2')}>
+        <div className="mb-1.5 text-muted-foreground text-xs">
+          {t('Delegations in progress · {{n}}', { n: items.length })}
+        </div>
+        <div className="flex max-h-56 flex-col gap-1.5 overflow-y-auto">
+          {items.map((record) => (
+            <DelegationCard
+              key={record.id}
+              record={record}
+              bots={bots}
+              onOpenConversation={onOpenConversation}
+            />
+          ))}
+        </div>
+      </div>
     </div>
   );
 }
@@ -292,8 +356,13 @@ function DirectTimeline({ chat, bot }: { chat: BotChat; bot: BotProfile }) {
   }, [items]);
 
   const host = useMemo(
-    () => ({ sessionId: conversationId, canRewind: false, canRetry: false }),
-    [conversationId]
+    () => ({
+      sessionId: conversationId,
+      canRewind: false,
+      canRetry: false,
+      speaker: { name: bot.name, color: bot.avatar.color },
+    }),
+    [conversationId, bot.name, bot.avatar.color]
   );
   const hasOlder = (projection?.historyBaseIndex ?? 0) > 0;
 
@@ -357,14 +426,21 @@ export function PendingBars({
     <>
       {[...groups.entries()].map(([conversationId, list]) => {
         const bot = bots.get(list[0].botId);
+        const delegation = list[0].delegation;
+        const name = bot?.name ?? t('Deleted member');
         const approvals = list.flatMap((item) => (item.kind === 'approval' ? [item.request] : []));
         const asks = list.flatMap((item) => (item.kind === 'ask' ? [item.request] : []));
         return (
           <div key={conversationId}>
-            {showNames && (
+            {(showNames || delegation) && (
               <div className="mb-1 flex items-center gap-1.5 text-muted-foreground text-xs">
                 <BotAvatar bot={bot} size="xs" />
-                {t('{{name}} needs you', { name: bot?.name ?? t('Deleted member') })}
+                {delegation
+                  ? t('{{name}} (on behalf of {{owner}}) needs you', {
+                      name,
+                      owner: bots.get(delegation.parentBotId)?.name ?? t('Deleted member'),
+                    })
+                  : t('{{name}} needs you', { name })}
               </div>
             )}
             <ApprovalBar

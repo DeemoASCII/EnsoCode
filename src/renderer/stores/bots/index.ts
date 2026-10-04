@@ -1,8 +1,9 @@
 import type { AttachedImage } from '@shared/types/agent';
-import type { BotChat, BotProfile, GroupEntry } from '@shared/types/bot';
+import type { BotChat, BotProfile, Delegation, GroupEntry } from '@shared/types/bot';
 import type { BotEvent, BotQueueItem, BotSendResult } from '@shared/types/botIpc';
 import { create } from 'zustand';
 import { applyHistoryPage, emptyProjection } from '@/stores/sessions/reducer';
+import { isActiveDelegation } from './delegations';
 import { mergeLatest, mergeOlder } from './groupTimeline';
 import { applyBotAgentEvent, type BotSessions, seedHistory } from './projection';
 import { chatSummary } from './selectors';
@@ -34,6 +35,7 @@ export type BotView = { kind: 'chat'; chatId: string } | { kind: 'inbox' } | nul
 const TIMELINE_PAGE = 50;
 const READS_KEY = 'enso-bot-reads';
 const VIEW_KEY = 'enso-bot-view';
+const DISMISSED_KEY = 'enso-bot-dismissed-delegations';
 
 function loadReads(): Record<string, number> | null {
   try {
@@ -52,12 +54,24 @@ function loadView(): BotView {
   return raw ? { kind: 'chat', chatId: raw } : null;
 }
 
+function loadDismissed(): string[] {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(DISMISSED_KEY) ?? '[]');
+    return Array.isArray(parsed) ? parsed.filter((id) => typeof id === 'string') : [];
+  } catch {
+    return [];
+  }
+}
+
 interface BotsState {
   enabled: boolean;
   loaded: boolean;
   bots: BotProfile[];
   chats: BotChat[];
   queue: BotQueueItem[];
+  delegations: Delegation[];
+  /** 收件箱里被忽略的中断委派 */
+  dismissedDelegations: string[];
   timelines: Record<string, TimelineState>;
   runtime: Record<string, ChatRuntime>;
   sessions: BotSessions;
@@ -69,6 +83,9 @@ interface BotsState {
   bind: () => () => void;
   refreshCatalog: () => Promise<void>;
   refreshChats: () => Promise<void>;
+  /** 拉委派列表，并跟踪进行中委派的子会话（审批/提问归属发起聊天） */
+  refreshDelegations: () => Promise<void>;
+  dismissDelegation: (id: string) => void;
   loadLatest: (chatId: string) => Promise<void>;
   loadOlder: (chatId: string) => Promise<void>;
   refreshRuntime: (chatId: string) => Promise<void>;
@@ -150,7 +167,10 @@ export const useBotsStore = create<BotsState>()((set, get) => {
         if (event.chatId) void get().refreshRuntime(event.chatId);
         break;
       case 'timeline':
+        if (event.chatId) void get().loadLatest(event.chatId);
+        break;
       case 'delegation':
+        void get().refreshDelegations();
         if (event.chatId) void get().loadLatest(event.chatId);
         break;
     }
@@ -162,6 +182,8 @@ export const useBotsStore = create<BotsState>()((set, get) => {
     bots: [],
     chats: [],
     queue: [],
+    delegations: [],
+    dismissedDelegations: loadDismissed(),
     timelines: {},
     runtime: {},
     sessions: {},
@@ -178,7 +200,11 @@ export const useBotsStore = create<BotsState>()((set, get) => {
         for (const id of result.resync) void window.electronAPI.agent.requestSnapshot(id);
       });
       void (async () => {
-        await Promise.all([get().refreshCatalog(), get().refreshChats()]);
+        await Promise.all([
+          get().refreshCatalog(),
+          get().refreshChats(),
+          get().refreshDelegations(),
+        ]);
         const groups = get().chats.filter((chat) => chat.kind === 'group');
         await Promise.all([
           ...groups.map((chat) => get().loadLatest(chat.id)),
@@ -206,6 +232,26 @@ export const useBotsStore = create<BotsState>()((set, get) => {
       for (const chat of result.chats) {
         if (chat.kind === 'group' && !get().runtime[chat.id]) void get().refreshRuntime(chat.id);
       }
+    },
+
+    refreshDelegations: async () => {
+      const result = await window.electronAPI.bots.delegations();
+      if (!result?.ok) return;
+      set({ delegations: result.delegations });
+      for (const item of result.delegations) {
+        if (
+          item.chatId &&
+          isActiveDelegation(item.state) &&
+          !get().sessions[item.childConversationId]
+        )
+          void get().trackSession(item.childConversationId);
+      }
+    },
+
+    dismissDelegation: (id) => {
+      const next = [...get().dismissedDelegations.filter((item) => item !== id), id];
+      localStorage.setItem(DISMISSED_KEY, JSON.stringify(next));
+      set({ dismissedDelegations: next });
     },
 
     loadLatest: async (chatId) => {

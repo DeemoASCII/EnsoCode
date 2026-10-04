@@ -13,6 +13,8 @@ export interface ChatHost {
   canRetry: boolean;
   /** 缺省跟随 canRewind；手机 PWA 开回退但不开分叉 */
   canFork?: boolean;
+  /** 回复头的发言人；缺省显示 Enso（Bot 模式显示成员名与头像色） */
+  speaker?: { name: string; color: string };
 }
 
 export const ChatHostContext = createContext<ChatHost | null>(null);

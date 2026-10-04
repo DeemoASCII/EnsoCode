@@ -10,6 +10,8 @@ interface SessionHistoryDialogProps {
   /** null = 关闭 */
   conversationId: string | null;
   title: string;
+  /** 回复头显示的成员 */
+  speaker?: { name: string; color: string };
   onClose: () => void;
 }
 
@@ -17,6 +19,7 @@ interface SessionHistoryDialogProps {
 export function SessionHistoryDialog({
   conversationId,
   title,
+  speaker,
   onClose,
 }: SessionHistoryDialogProps) {
   const { t } = useI18n();
@@ -67,9 +70,16 @@ export function SessionHistoryDialog({
         : [],
     [page]
   );
+  const speakerName = speaker?.name;
+  const speakerColor = speaker?.color;
   const host = useMemo(
-    () => ({ sessionId: conversationId, canRewind: false, canRetry: false }),
-    [conversationId]
+    () => ({
+      sessionId: conversationId,
+      canRewind: false,
+      canRetry: false,
+      speaker: speakerName && speakerColor ? { name: speakerName, color: speakerColor } : undefined,
+    }),
+    [conversationId, speakerName, speakerColor]
   );
 
   return (

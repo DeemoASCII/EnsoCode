@@ -617,12 +617,24 @@ export function isCompactRow(item: TimelineItem): boolean {
 
 /** 每轮回复的身份头：标识 + 模型 + 时间，挂在本轮首个 assistant 行之上 */
 export function ReplyHeader({ model, at }: { model?: string; at?: number }) {
+  const speaker = useChatHost()?.speaker;
   return (
     <div className="mb-2 flex h-6 min-w-0 items-center gap-2 text-xs select-none">
-      <span className="flex size-[22px] shrink-0 items-center justify-center rounded-[7px] border border-brand/20 bg-brand/8 text-brand dark:bg-brand/14">
-        <EnsoMark className="size-3.5" />
+      {speaker ? (
+        <span
+          className="flex size-[22px] shrink-0 items-center justify-center rounded-full font-semibold text-[11px] text-white"
+          style={{ backgroundColor: speaker.color }}
+        >
+          {[...speaker.name.trim()][0]?.toUpperCase() ?? '?'}
+        </span>
+      ) : (
+        <span className="flex size-[22px] shrink-0 items-center justify-center rounded-[7px] border border-brand/20 bg-brand/8 text-brand dark:bg-brand/14">
+          <EnsoMark className="size-3.5" />
+        </span>
+      )}
+      <span className="shrink-0 truncate text-[13px] font-semibold text-foreground">
+        {speaker?.name ?? 'Enso'}
       </span>
-      <span className="shrink-0 text-[13px] font-semibold text-foreground">Enso</span>
       {model && (
         <span className="min-w-0 truncate rounded-md bg-muted px-1.5 py-0.5 font-mono text-[11px] text-muted-foreground">
           {model}

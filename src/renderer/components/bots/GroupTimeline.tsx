@@ -1,5 +1,5 @@
 import type { ProjectedMessage } from '@shared/types/agent';
-import type { BotChat, BotProfile, GroupEntry } from '@shared/types/bot';
+import type { BotChat, BotProfile, Delegation, GroupEntry } from '@shared/types/bot';
 import { ChevronDown, ChevronRight, Loader2 } from 'lucide-react';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Markdown } from '@/components/chat/Markdown';
@@ -7,8 +7,10 @@ import { useI18n } from '@/i18n';
 import { toolLabel } from '@/lib/toolLabels';
 import { cn } from '@/lib/utils';
 import { type ChatRuntime, type TimelineState, useBotsStore } from '@/stores/bots';
+import { isRetried } from '@/stores/bots/delegations';
 import { buildRows, locateTurn, type TurnStep, turnSteps } from '@/stores/bots/groupTimeline';
 import { BotAvatar } from './BotAvatar';
+import { DelegationCard } from './DelegationCard';
 
 const timeOf = (at: number) =>
   new Date(at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
@@ -18,6 +20,8 @@ interface GroupTimelineProps {
   bots: Map<string, BotProfile>;
   timeline: TimelineState | undefined;
   runtime: ChatRuntime | undefined;
+  /** 本群全部委派记录；进行中的接在时间线末尾 */
+  delegations: Delegation[];
   onLoadOlder: () => void;
   onOpenConversation: (conversationId: string, title: string) => void;
 }
@@ -27,6 +31,7 @@ export function GroupTimeline({
   bots,
   timeline,
   runtime,
+  delegations,
   onLoadOlder,
   onOpenConversation,
 }: GroupTimelineProps) {
@@ -36,6 +41,23 @@ export function GroupTimeline({
   const prependRef = useRef<{ firstSeq: number; height: number } | null>(null);
   const entries = timeline?.entries ?? [];
   const rows = useMemo(() => buildRows(entries), [entries]);
+  const records = useMemo(
+    () =>
+      new Map(
+        delegations.map((item) => [
+          item.id,
+          { record: item, retried: isRetried(item, delegations) },
+        ])
+      ),
+    [delegations]
+  );
+  const active = useMemo(
+    () =>
+      delegations
+        .filter((item) => item.state === 'queued' || item.state === 'running')
+        .sort((a, b) => a.createdAt - b.createdAt),
+    [delegations]
+  );
   const replying = runtime?.current ? bots.get(runtime.current) : undefined;
   const replyingSession = useBotsStore((s) => {
     const id = runtime?.current ? chat.sessions[runtime.current]?.conversationId : undefined;
@@ -52,7 +74,7 @@ export function GroupTimeline({
   }, [chat.id]);
 
   // 上翻页落地后保持视口位置；底部新消息在贴底时跟随
-  // biome-ignore lint/correctness/useExhaustiveDependencies: 条目与 typing 变化是触发信号
+  // biome-ignore lint/correctness/useExhaustiveDependencies: 条目、委派与 typing 变化是触发信号
   useLayoutEffect(() => {
     const el = scrollRef.current;
     if (!el) return;
@@ -63,7 +85,7 @@ export function GroupTimeline({
       return;
     }
     if (atBottomRef.current) el.scrollTop = el.scrollHeight;
-  }, [entries, replying?.id, activity]);
+  }, [entries, active.length, replying?.id, activity]);
 
   useEffect(() => {
     if (!timeline?.loading) prependRef.current = null;
@@ -113,10 +135,19 @@ export function GroupTimeline({
               entry={row.entry}
               continued={row.continued}
               bots={bots}
+              records={records}
               onOpenConversation={onOpenConversation}
             />
           )
         )}
+        {active.map((record) => (
+          <DelegationCard
+            key={record.id}
+            record={record}
+            bots={bots}
+            onOpenConversation={onOpenConversation}
+          />
+        ))}
         {replying && (
           <div className="flex gap-2.5">
             <BotAvatar bot={replying} size="sm" busy />
@@ -163,11 +194,13 @@ function EntryRow({
   entry,
   continued,
   bots,
+  records,
   onOpenConversation,
 }: {
   entry: GroupEntry;
   continued: boolean;
   bots: Map<string, BotProfile>;
+  records: Map<string, { record: Delegation; retried: boolean }>;
   onOpenConversation: (conversationId: string, title: string) => void;
 }) {
   const { t } = useI18n();
@@ -189,26 +222,16 @@ function EntryRow({
           )}
         </div>
       );
-    case 'delegation': {
-      const from = bots.get(entry.from);
-      const to = bots.get(entry.to);
+    case 'delegation':
       return (
-        <div className="max-w-lg rounded-xl border bg-card px-3 py-2.5">
-          <div className="flex items-center gap-1.5 text-muted-foreground text-xs">
-            <BotAvatar bot={from} size="xs" />
-            <span className="text-foreground">{from?.name ?? t('Deleted member')}</span>
-            <span>→</span>
-            <BotAvatar bot={to} size="xs" />
-            <span className="text-foreground">{to?.name ?? t('Deleted member')}</span>
-            <span>· {t('Delegation')}</span>
-            <DelegationBadge state={entry.state} />
-            <span className="flex-1" />
-            <span>{timeOf(entry.at)}</span>
-          </div>
-          {entry.summary && <div className="mt-1.5 text-sm">{entry.summary}</div>}
-        </div>
+        <DelegationCard
+          record={records.get(entry.delegationId)?.record}
+          retried={records.get(entry.delegationId)?.retried}
+          entry={entry}
+          bots={bots}
+          onOpenConversation={onOpenConversation}
+        />
       );
-    }
     case 'bot': {
       const bot = bots.get(entry.botId);
       return (
@@ -236,26 +259,6 @@ function EntryRow({
       );
     }
   }
-}
-
-export function DelegationBadge({ state }: { state: string }) {
-  const { t } = useI18n();
-  const tone =
-    state === 'running' || state === 'queued'
-      ? 'bg-info/15 text-info'
-      : state === 'completed'
-        ? 'bg-success/15 text-success'
-        : state === 'failed'
-          ? 'bg-destructive/15 text-destructive'
-          : 'bg-muted text-muted-foreground';
-  const label: Record<string, string> = {
-    queued: t('Queued'),
-    running: t('In progress'),
-    completed: t('Completed'),
-    failed: t('Failed'),
-    canceled: t('Canceled'),
-  };
-  return <span className={cn('rounded px-1.5 text-[11px]', tone)}>{label[state] ?? state}</span>;
 }
 
 function MentionText({ text, bots }: { text: string; bots: Map<string, BotProfile> }) {

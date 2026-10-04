@@ -1,6 +1,5 @@
-import { describeCron } from '@shared/bots/cron';
 import type { ApprovalMode } from '@shared/types/agent';
-import type { BotChat, BotEngine, BotList, BotProfile, BotRoutine } from '@shared/types/bot';
+import type { BotChat, BotEngine, BotList, BotProfile } from '@shared/types/bot';
 import type { BotDraftInput, BotSessionRecord } from '@shared/types/botIpc';
 import { Archive, Download, Loader2, Trash2 } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
@@ -27,6 +26,7 @@ import {
 } from './BotFields';
 import { botErrorText, chatTitle } from './botText';
 import { MemorySpaceList } from './MemorySpaceList';
+import { RoutineList } from './RoutineList';
 
 interface FormState {
   name: string;
@@ -506,58 +506,6 @@ function DelegationField({
           ))}
         </div>
       )}
-    </div>
-  );
-}
-
-function RoutineList({ botId }: { botId: string }) {
-  const { t, locale } = useI18n();
-  const chats = useBotsStore((s) => s.chats);
-  const bots = useBotsStore((s) => s.bots);
-  const api = window.electronAPI.bots.routines;
-  const [routines, setRoutines] = useState<BotRoutine[] | null>(null);
-
-  useEffect(() => {
-    if (!api) return;
-    let alive = true;
-    const refresh = () => {
-      void api
-        .list({ botId })
-        .then((result) => alive && setRoutines(result.ok ? result.routines : []))
-        .catch(() => alive && setRoutines([]));
-    };
-    refresh();
-    const unsubscribe = window.electronAPI.bots.onEvent((event) => {
-      if (event.kind === 'routine') refresh();
-    });
-    return () => {
-      alive = false;
-      unsubscribe();
-    };
-  }, [api, botId]);
-
-  if (!api)
-    return <p className="text-muted-foreground text-xs">{t('Routines are coming soon.')}</p>;
-  if (routines === null) return <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />;
-  if (routines.length === 0)
-    return <p className="text-muted-foreground text-xs">{t('No routines yet')}</p>;
-  return (
-    <div className="space-y-1.5">
-      {routines.map((routine) => {
-        const chat = chats.find((item) => item.id === routine.chatId);
-        return (
-          <div key={routine.id} className="rounded-lg border bg-card px-2.5 py-2 text-xs">
-            <div className="font-medium">
-              {describeCron(routine.schedule, locale === 'zh' ? 'zh' : 'en')} · {routine.title}
-            </div>
-            <div className="text-muted-foreground">
-              {chat ? t('Posts to {{chat}}', { chat: chatTitle(chat, bots, t) }) : ''}
-              {routine.lastRunAt ? ` · ${new Date(routine.lastRunAt).toLocaleDateString()}` : ''}
-              {!routine.enabled ? ` · ${t('Paused')}` : ''}
-            </div>
-          </div>
-        );
-      })}
     </div>
   );
 }

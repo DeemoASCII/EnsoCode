@@ -1,4 +1,4 @@
-import type { BotProfile } from '@shared/types/bot';
+import type { BotProfile, Delegation } from '@shared/types/bot';
 import { Inbox } from 'lucide-react';
 import { useMemo, useState } from 'react';
 import { Button } from '@/components/ui/button';
@@ -6,18 +6,37 @@ import { Input } from '@/components/ui/input';
 import { useI18n } from '@/i18n';
 import { toolLabel } from '@/lib/toolLabels';
 import { useBotsStore } from '@/stores/bots';
-import { type PendingItem, pendingItems, sessionOwners } from '@/stores/bots/selectors';
+import { interruptedDelegations, pendingOwners } from '@/stores/bots/delegations';
+import { type PendingItem, pendingItems } from '@/stores/bots/selectors';
 import { BotAvatar } from './BotAvatar';
 import { chatTitle } from './botText';
+import { DelegationBadge, failureText, retryDelegation } from './DelegationCard';
+import { SessionHistoryDialog } from './SessionHistoryDialog';
 
-/** 收件箱：所有成员会话里待你处理的审批与提问 */
+/** 收件箱：成员会话与委派会话里待你处理的审批、提问，以及重启中断的委派 */
 export function BotInbox() {
   const { t } = useI18n();
   const sessions = useBotsStore((s) => s.sessions);
   const chats = useBotsStore((s) => s.chats);
   const bots = useBotsStore((s) => s.bots);
-  const items = useMemo(() => pendingItems(sessions, sessionOwners(chats)), [sessions, chats]);
+  const delegations = useBotsStore((s) => s.delegations);
+  const dismissed = useBotsStore((s) => s.dismissedDelegations);
+  const [history, setHistory] = useState<{ id: string; title: string; bot?: BotProfile } | null>(
+    null
+  );
+  const items = useMemo(
+    () => pendingItems(sessions, pendingOwners(chats, delegations)),
+    [sessions, chats, delegations]
+  );
+  const interrupted = useMemo(
+    () => interruptedDelegations(delegations, dismissed),
+    [delegations, dismissed]
+  );
   const byId = useMemo(() => new Map(bots.map((bot) => [bot.id, bot])), [bots]);
+  const chatName = (chatId: string | null) => {
+    const chat = chats.find((entry) => entry.id === chatId);
+    return chat ? chatTitle(chat, bots, t) : '';
+  };
 
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-background">
@@ -29,7 +48,7 @@ export function BotInbox() {
       </header>
       <div className="min-h-0 flex-1 overflow-y-auto">
         <div className="mx-auto w-full max-w-2xl space-y-2.5 px-6 py-4">
-          {items.length === 0 && (
+          {items.length === 0 && interrupted.length === 0 && (
             <div className="flex flex-col items-center gap-2 py-16 text-muted-foreground">
               <Inbox className="h-6 w-6" />
               <p className="text-sm">{t('Nothing needs your attention')}</p>
@@ -40,13 +59,101 @@ export function BotInbox() {
               key={`${item.conversationId}:${item.request.requestId}`}
               item={item}
               bot={byId.get(item.botId)}
-              chatName={(() => {
-                const chat = chats.find((entry) => entry.id === item.chatId);
-                return chat ? chatTitle(chat, bots, t) : '';
-              })()}
+              owner={item.delegation ? byId.get(item.delegation.parentBotId) : undefined}
+              chatName={chatName(item.chatId)}
+            />
+          ))}
+          {interrupted.length > 0 && (
+            <div className="pt-3 font-medium text-muted-foreground text-xs">
+              {t('Interrupted delegations')}
+            </div>
+          )}
+          {interrupted.map((record) => (
+            <InterruptedCard
+              key={record.id}
+              record={record}
+              bots={byId}
+              chatName={chatName(record.chatId)}
+              onOpen={(title) =>
+                setHistory({
+                  id: record.childConversationId,
+                  title,
+                  bot: byId.get(record.targetBotId),
+                })
+              }
             />
           ))}
         </div>
+      </div>
+      <SessionHistoryDialog
+        conversationId={history?.id ?? null}
+        title={history?.title ?? ''}
+        speaker={
+          history?.bot ? { name: history.bot.name, color: history.bot.avatar.color } : undefined
+        }
+        onClose={() => setHistory(null)}
+      />
+    </div>
+  );
+}
+
+function InterruptedCard({
+  record,
+  bots,
+  chatName,
+  onOpen,
+}: {
+  record: Delegation;
+  bots: Map<string, BotProfile>;
+  chatName: string;
+  onOpen: (title: string) => void;
+}) {
+  const { t } = useI18n();
+  const setView = useBotsStore((s) => s.setView);
+  const dismiss = useBotsStore((s) => s.dismissDelegation);
+  const from = bots.get(record.parentBotId);
+  const to = bots.get(record.targetBotId);
+  const fromName = from?.name ?? t('Deleted member');
+  const toName = to?.name ?? t('Deleted member');
+  return (
+    <div className="rounded-xl border bg-card p-3">
+      <div className="flex items-center gap-1.5 text-muted-foreground text-xs">
+        <BotAvatar bot={from} size="xs" />
+        <span className="text-foreground">{fromName}</span>
+        <span>→</span>
+        <BotAvatar bot={to} size="xs" />
+        <span className="text-foreground">{toName}</span>
+        <span>· {t('Delegation')}</span>
+        {chatName && <span>· {chatName}</span>}
+        <DelegationBadge state={record.state} interrupted />
+      </div>
+      <div className="mt-2 line-clamp-3 text-sm">{record.task}</div>
+      <div className="mt-1 text-muted-foreground text-xs">{failureText(record, t)}</div>
+      <div className="mt-2.5 flex flex-wrap items-center justify-end gap-1.5">
+        <Button size="xs" variant="ghost" onClick={() => dismiss(record.id)}>
+          {t('Dismiss')}
+        </Button>
+        {record.chatId && (
+          <Button
+            size="xs"
+            variant="ghost"
+            onClick={() => record.chatId && setView({ kind: 'chat', chatId: record.chatId })}
+          >
+            {t('Go to chat')}
+          </Button>
+        )}
+        <Button
+          size="xs"
+          variant="outline"
+          onClick={() =>
+            onOpen(t('{{from}} → {{to}} · Delegation', { from: fromName, to: toName }))
+          }
+        >
+          {t('View conversation')}
+        </Button>
+        <Button size="xs" onClick={() => retryDelegation(record.id, t)}>
+          {t('Retry')}
+        </Button>
       </div>
     </div>
   );
@@ -55,10 +162,12 @@ export function BotInbox() {
 function InboxCard({
   item,
   bot,
+  owner,
   chatName,
 }: {
   item: PendingItem;
   bot: BotProfile | undefined;
+  owner: BotProfile | undefined;
   chatName: string;
 }) {
   const { t } = useI18n();
@@ -88,7 +197,14 @@ function InboxCard({
     <div className="rounded-xl border bg-card p-3">
       <div className="flex items-center gap-2 text-muted-foreground text-xs">
         <BotAvatar bot={bot} size="sm" />
-        <span className="text-foreground">{bot?.name ?? t('Deleted member')}</span>
+        <span className="text-foreground">
+          {item.delegation
+            ? t('{{name}} on behalf of {{owner}}', {
+                name: bot?.name ?? t('Deleted member'),
+                owner: owner?.name ?? t('Deleted member'),
+              })
+            : (bot?.name ?? t('Deleted member'))}
+        </span>
         {chatName && <span>· {chatName}</span>}
         <span
           className={

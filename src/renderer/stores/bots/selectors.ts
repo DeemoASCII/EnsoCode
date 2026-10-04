@@ -7,6 +7,8 @@ import { directMarker, readKey } from './unread';
 export interface SessionOwner {
   chatId: string;
   botId: string;
+  /** 委派子会话：botId 替 parentBotId 执行 */
+  delegation?: { id: string; parentBotId: string };
 }
 
 /** 当前在用的成员会话 → 所属聊天/成员 */
