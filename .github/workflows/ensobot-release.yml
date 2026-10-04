@@ -5,6 +5,11 @@ on:
     tags:
       - 'ensobot-v*'
   workflow_dispatch:
+    inputs:
+      publish:
+        description: Create the EnsoBot version tag and prerelease only after all gates pass
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -38,6 +43,7 @@ jobs:
           assert.match(version, /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/);
           const config = parse(fs.readFileSync('electron-builder.ensobot.yml', 'utf8'));
           assert.equal(config.extraMetadata.version, version);
+          assert.ok(fs.existsSync(`docs/releases/ensobot-v${version}.md`));
           if (process.env.REF_TYPE === 'tag') assert.equal(process.env.REF_NAME, `ensobot-v${version}`);
           NODE
       - run: pnpm typecheck
@@ -46,6 +52,18 @@ jobs:
       - run: pnpm build:ensobot
         env:
           NODE_OPTIONS: --max-old-space-size=4096
+      - name: Simulated human frontend acceptance
+        run: |
+          ELECTRON_DIR=$(dirname "$(node -p "require('electron')")")
+          sudo chown root:root "$ELECTRON_DIR/chrome-sandbox"
+          sudo chmod 4755 "$ELECTRON_DIR/chrome-sandbox"
+          xvfb-run -a pnpm exec vitest run -c vitest.e2e.config.ts
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: ensobot-e2e
+          path: temp/e2e/ensobot/
+          retention-days: 7
       - uses: actions/upload-artifact@v6
         with:
           name: ensobot-app
@@ -145,7 +163,7 @@ jobs:
 
   release:
     needs: [package]
-    if: startsWith(github.ref, 'refs/tags/ensobot-v')
+    if: startsWith(github.ref, 'refs/tags/ensobot-v') || (github.event_name == 'workflow_dispatch' && inputs.publish == true)
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -172,7 +190,17 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ github.ref_name }}
+          REF_TYPE: ${{ github.ref_type }}
         run: |
           set -euo pipefail
+          if [ "$REF_TYPE" != tag ]; then
+            TAG="ensobot-v$(node -p "require('./ensobot-release.json').version")"
+            if [ -n "$(git ls-remote --tags origin "refs/tags/$TAG")" ]; then
+              echo "Tag $TAG already exists; refusing to move or reuse it."
+              exit 1
+            fi
+            git tag "$TAG" "$GITHUB_SHA"
+            git push origin "refs/tags/$TAG"
+          fi
           gh release create "$TAG" release-assets/* --verify-tag --prerelease --latest=false \
-            --title "EnsoBot ${TAG#ensobot-v} Preview" --notes-file docs/releases/ensobot-v0.0.1.md
+            --title "EnsoBot ${TAG#ensobot-v} Preview" --notes-file "docs/releases/${TAG}.md"

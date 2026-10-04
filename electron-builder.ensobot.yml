@@ -3,7 +3,7 @@ appId: com.j3n5en.ensobot
 productName: EnsoBot
 extraMetadata:
   name: ensobot
-  version: 0.0.1
+  version: 0.0.2
   description: EnsoBot - Private and group conversations with your AI team
 directories:
   output: dist/ensobot
@@ -15,6 +15,6 @@ generateUpdatesFilesForAllChannels: false
 # generic 只生成专属 ensobot*.yml；GitHub 资产由独立工作流统一上传，不走 v* 自动发布。
 publish:
   - provider: generic
-    url: https://github.com/J3n5en/EnsoCode/releases/download/ensobot-v0.0.1/
+    url: https://github.com/J3n5en/EnsoCode/releases/download/ensobot-v0.0.2/
     channel: ensobot
     useMultipleRangeRequest: false

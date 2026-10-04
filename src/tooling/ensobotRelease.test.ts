@@ -31,17 +31,26 @@ describe('EnsoBot 发布边界', () => {
     expect(workflow.on.push.tags).toEqual(['ensobot-v*']);
     expect(workflow.jobs.release.needs).toEqual(['package']);
     expect(workflow.jobs.package.needs).toEqual(['verify']);
+    expect(workflow.on.workflow_dispatch.inputs.publish.type).toBe('boolean');
+    expect(workflow.on.workflow_dispatch.inputs.publish.default).toBe(false);
     const gate = workflow.jobs.verify.steps
       .map((step: { run?: string }) => step.run ?? '')
       .join('\n');
     expect(gate).toContain('pnpm typecheck');
     expect(gate).toContain('pnpm lint');
     expect(gate).toContain('pnpm test');
+    expect(gate).toContain('vitest.e2e.config.ts');
     const publish = workflow.jobs.release.steps
       .map((step: { run?: string }) => step.run ?? '')
       .join('\n');
     expect(publish).toContain('--prerelease');
     expect(publish).toContain('--latest=false');
     expect(publish).toContain('--verify-tag');
+    expect(publish).toContain('git push origin "refs/tags/$TAG"');
+    expect(publish).not.toContain('--force');
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: 断言 shell 变量留在脚本中，而非 TS 插值。
+    expect(publish).toContain('--notes-file "docs/releases/${TAG}.md"');
+    const version = JSON.parse(read('ensobot-release.json')).version;
+    expect(read(`docs/releases/ensobot-v${version}.md`)).toContain(`EnsoBot ${version}`);
   });
 });
