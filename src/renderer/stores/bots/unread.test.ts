@@ -1,7 +1,7 @@
 import type { ProjectedMessage } from '@shared/types/agent';
 import { describe, expect, it } from 'vitest';
 import { emptyProjection } from '@/stores/sessions/reducer';
-import { directMarker, isUnread, readKey, seedReadMarks } from './unread';
+import { directMarker, isUnread, readKey, seedReadMarks, unreadMark } from './unread';
 
 const msg = (text: string, optimistic = false) =>
   ({ role: 'user', content: [{ type: 'text', text }], optimistic }) as ProjectedMessage;
@@ -44,5 +44,12 @@ describe('seedReadMarks', () => {
   it('已有记录时原样返回', () => {
     const marks = { a: 1 };
     expect(seedReadMarks(marks, { a: 5, b: 2 })).toBe(marks);
+  });
+});
+
+describe('unreadMark', () => {
+  it('把已读记号退回一格，聊天重新显示未读；没有任何活动时无法标未读', () => {
+    expect(isUnread(5, unreadMark(5))).toBe(true);
+    expect(unreadMark(0)).toBeUndefined();
   });
 });

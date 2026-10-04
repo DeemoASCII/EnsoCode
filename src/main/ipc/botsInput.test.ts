@@ -145,6 +145,28 @@ describe('chat inputs', () => {
       parseChatUpdateInput({ chatId: A, pinned: true, routing: { maxHops: 3 }, archived: false })
     ).toEqual({ chatId: A, pinned: true, routing: { maxHops: 3 }, archived: false });
     expect(parseChatUpdateInput({ chatId: A, sessions: {} })).toBeNull();
+    expect(
+      parseChatUpdateInput({
+        chatId: A,
+        settled: true,
+        snoozedUntil: 1_700_000_000_000,
+        pinOrder: 0,
+      })
+    ).toEqual({ chatId: A, settled: true, snoozedUntil: 1_700_000_000_000, pinOrder: 0 });
+    expect(parseChatUpdateInput({ chatId: A, snoozedUntil: null, pinOrder: null })).toEqual({
+      chatId: A,
+      snoozedUntil: null,
+      pinOrder: null,
+    });
+    for (const bad of [
+      { settled: 'yes' },
+      { snoozedUntil: 0 },
+      { snoozedUntil: 1.5 },
+      { snoozedUntil: '2026' },
+      { pinOrder: -1 },
+      { pinOrder: 1.2 },
+    ])
+      expect(parseChatUpdateInput({ chatId: A, ...bad })).toBeNull();
     expect(parseChatUpdateInput({ chatId: A, routing: { maxHops: 'x' } })).toBeNull();
   });
 

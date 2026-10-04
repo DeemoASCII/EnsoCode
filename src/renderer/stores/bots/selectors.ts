@@ -148,10 +148,39 @@ export function chatSummary(
   };
 }
 
-/** 置顶优先，其余按最近活动倒序 */
+const pinRank = (chat: BotChat) => chat.pinOrder ?? Number.POSITIVE_INFINITY;
+
+/** 置顶优先（置顶内按手动顺序，未排过的在后），其余按最近活动倒序 */
 export function sortChats<T extends { chat: BotChat; summary: ChatSummary }>(rows: T[]): T[] {
-  return [...rows].sort(
-    (a, b) =>
-      Number(b.chat.pinned) - Number(a.chat.pinned) || b.summary.activityAt - a.summary.activityAt
+  return [...rows].sort((a, b) => {
+    const pinned = Number(b.chat.pinned) - Number(a.chat.pinned);
+    if (pinned || !a.chat.pinned) return pinned || b.summary.activityAt - a.summary.activityAt;
+    const ra = pinRank(a.chat);
+    const rb = pinRank(b.chat);
+    return ra === rb ? b.summary.activityAt - a.summary.activityAt : ra < rb ? -1 : 1;
+  });
+}
+
+/** 置顶内拖拽 / 上下移动：按新位置重新编号 0..n-1，只返回顺序变化的聊天 */
+export function reorderPinned(
+  ids: readonly string[],
+  chatId: string,
+  toIndex: number,
+  current: Readonly<Record<string, number | undefined>> = {}
+): { chatId: string; pinOrder: number }[] {
+  const from = ids.indexOf(chatId);
+  if (from < 0) return [];
+  const next = ids.filter((id) => id !== chatId);
+  next.splice(Math.max(0, Math.min(toIndex, next.length)), 0, chatId);
+  return next.flatMap((id, pinOrder) =>
+    current[id] === pinOrder ? [] : [{ chatId: id, pinOrder }]
   );
+}
+
+/** 稍后提醒的预设时间 */
+export function snoozeTimes(now: number): { hour: number; later: number; tomorrow: number } {
+  const tomorrow = new Date(now);
+  tomorrow.setDate(tomorrow.getDate() + 1);
+  tomorrow.setHours(9, 0, 0, 0);
+  return { hour: now + 3_600_000, later: now + 3 * 3_600_000, tomorrow: tomorrow.getTime() };
 }

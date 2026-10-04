@@ -24,7 +24,7 @@ import { botPendingCount, isActiveDelegation } from './delegations';
 import { mergeLatest, mergeOlder } from './groupTimeline';
 import { applyBotAgentEvent, type BotSessions, seedHistory } from './projection';
 import { chatSummary } from './selectors';
-import { seedReadMarks } from './unread';
+import { seedReadMarks, unreadMark } from './unread';
 
 /**
  * Bot 模式 store：成员/聊天目录、群时间线、成员会话投影。
@@ -144,6 +144,8 @@ interface BotsState {
   togglePanel: () => void;
   nudgePanelWidth: (delta: number, workspaceWidth: number) => void;
   markRead: (key: string, marker: number) => void;
+  /** 手动标为未读：已读记号退回一格 */
+  markUnread: (chatId: string) => void;
   send: (chatId: string, text: string, images: AttachedImage[]) => Promise<BotSendResult>;
   stop: (chatId: string) => Promise<void>;
   /** 打开与成员的私聊；没有就建一个 */
@@ -243,6 +245,12 @@ export const useBotsStore = create<BotsState>()((set, get) => {
         break;
       case 'tasks':
         if (event.chatId && get().tasks[event.chatId]) void get().refreshTasks(event.chatId);
+        break;
+      case 'reminder':
+        // Main 已取消搁置；提醒到点的聊天标为未读
+        void get()
+          .refreshChats()
+          .then(() => event.chatId && get().markUnread(event.chatId));
         break;
       case 'budget':
         void get().refreshUsage();
@@ -548,6 +556,23 @@ export const useBotsStore = create<BotsState>()((set, get) => {
       const reads = get().reads;
       if (reads[key] === marker) return;
       const next = { ...reads, [key]: marker };
+      saveReads(next);
+      set({ reads: next });
+    },
+
+    markUnread: (chatId) => {
+      const { chats, sessions, timelines, queue } = get();
+      const chat = chats.find((item) => item.id === chatId);
+      if (!chat) return;
+      const summary = chatSummary(chat, {
+        sessions,
+        timeline: timelines[chat.id],
+        queue,
+        names: names(),
+      });
+      const mark = unreadMark(summary.marker);
+      if (mark === undefined) return;
+      const next = { ...get().reads, [summary.key]: mark };
       saveReads(next);
       set({ reads: next });
     },

@@ -78,6 +78,12 @@ export interface BotChat {
   routing: BotChatRouting;
   pinned: boolean;
   archivedAt?: number;
+  /** 搁置 / 结案：侧栏移到「已搁置」，有新消息时自动取消 */
+  settledAt?: number;
+  /** 稍后提醒：到点 Main 取消搁置并提醒；设置时一并搁置 */
+  snoozedUntil?: number;
+  /** 置顶内的手动顺序（小的在前）；只在 pinned 时有效 */
+  pinOrder?: number;
   sessions: Record<BotId, BotChatSession>;
   createdAt: number;
   updatedAt: number;
@@ -455,6 +461,9 @@ export function parseBotChat(value: unknown): BotChat | undefined {
     version: Number.isSafeInteger(value.version) ? (value.version as number) : 0,
   };
   if (isTime(value.archivedAt)) chat.archivedAt = value.archivedAt;
+  if (isTime(value.settledAt)) chat.settledAt = value.settledAt;
+  if (isTime(value.snoozedUntil)) chat.snoozedUntil = value.snoozedUntil;
+  if (chat.pinned && isSeq(value.pinOrder)) chat.pinOrder = value.pinOrder;
   return chat;
 }
 

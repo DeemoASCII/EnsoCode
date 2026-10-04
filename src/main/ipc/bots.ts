@@ -1,7 +1,9 @@
 import { randomUUID } from 'node:crypto';
 import { mkdirSync, rmSync } from 'node:fs';
 import path from 'node:path';
+import { applyChatFlags, wakeOnActivity } from '@shared/bots/chatFlags';
 import { BOT_NOTES_MAX_CHARS } from '@shared/bots/notes';
+import { isSkipReply } from '@shared/bots/router';
 import { assignTeamNames } from '@shared/bots/team';
 import type { SessionIdentity } from '@shared/builtinAgents';
 import { BUILTIN_AGENT_TYPES, IPC_CHANNELS } from '@shared/types';
@@ -65,6 +67,7 @@ import { type BotRuntimePort, BotSessionHost } from '../services/bots/botSession
 import { BotStore } from '../services/bots/botStore';
 import { directTurnNotice, groupBatchNotice } from '../services/bots/botTurnNotice';
 import { BotUsageService } from '../services/bots/botUsage';
+import { ChatSnoozeTimer } from '../services/bots/chatSnooze';
 import { BotChatStore } from '../services/bots/chatStore';
 import { turnDelegationTargets } from '../services/bots/delegationBatch';
 import { delegationPolicy } from '../services/bots/delegationPolicy';
@@ -133,6 +136,7 @@ interface BotServices {
   runner: RoutineRunner;
   tasks: GroupTaskService;
   usage: BotUsageService;
+  snooze: ChatSnoozeTimer;
 }
 
 type GroupSender = (
@@ -159,6 +163,7 @@ export function botModeEnabled(): boolean {
 
 export function emitBotEvent(event: BotEvent): void {
   if (event.kind === 'catalog' || event.kind === 'chat') services?.scheduler.refresh();
+  if (event.kind === 'chat') services?.snooze.refresh();
   try {
     sendToAllWindows(IPC_CHANNELS.BOT_EVENT, event);
   } catch {
@@ -187,6 +192,14 @@ function notifyQuietly(chatId: string, build: Parameters<typeof notifyBotChat>[1
   void notifyBotChat(chatId, build).catch((error) =>
     console.warn('[bots] notification failed', error)
   );
+}
+
+/** 新消息让已搁置的聊天回到进行中 */
+function wakeChat(chats: BotChatStore, chatId: string): void {
+  const chat = chats.get(chatId);
+  if (!chat || !wakeOnActivity(chat)) return;
+  if (chats.update(chatId, (draft) => wakeOnActivity(draft) ?? draft))
+    emitBotEvent({ kind: 'chat', chatId });
 }
 
 function rootIdentity(conversationId: string): SessionIdentity | undefined {
@@ -386,6 +399,7 @@ export function getBotServices(): BotServices | null {
   host.onTurnFinished((event) => {
     // 私聊每轮一条；群聊按接力批次合并（onBatchSettled）；委派结果回到发起方再通知；用户停止不报
     const chat = event.chatId && !event.delegationId ? chats.get(event.chatId) : undefined;
+    if (chat && event.ok && event.text.trim() && !isSkipReply(event.text)) wakeChat(chats, chat.id);
     if (chat?.kind !== 'direct' || event.error === 'canceled') return;
     const name = bots.get(event.botId)?.name ?? '?';
     notifyQuietly(chat.id, (lang) =>
@@ -475,6 +489,19 @@ export function getBotServices(): BotServices | null {
     if (scope.conversationId) memory.remove(scope.conversationId);
   });
   setBotGroupSender((chat, text, options) => groups.send(chat.id, text, options));
+  const snooze = new ChatSnoozeTimer({
+    chats,
+    onDue: (chat) => {
+      emitBotEvent({ kind: 'reminder', chatId: chat.id });
+      emitBotEvent({ kind: 'chat', chatId: chat.id });
+      const title =
+        chat.kind === 'group' ? chat.title : (bots.get(chat.members[0])?.name ?? chat.title);
+      notifyQuietly(chat.id, (lang) => ({
+        title: lang === 'zh' ? `稍后提醒 · ${title}` : `Reminder · ${title}`,
+        body: lang === 'zh' ? '到时间回来看看这个聊天了。' : 'Time to get back to this chat.',
+      }));
+    },
+  });
   services = {
     bots,
     chats,
@@ -489,8 +516,10 @@ export function getBotServices(): BotServices | null {
     runner,
     tasks,
     usage,
+    snooze,
   };
   if (botModeEnabled()) scheduler.start();
+  snooze.refresh();
   return services;
 }
 
@@ -505,6 +534,7 @@ export function syncBotModeServices(): void {
     previous.host.dispose();
     previous.runner.dispose();
     previous.memory.dispose();
+    previous.snooze.dispose();
     setBotWorkerEventObserver(null);
     setBotGroupSender(null);
     services = null;
@@ -633,6 +663,8 @@ export async function sendBotMessage(
   const chat = input ? chats.get(input.chatId) : undefined;
   if (!input || !chat) return INVALID;
   if (chat.archivedAt !== undefined) return { ok: false, error: 'chat-archived' };
+  // 人类在已搁置的聊天里发言：回到进行中
+  wakeChat(chats, chat.id);
   const options = {
     deliveryId: input.deliveryId,
     ...(input.images ? { images: input.images } : {}),
@@ -1162,7 +1194,6 @@ export function registerBotHandlers(): void {
       const at = Date.now();
       const chat = services.chats.update(current.id, (draft) => {
         if (input.title !== undefined) draft.title = input.title;
-        if (input.pinned !== undefined) draft.pinned = input.pinned;
         if (input.archived === true) draft.archivedAt = at;
         if (input.archived === false) delete draft.archivedAt;
         if (input.members) draft.members = input.members;
@@ -1170,7 +1201,7 @@ export function registerBotHandlers(): void {
         if (input.routing) draft.routing = { ...draft.routing, ...input.routing };
         if (workspace) draft.workspace = workspace;
         if (workspaceChanged) draft.sessions = {};
-        return draft;
+        return applyChatFlags(draft, input, at);
       });
       if (!chat) return INVALID;
       for (const [botId, session] of Object.entries(before)) {

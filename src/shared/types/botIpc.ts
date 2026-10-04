@@ -92,6 +92,12 @@ export interface BotChatUpdateInput {
   title?: string;
   pinned?: boolean;
   archived?: boolean;
+  /** 搁置（置顶会同时取消）/ 回到进行中（同时取消提醒） */
+  settled?: boolean;
+  /** 稍后提醒的时间（隐含搁置）；null 取消提醒 */
+  snoozedUntil?: number | null;
+  /** 置顶内顺序；null 清除 */
+  pinOrder?: number | null;
   members?: string[];
   bossBotId?: string | null;
   routing?: Partial<BotChat['routing']>;
@@ -114,6 +120,8 @@ export type BotEventKind =
   | 'budget'
   /** 运行中的成员会话进入 / 退出静默（BotSilence）；renderer 刷新聊天运行态 */
   | 'silence'
+  /** 稍后提醒到点（带 chatId）：Main 已取消搁置，renderer 标为未读；手机端不转发 */
+  | 'reminder'
   /** 点击系统通知：切到 Bot 模式并打开 chatId 或 conversationId 所属聊天；只发给主窗口 */
   | 'open';
 

@@ -180,6 +180,18 @@ describe('parseBotChat', () => {
     expect(parseBotChat(group)).toEqual(group);
   });
 
+  it('keeps settle / snooze times and the pin order only while pinned', () => {
+    expect(parseBotChat({ ...group, settledAt: 5, snoozedUntil: 9, pinOrder: 2 })).toMatchObject({
+      settledAt: 5,
+      snoozedUntil: 9,
+    });
+    expect(parseBotChat({ ...group, pinOrder: 2 })?.pinOrder).toBeUndefined();
+    expect(parseBotChat({ ...group, pinned: true, pinOrder: 2 })?.pinOrder).toBe(2);
+    const dirty = parseBotChat({ ...group, pinned: true, pinOrder: -1, settledAt: 'x' });
+    expect(dirty?.pinOrder).toBeUndefined();
+    expect(dirty?.settledAt).toBeUndefined();
+  });
+
   it('accepts a direct chat with member home', () => {
     const direct = {
       ...group,

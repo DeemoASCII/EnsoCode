@@ -27,6 +27,7 @@ vi.mock('electron', () => ({
 }));
 vi.mock('../windows/MainWindow', () => ({ isMainWebContents: mocks.isMain }));
 vi.mock('../windows/createAppWindow', () => ({ sendToAllWindows: vi.fn() }));
+vi.mock('../services/notifications', () => ({ notifyBotChat: vi.fn(async () => {}) }));
 vi.mock('../services/oauthProviders', () => ({
   readStoredOauthCredentialKeys: async () => new Set<string>(),
 }));
@@ -660,5 +661,44 @@ describe('例行任务生命周期', () => {
       status: 'blocked',
       blockedReason: 'not-in-chat',
     });
+  });
+});
+
+describe('聊天管理', () => {
+  it('搁置会取消置顶，稍后提醒隐含搁置，置顶顺序只在置顶时保留；人类发言取消搁置', async () => {
+    const alice = await createBot('Alice');
+    const created = await call(IPC_CHANNELS.BOT_CHAT_CREATE, {
+      kind: 'direct',
+      members: [alice],
+      workspace: { kind: 'member-home' },
+    });
+    const chatId = (created.chat as { id: string }).id;
+    const update = async (patch: Record<string, unknown>) =>
+      (await call(IPC_CHANNELS.BOT_CHAT_UPDATE, { chatId, ...patch })).chat as Record<
+        string,
+        unknown
+      >;
+    expect(await update({ pinned: true, pinOrder: 2 })).toMatchObject({
+      pinned: true,
+      pinOrder: 2,
+    });
+    const settled = await update({ settled: true });
+    expect(settled).toMatchObject({ pinned: false });
+    expect(settled.settledAt).toEqual(expect.any(Number));
+    expect(settled.pinOrder).toBeUndefined();
+    const until = Date.now() + 3_600_000;
+    expect(await update({ settled: false, snoozedUntil: until })).toMatchObject({
+      snoozedUntil: until,
+      settledAt: expect.any(Number),
+    });
+    expect(await call(IPC_CHANNELS.BOT_CHAT_UPDATE, { chatId, snoozedUntil: -5 })).toEqual({
+      ok: false,
+      error: 'invalid',
+    });
+    await call(IPC_CHANNELS.BOT_SEND, { chatId, text: 'back', deliveryId: 'w1' });
+    const list = await call(IPC_CHANNELS.BOT_CHATS_LIST);
+    const chat = (list.chats as Record<string, unknown>[]).find((item) => item.id === chatId);
+    expect(chat?.settledAt).toBeUndefined();
+    expect(chat?.snoozedUntil).toBeUndefined();
   });
 });

@@ -272,6 +272,9 @@ export function parseChatUpdateInput(value: unknown): ChatUpdateInput | null {
     'bossBotId',
     'routing',
     'workspace',
+    'settled',
+    'snoozedUntil',
+    'pinOrder',
   ];
   if (!input || !onlyKeys(input, keys) || !isBotId(input.chatId)) return null;
   const result: ChatUpdateInput = { chatId: input.chatId };
@@ -283,10 +286,19 @@ export function parseChatUpdateInput(value: unknown): ChatUpdateInput | null {
     if (!text(input.title, MAX.short)) return null;
     result.title = input.title;
   }
-  for (const key of ['pinned', 'archived'] as const) {
+  for (const key of ['pinned', 'archived', 'settled'] as const) {
     if (input[key] === undefined) continue;
     if (typeof input[key] !== 'boolean') return null;
     result[key] = input[key];
+  }
+  if (input.snoozedUntil !== undefined) {
+    if (input.snoozedUntil !== null && !(seq(input.snoozedUntil) && input.snoozedUntil > 0))
+      return null;
+    result.snoozedUntil = input.snoozedUntil;
+  }
+  if (input.pinOrder !== undefined) {
+    if (input.pinOrder !== null && !seq(input.pinOrder)) return null;
+    result.pinOrder = input.pinOrder;
   }
   if (input.members !== undefined) {
     if (

@@ -16,6 +16,11 @@ export function isUnread(marker: number, read: number | undefined): boolean {
   return marker > (read ?? 0);
 }
 
+/** 手动标为未读：已读记号退回一格；还没有任何活动时返回 undefined */
+export function unreadMark(marker: number): number | undefined {
+  return marker > 0 ? marker - 1 : undefined;
+}
+
 /** 首次使用（无任何记录）时当前活动全部视为已读 */
 export function seedReadMarks(
   marks: Record<string, number> | null,

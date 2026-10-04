@@ -1,13 +1,20 @@
 import type { BotChat, BotProfile } from '@shared/types/bot';
+import type { BotChatUpdateInput } from '@shared/types/botIpc';
 import {
+  AlarmClock,
   Archive,
   ArchiveRestore,
+  ArrowDown,
+  ArrowUp,
+  CircleCheck,
   Inbox,
   LayoutTemplate,
+  Mail,
   PanelLeftClose,
   Pin,
   PinOff,
   Plus,
+  RotateCcw,
   Settings,
   Trash2,
   UserPlus,
@@ -21,6 +28,9 @@ import {
   ContextMenuItem,
   ContextMenuPopup,
   ContextMenuSeparator,
+  ContextMenuSub,
+  ContextMenuSubPopup,
+  ContextMenuSubTrigger,
   ContextMenuTrigger,
 } from '@/components/ui/context-menu';
 import { addToast } from '@/components/ui/toast';
@@ -29,8 +39,15 @@ import { formatRelativeTime } from '@/lib/time';
 import { cn } from '@/lib/utils';
 import { useBotPendingCount, useBotsStore } from '@/stores/bots';
 import { pendingOwners } from '@/stores/bots/delegations';
-import { type ChatSummary, chatSummary, pendingItems, sortChats } from '@/stores/bots/selectors';
-import { isUnread } from '@/stores/bots/unread';
+import {
+  type ChatSummary,
+  chatSummary,
+  pendingItems,
+  reorderPinned,
+  snoozeTimes,
+  sortChats,
+} from '@/stores/bots/selectors';
+import { isUnread, unreadMark } from '@/stores/bots/unread';
 import { BotAvatar, GroupAvatar } from './BotAvatar';
 import { BotSearchButton } from './BotSearchDialog';
 import { chatErrorText, chatTitle } from './botText';
@@ -86,33 +103,116 @@ export function BotSidebar({
       })),
     [chats, sessions, timelines, queue, names, pending]
   );
-  const groups = sortChats(rows.filter((row) => row.chat.kind === 'group' && !row.chat.archivedAt));
+  const live = rows.filter((row) => !row.chat.archivedAt);
+  const groups = sortChats(
+    live.filter((row) => row.chat.kind === 'group' && row.chat.settledAt === undefined)
+  );
   const directByBot = new Map(
-    rows
-      .filter((row) => row.chat.kind === 'direct' && !row.chat.archivedAt)
-      .map((row) => [row.chat.members[0], row])
+    live.filter((row) => row.chat.kind === 'direct').map((row) => [row.chat.members[0], row])
   );
   const members = bots
-    .filter((bot) => bot.archivedAt === undefined)
+    .filter(
+      (bot) => bot.archivedAt === undefined && directByBot.get(bot.id)?.chat.settledAt === undefined
+    )
     .map((bot) => ({ bot, row: directByBot.get(bot.id) }))
     .sort((a, b) => {
       const pin = Number(b.row?.chat.pinned ?? false) - Number(a.row?.chat.pinned ?? false);
+      const order =
+        (a.row?.chat.pinOrder ?? Number.POSITIVE_INFINITY) -
+        (b.row?.chat.pinOrder ?? Number.POSITIVE_INFINITY);
       return (
         pin ||
+        (a.row?.chat.pinned && order ? order : 0) ||
         (b.row?.summary.activityAt ?? b.bot.updatedAt) -
           (a.row?.summary.activityAt ?? a.bot.updatedAt)
       );
     });
+  /** 已搁置：最近搁置的在前；成员已归档的私聊不列 */
+  const settled = live
+    .filter(
+      (row) =>
+        row.chat.settledAt !== undefined &&
+        (row.chat.kind === 'group' || byId.get(row.chat.members[0])?.archivedAt === undefined)
+    )
+    .sort((a, b) => (b.chat.settledAt ?? 0) - (a.chat.settledAt ?? 0));
+  const pinnedGroups = groups.filter((row) => row.chat.pinned).map((row) => row.chat.id);
+  const pinnedDirects = members.flatMap(({ row }) => (row?.chat.pinned ? [row.chat.id] : []));
+  const [dragging, setDragging] = useState<string | null>(null);
+  const [showSettled, setShowSettled] = useState(true);
   const archivedChats = rows.filter((row) => row.chat.archivedAt !== undefined);
   const archivedBots = bots.filter((bot) => bot.archivedAt !== undefined);
   const inboxCount = useBotPendingCount();
   const activeChatId = view?.kind === 'chat' ? view.chatId : null;
 
-  const updateChat = async (chat: BotChat, patch: { pinned?: boolean; archived?: boolean }) => {
+  const updateChat = async (chat: BotChat, patch: Omit<BotChatUpdateInput, 'chatId'>) => {
     const result = await window.electronAPI.bots.updateChat({ chatId: chat.id, ...patch });
     if (result.ok) upsertChat(result.chat);
     else addToast({ type: 'error', title: chatErrorText(result.error, t) });
   };
+  /** 置顶时排到置顶末尾 */
+  const togglePin = (chat: BotChat) =>
+    updateChat(
+      chat,
+      chat.pinned
+        ? { pinned: false }
+        : {
+            pinned: true,
+            pinOrder:
+              Math.max(
+                -1,
+                ...chats.filter((item) => item.pinned).map((item) => item.pinOrder ?? 0)
+              ) + 1,
+          }
+    );
+  const movePinned = (ids: string[], chatId: string, toIndex: number) => {
+    const orders = Object.fromEntries(chats.map((chat) => [chat.id, chat.pinOrder]));
+    for (const change of reorderPinned(ids, chatId, toIndex, orders)) {
+      const chat = chats.find((item) => item.id === change.chatId);
+      if (chat) void updateChat(chat, { pinOrder: change.pinOrder });
+    }
+  };
+  const manage = (chat: BotChat, pinnedIds: string[]): ChatManageActions => {
+    const index = pinnedIds.indexOf(chat.id);
+    const summary = rows.find((row) => row.chat.id === chat.id)?.summary;
+    return {
+      onSettle: () => void updateChat(chat, { settled: chat.settledAt === undefined }),
+      onSnooze: (at) => void updateChat(chat, { snoozedUntil: at }),
+      onMarkUnread:
+        summary &&
+        activeChatId !== chat.id &&
+        !isUnread(summary.marker, reads[summary.key]) &&
+        unreadMark(summary.marker) !== undefined
+          ? () => useBotsStore.getState().markUnread(chat.id)
+          : undefined,
+      onMoveUp: index > 0 ? () => movePinned(pinnedIds, chat.id, index - 1) : undefined,
+      onMoveDown:
+        index >= 0 && index < pinnedIds.length - 1
+          ? () => movePinned(pinnedIds, chat.id, index + 1)
+          : undefined,
+    };
+  };
+  /** 置顶行之间拖拽排序 */
+  const dragProps = (chat: BotChat | undefined, pinnedIds: string[]) =>
+    chat?.pinned
+      ? {
+          draggable: true,
+          onDragStart: (event: React.DragEvent) => {
+            event.dataTransfer.effectAllowed = 'move';
+            setDragging(chat.id);
+          },
+          onDragEnd: () => setDragging(null),
+          onDragOver: (event: React.DragEvent) => {
+            if (dragging && dragging !== chat.id && pinnedIds.includes(dragging))
+              event.preventDefault();
+          },
+          onDrop: (event: React.DragEvent) => {
+            event.preventDefault();
+            if (dragging && pinnedIds.includes(dragging))
+              movePinned(pinnedIds, dragging, pinnedIds.indexOf(chat.id));
+            setDragging(null);
+          },
+        }
+      : {};
   const archiveBot = async (bot: BotProfile, archived: boolean) => {
     const result = await window.electronAPI.bots.archive(bot.id, archived);
     if (result.ok) upsertBot(result.bot);
@@ -144,11 +244,13 @@ export function BotSidebar({
           <ChatContextMenu
             key={chat.id}
             chat={chat}
-            onPin={() => void updateChat(chat, { pinned: !chat.pinned })}
+            onPin={() => void togglePin(chat)}
             onArchive={() => void updateChat(chat, { archived: true })}
             onDelete={() => setDeleting(chat)}
+            manage={manage(chat, pinnedGroups)}
           >
             <ChatRow
+              {...dragProps(chat, pinnedGroups)}
               active={activeChatId === chat.id}
               avatar={
                 <GroupAvatar bots={chat.members.map((id) => byId.get(id))} busy={summary.running} />
@@ -172,11 +274,13 @@ export function BotSidebar({
           <ChatContextMenu
             key={bot.id}
             chat={row?.chat}
-            onPin={row ? () => void updateChat(row.chat, { pinned: !row.chat.pinned }) : undefined}
+            onPin={row ? () => void togglePin(row.chat) : undefined}
             onArchive={row ? () => void updateChat(row.chat, { archived: true }) : undefined}
             onArchiveMember={() => void archiveBot(bot, true)}
+            manage={row ? manage(row.chat, pinnedDirects) : undefined}
           >
             <ChatRow
+              {...dragProps(row?.chat, pinnedDirects)}
               active={Boolean(row && activeChatId === row.chat.id)}
               avatar={<BotAvatar bot={bot} busy={row?.summary.running} />}
               title={bot.name}
@@ -193,6 +297,55 @@ export function BotSidebar({
             />
           </ChatContextMenu>
         ))}
+
+        {settled.length > 0 && (
+          <SectionHeader
+            title={`${t('Settled')} · ${settled.length}`}
+            onToggle={() => setShowSettled((value) => !value)}
+          />
+        )}
+        {showSettled &&
+          settled.map(({ chat, summary }) => {
+            const bot = chat.kind === 'direct' ? byId.get(chat.members[0]) : undefined;
+            return (
+              <ChatContextMenu
+                key={chat.id}
+                chat={chat}
+                onPin={() => void togglePin(chat)}
+                onArchive={() => void updateChat(chat, { archived: true })}
+                manage={manage(chat, [])}
+              >
+                <ChatRow
+                  className="opacity-75"
+                  active={activeChatId === chat.id}
+                  avatar={
+                    bot ? (
+                      <BotAvatar bot={bot} busy={summary.running} />
+                    ) : (
+                      <GroupAvatar
+                        bots={chat.members.map((id) => byId.get(id))}
+                        busy={summary.running}
+                      />
+                    )
+                  }
+                  title={bot ? bot.name : chatTitle(chat, bots, t)}
+                  meta={
+                    chat.snoozedUntil !== undefined
+                      ? t('Remind {{time}}', {
+                          time: formatRelativeTime(chat.snoozedUntil, locale),
+                        })
+                      : status(summary)
+                  }
+                  preview={summary.preview}
+                  unread={isUnread(summary.marker, reads[summary.key]) && activeChatId !== chat.id}
+                  pending={summary.pending}
+                  onClick={() =>
+                    bot ? void openDirect(bot.id) : setView({ kind: 'chat', chatId: chat.id })
+                  }
+                />
+              </ChatContextMenu>
+            );
+          })}
 
         {showArchived && (
           <>
@@ -346,14 +499,22 @@ function SectionHeader({
   title,
   onAdd,
   addLabel,
+  onToggle,
 }: {
   title: string;
   onAdd?: () => void;
   addLabel?: string;
+  onToggle?: () => void;
 }) {
   return (
     <div className="flex items-center justify-between px-4 pt-3 pb-1 text-[11px] text-muted-foreground">
-      <span>{title}</span>
+      {onToggle ? (
+        <button type="button" onClick={onToggle} className="hover:text-foreground">
+          {title}
+        </button>
+      ) : (
+        <span>{title}</span>
+      )}
       {onAdd && (
         <button
           type="button"
@@ -441,6 +602,14 @@ function ChatRow({
   );
 }
 
+interface ChatManageActions {
+  onSettle: () => void;
+  onSnooze: (at: number) => void;
+  onMarkUnread?: () => void;
+  onMoveUp?: () => void;
+  onMoveDown?: () => void;
+}
+
 function ChatContextMenu({
   chat,
   children,
@@ -448,6 +617,7 @@ function ChatContextMenu({
   onArchive,
   onDelete,
   onArchiveMember,
+  manage,
 }: {
   chat: BotChat | undefined;
   children: React.ReactElement;
@@ -455,8 +625,11 @@ function ChatContextMenu({
   onArchive?: () => void;
   onDelete?: () => void;
   onArchiveMember?: () => void;
+  manage?: ChatManageActions;
 }) {
   const { t } = useI18n();
+  const snooze = (key: 'hour' | 'later' | 'tomorrow') =>
+    manage?.onSnooze(snoozeTimes(Date.now())[key]);
   return (
     <ContextMenu>
       <ContextMenuTrigger render={children as React.ReactElement<Record<string, unknown>>} />
@@ -465,6 +638,45 @@ function ChatContextMenu({
           <ContextMenuItem onClick={onPin}>
             {chat?.pinned ? <PinOff /> : <Pin />}
             {chat?.pinned ? t('Unpin') : t('Pin')}
+          </ContextMenuItem>
+        )}
+        {manage?.onMoveUp && (
+          <ContextMenuItem onClick={manage.onMoveUp}>
+            <ArrowUp />
+            {t('Move up')}
+          </ContextMenuItem>
+        )}
+        {manage?.onMoveDown && (
+          <ContextMenuItem onClick={manage.onMoveDown}>
+            <ArrowDown />
+            {t('Move down')}
+          </ContextMenuItem>
+        )}
+        {manage && (
+          <ContextMenuItem onClick={manage.onSettle}>
+            {chat?.settledAt !== undefined ? <RotateCcw /> : <CircleCheck />}
+            {chat?.settledAt !== undefined ? t('Back to in progress') : t('Settle')}
+          </ContextMenuItem>
+        )}
+        {manage && (
+          <ContextMenuSub>
+            <ContextMenuSubTrigger>
+              <AlarmClock />
+              {t('Remind me later')}
+            </ContextMenuSubTrigger>
+            <ContextMenuSubPopup className="min-w-36">
+              <ContextMenuItem onClick={() => snooze('hour')}>{t('In 1 hour')}</ContextMenuItem>
+              <ContextMenuItem onClick={() => snooze('later')}>{t('In 3 hours')}</ContextMenuItem>
+              <ContextMenuItem onClick={() => snooze('tomorrow')}>
+                {t('Tomorrow 9:00')}
+              </ContextMenuItem>
+            </ContextMenuSubPopup>
+          </ContextMenuSub>
+        )}
+        {manage?.onMarkUnread && (
+          <ContextMenuItem onClick={manage.onMarkUnread}>
+            <Mail />
+            {t('Mark as unread')}
           </ContextMenuItem>
         )}
         {onArchive && (

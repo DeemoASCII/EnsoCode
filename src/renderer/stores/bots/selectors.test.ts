@@ -2,7 +2,15 @@ import type { ApprovalRequestInfo, ProjectedMessage } from '@shared/types/agent'
 import type { BotChat } from '@shared/types/bot';
 import { describe, expect, it } from 'vitest';
 import { emptyProjection } from '@/stores/sessions/reducer';
-import { chatSummary, messagePreview, pendingItems, sessionOwners, sortChats } from './selectors';
+import {
+  chatSummary,
+  messagePreview,
+  pendingItems,
+  reorderPinned,
+  sessionOwners,
+  snoozeTimes,
+  sortChats,
+} from './selectors';
 
 const chat = (over: Partial<BotChat>): BotChat => ({
   id: 'c1',
@@ -110,5 +118,50 @@ describe('sortChats', () => {
     expect(
       sortChats([row('a', false, 1), row('b', false, 3), row('c', true, 0)]).map((r) => r.chat.id)
     ).toEqual(['c', 'b', 'a']);
+  });
+
+  it('置顶内按手动顺序，未排过的排在已排的后面再按活动时间', () => {
+    const row = (id: string, pinOrder: number | undefined, activityAt: number) => ({
+      chat: chat({ id, pinned: true, ...(pinOrder !== undefined ? { pinOrder } : {}) }),
+      summary: { activityAt } as never,
+    });
+    expect(
+      sortChats([
+        row('a', undefined, 9),
+        row('b', 2, 1),
+        row('c', 0, 0),
+        row('d', undefined, 5),
+      ]).map((r) => r.chat.id)
+    ).toEqual(['c', 'b', 'a', 'd']);
+  });
+});
+
+describe('reorderPinned', () => {
+  it('移动到目标位置并只返回顺序变化的置顶聊天', () => {
+    expect(reorderPinned(['a', 'b', 'c'], 'c', 0)).toEqual([
+      { chatId: 'c', pinOrder: 0 },
+      { chatId: 'a', pinOrder: 1 },
+      { chatId: 'b', pinOrder: 2 },
+    ]);
+    expect(reorderPinned(['a', 'b', 'c'], 'a', 1, { a: 0, b: 1, c: 2 })).toEqual([
+      { chatId: 'b', pinOrder: 0 },
+      { chatId: 'a', pinOrder: 1 },
+    ]);
+    expect(reorderPinned(['a', 'b'], 'a', 0, { a: 0, b: 1 })).toEqual([]);
+    expect(reorderPinned(['a', 'b'], 'x', 0)).toEqual([]);
+    expect(reorderPinned(['a', 'b'], 'a', 9, { a: 0, b: 1 })).toEqual([
+      { chatId: 'b', pinOrder: 0 },
+      { chatId: 'a', pinOrder: 1 },
+    ]);
+  });
+});
+
+describe('snoozeTimes', () => {
+  it('1 小时后、3 小时后、明天 9:00（本地时间）', () => {
+    const now = new Date(2026, 9, 4, 22, 30).getTime();
+    const times = snoozeTimes(now);
+    expect(times.hour).toBe(now + 3_600_000);
+    expect(times.later).toBe(now + 3 * 3_600_000);
+    expect(new Date(times.tomorrow)).toEqual(new Date(2026, 9, 5, 9, 0));
   });
 });
