@@ -40,6 +40,7 @@ export function WelcomeSuggestions({ onPick }: { onPick: (prompt: string) => voi
           key={title}
           type="button"
           onClick={() => onPick(t(prompt))}
+          data-slot="welcome-suggestion"
           className="group flex items-start gap-3 rounded-xl border bg-card px-3.5 py-3 text-left shadow-xs transition-[border-color,box-shadow,transform] duration-200 hover:-translate-y-px hover:border-brand/25 hover:shadow-float"
         >
           <span className="flex size-7 shrink-0 items-center justify-center rounded-lg bg-brand/8 text-brand dark:bg-brand/14">
