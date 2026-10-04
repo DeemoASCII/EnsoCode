@@ -1,3 +1,5 @@
+import { stripBotNotesUpdate } from '@shared/bots/notes';
+
 export type BotInjectedMessage =
   | { kind: 'routine'; title: string; prompt: string }
   | { kind: 'group'; messages: { from: string; text: string }[]; instruction: string }
@@ -26,7 +28,7 @@ function attributes(text: string): Record<string, string> | null {
 
 /** 只识别 Main 的整段注入协议；不是通用 XML，正文始终作为文本渲染。 */
 export function parseBotInjectedMessage(text: string): BotInjectedMessage | null {
-  const source = text.trim();
+  const source = stripBotNotesUpdate(text).trim();
   const omittedPattern = /^（省略了 \d+ 条更早的消息）\s*/;
   if (
     source.startsWith('<group-info>') ||

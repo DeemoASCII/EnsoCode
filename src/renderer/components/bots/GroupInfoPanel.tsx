@@ -22,6 +22,7 @@ import { BotAvatar } from './BotAvatar';
 import { chatErrorText } from './botText';
 import { GroupDelegations, TaskBoard } from './GroupBoard';
 import { MemorySpaceList } from './MemorySpaceList';
+import { NotesEditor } from './NotesEditor';
 import { RoutineList } from './RoutineList';
 import { WorkspaceMenu } from './WorkspaceMenu';
 
@@ -298,6 +299,15 @@ export function GroupInfoPanel({
                 {t('Save')}
               </Button>
             )}
+          </PanelSection>
+
+          <PanelSection title={t('Group notes')}>
+            <NotesEditor
+              target={{ chatId: chat.id }}
+              emptyText={t(
+                'No group notes yet. Group conventions and decisions are summarized here automatically after memories are organized.'
+              )}
+            />
           </PanelSection>
 
           <PanelSection title={t('Group memory')}>

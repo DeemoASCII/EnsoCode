@@ -393,6 +393,9 @@ export const IPC_CHANNELS = {
   BOT_ROUTINE_SAVE: 'bots:routine-save',
   BOT_ROUTINE_DELETE: 'bots:routine-delete',
   BOT_ROUTINE_RUN_NOW: 'bots:routine-run-now',
+  /** 成员 / 群核心笔记：只收 botId 或 chatId，保存带 version 防覆盖 */
+  BOT_NOTES_GET: 'bots:notes-get',
+  BOT_NOTES_SAVE: 'bots:notes-save',
   /** 群任务看板：列表 / 新建或编辑 / 指派（以人类身份 @ 成员）/ 完成 / 取消 / 删除 */
   BOT_TASKS_LIST: 'bots:tasks-list',
   BOT_TASK_SAVE: 'bots:task-save',

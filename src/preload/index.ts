@@ -144,6 +144,7 @@ import type {
   BotEvent,
   BotGetResult,
   BotNewSessionResult,
+  BotNotesResult,
   BotPersonaSuggestRequest,
   BotPersonaSuggestResult,
   BotRoutineSaveInput,
@@ -1150,6 +1151,14 @@ const electronAPI = {
         ipcRenderer.invoke(IPC_CHANNELS.BOT_ROUTINE_DELETE, request),
       runNow: (request: { botId: string; id: string }): Promise<BotActionResult> =>
         ipcRenderer.invoke(IPC_CHANNELS.BOT_ROUTINE_RUN_NOW, request),
+    },
+    /** 成员 / 群核心笔记：target 只传 { botId } 或 { chatId } */
+    notes: {
+      get: (target: { botId: string } | { chatId: string }): Promise<BotNotesResult> =>
+        ipcRenderer.invoke(IPC_CHANNELS.BOT_NOTES_GET, target),
+      save: (
+        request: ({ botId: string } | { chatId: string }) & { content: string; version: string }
+      ): Promise<BotNotesResult> => ipcRenderer.invoke(IPC_CHANNELS.BOT_NOTES_SAVE, request),
     },
     tasks: {
       list: (chatId: string): Promise<BotTasksResult> =>

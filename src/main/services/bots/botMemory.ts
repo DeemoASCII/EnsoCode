@@ -14,6 +14,8 @@ interface BotMemoryDeps {
   isCodeProject: (projectId: string) => boolean;
   schedule: (payload: DistillPayload) => Promise<string | undefined>;
   watermarksFile?: string;
+  /** 整理推进了水位（有新内容被整理）后通知；since 为本次整理开始时间 */
+  onDistilled?: (input: { botId: string; chatId: string | null; since: number }) => void;
 }
 
 export class BotMemoryService {
@@ -74,6 +76,7 @@ export class BotMemoryService {
         const fromEntryId =
           this.watermarks.get(id) ??
           (session?.conversationId === id ? session.distilledTo : undefined);
+        const since = Date.now();
         const next = await this.deps.schedule({
           sessionId: id,
           sessionFile: conversation.sessionFile,
@@ -87,6 +90,8 @@ export class BotMemoryService {
           this.watermarks.set(id, next);
           this.persist();
         }
+        if (next && next !== fromEntryId && context.botId)
+          this.deps.onDistilled?.({ botId: context.botId, chatId: context.chatId ?? null, since });
         if (
           next &&
           chat &&

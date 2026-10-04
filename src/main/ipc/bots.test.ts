@@ -231,6 +231,42 @@ describe('bots IPC', () => {
     expect(mocks.promptSession).toHaveBeenCalledWith(identity, 'hello', undefined, 'd1');
   });
 
+  it('核心笔记：入参收窄、version 防覆盖、只支持群笔记，保存后注入新会话系统提示词', async () => {
+    const alice = await createBot('Alice');
+    const created = await call(IPC_CHANNELS.BOT_CHAT_CREATE, {
+      kind: 'direct',
+      members: [alice],
+      workspace: { kind: 'member-home' },
+    });
+    const chatId = (created.chat as { id: string }).id;
+    for (const bad of [undefined, { botId: 'x' }, { botId: alice, path: '/etc' }, { chatId }])
+      expect(await call(IPC_CHANNELS.BOT_NOTES_GET, bad)).toEqual({ ok: false, error: 'invalid' });
+    const empty = await call(IPC_CHANNELS.BOT_NOTES_GET, { botId: alice });
+    expect(empty).toMatchObject({ ok: true, notes: { content: '', maxChars: 3000 } });
+    const version = (empty.notes as { version: string }).version;
+    mocks.isMain.mockReturnValue(false);
+    expect(
+      await call(IPC_CHANNELS.BOT_NOTES_SAVE, { botId: alice, content: '- tea', version })
+    ).toMatchObject({ ok: false });
+    mocks.isMain.mockReturnValue(true);
+    const saved = await call(IPC_CHANNELS.BOT_NOTES_SAVE, {
+      botId: alice,
+      content: '- likes tea',
+      version,
+    });
+    expect(saved).toMatchObject({ ok: true, notes: { content: '- likes tea' } });
+    expect(
+      await call(IPC_CHANNELS.BOT_NOTES_SAVE, { botId: alice, content: '- coffee', version })
+    ).toEqual({ ok: false, error: 'conflict' });
+    expect(
+      await call(IPC_CHANNELS.BOT_NOTES_SAVE, { chatId, content: '- x', version: '' })
+    ).toEqual({ ok: false, error: 'invalid' });
+
+    await call(IPC_CHANNELS.BOT_SEND, { chatId, text: 'hello', deliveryId: 'd1' });
+    const options = mocks.spawnSession.mock.calls[0][5] as { bot: { systemPrompt: string } };
+    expect(options.bot.systemPrompt).toContain('<member-notes>\n- likes tea\n</member-notes>');
+  });
+
   it('群聊发送接入；状态和停止可用；改选工作区清空会话；删除群清理目录', async () => {
     const alice = await createBot('Alice');
     const bob = await createBot('Bob');

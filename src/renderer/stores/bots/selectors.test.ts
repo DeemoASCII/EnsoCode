@@ -50,6 +50,11 @@ describe('chatSummary', () => {
     expect(messagePreview(msg('user', text, 1))).toBe('晨报 · 今天 & 明天');
     expect(messagePreview(msg('assistant', text, 1))).toBe(text);
   });
+  it('用户消息摘要不含笔记更新块', () => {
+    expect(messagePreview(msg('user', '<notes-updated>\n- a\n</notes-updated>\n\n你好', 1))).toBe(
+      '你好'
+    );
+  });
   it('私聊取最后一条有文字的消息作摘要，按消息数作已读标记', () => {
     const summary = chatSummary(chat({ sessions: { b1: { conversationId: 's1', cursor: 0 } } }), {
       sessions: {

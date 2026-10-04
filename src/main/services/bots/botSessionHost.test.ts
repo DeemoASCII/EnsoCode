@@ -95,6 +95,103 @@ function ev(event: Record<string, unknown>, sessionId: string): AgentWorkerEvent
 }
 
 describe('BotSessionHost.ensureSession', () => {
+  it('injects notes into the system prompt and announces later updates once per conversation', async () => {
+    let snap: { version: string; section: string; update: string } | undefined = {
+      version: 'v1',
+      section: '<member-notes>\nlikes tea\n</member-notes>',
+      update: '<notes-updated>v1</notes-updated>',
+    };
+    const asked: Array<[string, string | null]> = [];
+    host = new BotSessionHost({
+      bots,
+      chats,
+      authority: registry,
+      runtime,
+      emit: () => {},
+      notes: {
+        snapshot: (botId, chatId) => {
+          asked.push([botId, chatId]);
+          return snap;
+        },
+      },
+    });
+    const alice = bot('Alice', 'Be kind.');
+    const chat = direct(alice.id);
+    const first = await host.deliver(chat.id, alice.id, 'hi');
+    if (!first.ok) throw new Error(first.error);
+    expect(runtime.spawns[0].systemPrompt).toMatch(/Be kind\.\n\n<member-notes>/);
+    expect(asked[0]).toEqual([alice.id, null]);
+    await host.deliver(chat.id, alice.id, 'same notes');
+    snap = { ...snap, version: 'v2', update: '<notes-updated>v2</notes-updated>' };
+    await host.deliver(chat.id, alice.id, 'after update');
+    await host.deliver(chat.id, alice.id, 'again');
+    snap = undefined;
+    await host.deliver(chat.id, alice.id, 'memory off');
+    expect(runtime.steers.map((item) => item.text)).toEqual([
+      'same notes',
+      '<notes-updated>v2</notes-updated>\n\nafter update',
+      'again',
+      'memory off',
+    ]);
+    expect(runtime.spawns).toHaveLength(1);
+  });
+  it('passes group notes scope and leaves the system prompt alone when memory is off', async () => {
+    const asked: Array<[string, string | null]> = [];
+    host = new BotSessionHost({
+      bots,
+      chats,
+      authority: registry,
+      runtime,
+      emit: () => {},
+      notes: {
+        snapshot: (botId, chatId) => {
+          asked.push([botId, chatId]);
+          return undefined;
+        },
+      },
+    });
+    const alice = bot('Alice', 'Be kind.');
+    const bob = bot('Bob');
+    const group = chats.create({
+      kind: 'group',
+      title: 'Team',
+      members: [alice.id, bob.id],
+      bossBotId: alice.id,
+      workspace: { kind: 'chat-home', projectId: 'home' },
+    });
+    if (!group) throw new Error('chat');
+    const sent = await host.deliver(group.id, alice.id, 'hi');
+    if (!sent.ok) throw new Error(sent.error);
+    expect(asked[0]).toEqual([alice.id, group.id]);
+    expect(runtime.spawns[0].systemPrompt.endsWith('Be kind.')).toBe(true);
+  });
+  it('recognizes persisted delegation results behind a notes update block', async () => {
+    const alice = bot('Alice');
+    const chat = direct(alice.id);
+    const sent = await host.deliver(chat.id, alice.id, 'first');
+    if (!sent.ok) throw new Error(sent.error);
+    const file = join(root, 'notes-session.jsonl');
+    writeFileSync(
+      file,
+      JSON.stringify({
+        type: 'message',
+        message: {
+          role: 'user',
+          content: [
+            {
+              type: 'text',
+              text: '<notes-updated>\nx\n</notes-updated>\n\n<delegation-result id="d1" from="Bob">done</delegation-result>',
+            },
+          ],
+        },
+      })
+    );
+    const conversation = registry.conversation(sent.conversationId)!;
+    const original = registry.conversation.bind(registry);
+    registry.conversation = (id) =>
+      id === sent.conversationId ? { ...conversation, sessionFile: file } : original(id);
+    expect(host.hasStartedDelivery(sent.conversationId, 'd1')).toBe(true);
+  });
   it('deduplicates queued delivery IDs and recognizes delegation results persisted in user messages', async () => {
     const alice = bot('Alice');
     const chat = direct(alice.id);

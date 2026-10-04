@@ -222,6 +222,18 @@ Code 模式现有的 `subagent/workflow` 对 bot 会话照常可用，用于临�
 - 主动 capture：memory 工具的 `spaceId` 描述与群聊成员提示都说明——群约定 / 决定 / 背景 / 分工 / 术语写 `'chat'`，个人偏好与经验写 `'bot'`。
 - Bot 资料面板里可以查看、编辑、删除该成员的记忆。
 
+### 核心笔记（自动注入）
+
+成员常常想不起主动查 memory 工具，因此每个成员 / 群维护一份短笔记，会话启动时直接放进提示词。
+
+- 存储：成员笔记 `userData/bots/<botId>/notes.md`，群笔记 `userData/bot-chats/<chatId>/notes.md`（仅群）。上限 `BOT_NOTES_MAX_CHARS = 3000` 字符，写入时截断，空内容删文件。version 为内容 SHA-256 前 16 位，不另存元数据。笔记跟随所属目录，删除成员 / 群时由现有 `rmSync` 一并清理；目录已不存在时写入返回 `not-found`，不会重建。
+- 更新：`BotMemoryService.distill` 水位前进（有新内容被整理）后回调 `onDistilled({botId, chatId, since})`，不等待。`BotNotesService.afterDistill` 按成员串行：取 `since` 之后 `source='distill'` 写入 `bot:<id>` / `chat:<id>` 的结论，用 Bot 助理模型链（`assistantCompleter`）把「旧笔记 + 新结论」重写（去重、新的覆盖旧的、删过时内容，只输出笔记）。没有新结论不调模型；模型失败 / 超时 / 空输出保持旧笔记。写回带旧 version，冲突（用户手动改了、或群里别的成员同时更新）就基于最新笔记重来，最多 3 次。成员 `memory.enabled=false` 时既不更新也不注入。
+- 注入：`BotSessionHost` spawn 时在人设之后追加 `# Long-term notes` 段，用 `<member-notes>`（群会话再加 `<group-notes>`）包住正文，说明这是长期笔记、细节用 memory 工具查；委派会话只带成员笔记。按 conversationId 记录已注入版本；会话运行中笔记变了（自动重写或手动编辑），下一次 prompt / steer 在消息前追加一次 `<notes-updated>` 块。正文里同名标签会被转义。
+- 展示与协议：`stripBotNotesUpdate` 去掉开头的 `<notes-updated>`，渲染层（注入卡片识别、消息气泡、列表摘要）与 `hasStartedDelivery`（委派结果去重）都先剥掉再识别。
+- IPC：`BOT_NOTES_GET`（read，`{botId}` 或 `{chatId}` 二选一）与 `BOT_NOTES_SAVE`（write，加 `content`、`version`；version 不一致返回 `conflict`）。群笔记只对群聊开放。变化广播 `BotEvent{kind:'notes', chatId?}`，手机端不转发。
+- UI：成员资料「记忆」页顶部「核心笔记」，群信息面板「群笔记」，都可编辑，保存冲突时提示并重新加载。
+- 未做：手动 capture（`source='agent'`）不触发重写；重启续跑的整理任务不触发重写；手机端不展示笔记；整理转写里会带上 `<notes-updated>` 块，靠记忆去重兜底。
+
 ### 人设与提示词
 
 Main 在 `spawnSession` 里根据 `ConversationAuthority.bot` 组装提示词，renderer 不传正文：

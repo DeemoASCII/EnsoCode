@@ -17,6 +17,7 @@ import { ColorPicker, EngineField, FieldLabel, nameError } from './BotFields';
 import { BotUsageCard } from './BotUsageCard';
 import { botErrorText, chatTitle } from './botText';
 import { MemorySpaceList } from './MemorySpaceList';
+import { NotesEditor } from './NotesEditor';
 import { PersonaSuggestButton } from './PersonaSuggest';
 import { RoutineList } from './RoutineList';
 
@@ -306,6 +307,17 @@ export function BotProfilePanel({ botId, chat, onOpenHistory }: BotProfilePanelP
           </TabsPanel>
 
           <TabsPanel value="memory">
+            <div className="mb-4">
+              <FieldLabel hint={t('Injected into every new conversation')}>
+                {t('Core notes')}
+              </FieldLabel>
+              <NotesEditor
+                target={{ botId: bot.id }}
+                emptyText={t(
+                  'No notes yet. Key preferences and facts are summarized here automatically after memories are organized.'
+                )}
+              />
+            </div>
             <MemorySpaceList spaceId={`bot:${bot.id}`} emptyText={t('No memories yet')} />
           </TabsPanel>
 

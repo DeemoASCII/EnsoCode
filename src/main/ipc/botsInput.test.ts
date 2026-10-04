@@ -5,6 +5,8 @@ import {
   parseBotUpdateInput,
   parseChatCreateInput,
   parseChatUpdateInput,
+  parseNotesSaveInput,
+  parseNotesTargetInput,
   parseOpenWorkspaceInput,
   parsePersonaSuggestRequest,
   parseSendInput,
@@ -229,5 +231,33 @@ describe('parsePersonaSuggestRequest', () => {
     expect(parsePersonaSuggestRequest({ name: 'a', title: 'x'.repeat(201) })).toBeNull();
     expect(parsePersonaSuggestRequest({ name: 'a', title: 'b', language: 'fr' })).toBeNull();
     expect(parsePersonaSuggestRequest(null)).toBeNull();
+  });
+});
+
+describe('notes inputs', () => {
+  it('目标只收 botId 或 chatId 之一', () => {
+    expect(parseNotesTargetInput({ botId: A })).toEqual({ kind: 'bot', id: A });
+    expect(parseNotesTargetInput({ chatId: B })).toEqual({ kind: 'chat', id: B });
+    for (const bad of [null, 'x', {}, { botId: A, chatId: B }, { botId: 'x' }, { path: '/tmp' }])
+      expect(parseNotesTargetInput(bad)).toBeNull();
+  });
+  it('保存需要正文与 version，拒绝非字符串和超长正文', () => {
+    expect(parseNotesSaveInput({ botId: A, content: '- a', version: 'v' })).toEqual({
+      target: { kind: 'bot', id: A },
+      content: '- a',
+      version: 'v',
+    });
+    expect(parseNotesSaveInput({ chatId: B, content: '', version: '' })).toMatchObject({
+      target: { kind: 'chat', id: B },
+    });
+    for (const bad of [
+      { botId: A, content: '- a' },
+      { botId: A, content: 1, version: 'v' },
+      { botId: A, content: 'x'.repeat(100_001), version: 'v' },
+      { botId: A, content: '', version: 'v'.repeat(200) },
+      { botId: A, chatId: B, content: '', version: '' },
+      { botId: A, content: '', version: '', extra: 1 },
+    ])
+      expect(parseNotesSaveInput(bad)).toBeNull();
   });
 });

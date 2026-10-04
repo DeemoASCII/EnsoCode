@@ -246,10 +246,11 @@ export function registerPairBotHandlers(): void {
     },
   });
   observeBotEvents((event) => {
-    // 群任务看板手机端暂不支持、通知跳转只给本机窗口：不转发新 kind，pair 协议保持不变
+    // 群任务看板 / 核心笔记手机端暂不支持、通知跳转只给本机窗口：不转发新 kind，pair 协议保持不变
     if (
       !botModeEnabled() ||
       event.kind === 'tasks' ||
+      event.kind === 'notes' ||
       event.kind === 'budget' ||
       event.kind === 'open'
     )

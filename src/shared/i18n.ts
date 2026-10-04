@@ -2180,6 +2180,16 @@ export const zhTranslations: Record<string, string> = {
   'Replies per member': '每人回复次数',
   'Group memory': '群记忆',
   'No group memories yet': '还没有群记忆',
+  'Core notes': '核心笔记',
+  'Group notes': '群笔记',
+  'Injected into every new conversation': '每次新对话自动带上',
+  'Edit notes': '编辑笔记',
+  'Save failed': '保存失败',
+  'Notes were updated elsewhere; reloaded the latest version': '笔记已被更新，已加载最新版本',
+  'No notes yet. Key preferences and facts are summarized here automatically after memories are organized.':
+    '还没有笔记。整理记忆后，重要的偏好和事实会自动汇总到这里。',
+  'No group notes yet. Group conventions and decisions are summarized here automatically after memories are organized.':
+    '还没有群笔记。整理记忆后，群里的约定和决定会自动汇总到这里。',
   'Beginning of the chat': '已经到顶了',
   'Say something. Mention a member with @, or the group owner replies.':
     '说点什么吧。@ 某个成员，或由群主来回复。',

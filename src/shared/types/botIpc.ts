@@ -86,6 +86,8 @@ export type BotEventKind =
   | 'routine'
   /** 群任务看板变化（带 chatId）；手机端协议不转发 */
   | 'tasks'
+  /** 核心笔记变化（群笔记带 chatId）；手机端协议不转发 */
+  | 'notes'
   /** 某成员今日预算耗尽（投递被拒或回合被停）；renderer 刷新用量概览与收件箱 */
   | 'budget'
   /** 点击系统通知：切到 Bot 模式并打开 chatId 或 conversationId 所属聊天；只发给主窗口 */
@@ -129,6 +131,14 @@ export interface BotPersonaSuggestRequest {
 export type BotPersonaSuggestResult =
   | { ok: true; suggestion: PersonaSuggestion }
   | (BotIpcError & { detail?: string });
+
+/** 成员 / 群核心笔记；version 用于保存时防覆盖 */
+export interface BotNotesInfo {
+  content: string;
+  version: string;
+  maxChars: number;
+}
+export type BotNotesResult = { ok: true; notes: BotNotesInfo } | BotIpcError;
 
 export interface BotQueueItem {
   chatId: string;

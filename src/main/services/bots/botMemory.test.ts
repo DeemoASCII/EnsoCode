@@ -136,3 +136,37 @@ it('persists watermarks by conversation even after chat session replacement and 
   await memory.distill(old);
   expect(schedule.mock.calls.at(-1)![0]).not.toHaveProperty('fromEntryId');
 });
+
+it('reports a finished distill that advanced the watermark so notes can be rewritten', async () => {
+  const distilled: Array<{ botId: string; chatId: string | null; since: number }> = [];
+  memory = new BotMemoryService({
+    bots,
+    chats,
+    isCodeProject: () => true,
+    schedule,
+    onDistilled: (input) => distilled.push(input),
+  });
+  const before = Date.now();
+  await memory.distill(conversation());
+  expect(distilled).toEqual([{ botId, chatId: null, since: expect.any(Number) }]);
+  expect(distilled[0].since).toBeGreaterThanOrEqual(before);
+  // 水位没动（开关关闭 / 没有新内容）：不触发
+  schedule.mockImplementationOnce(async () => 'entry-2');
+  await memory.distill(conversation());
+  expect(distilled).toHaveLength(1);
+  const bob = bots.create({ name: 'Bob' }, []);
+  if (!bob.ok) throw new Error('fixture');
+  const group = chats.create({
+    kind: 'group',
+    title: 'Team',
+    members: [botId, bob.bot.id],
+    bossBotId: botId,
+    workspace: { kind: 'chat-home', projectId: 'home' },
+  })!;
+  await memory.distill({
+    ...conversation(),
+    conversationId: 'g',
+    bot: { botId, chatId: group.id },
+  });
+  expect(distilled.at(-1)).toMatchObject({ botId, chatId: group.id });
+});

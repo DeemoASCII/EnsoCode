@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
+import { stripBotNotesUpdate } from '../../../shared/bots/notes';
 import type {
   AgentWorkerEvent,
   AttachedImage,
@@ -10,6 +11,7 @@ import type {
 import type { BotChat, BotProfile } from '../../../shared/types/bot';
 import type { BotEvent, BotQueueItem, BotSessionRecord } from '../../../shared/types/botIpc';
 import { BOT_BUDGET_ERROR, type BotBudgetVerdict } from '../../../shared/usage/botUsage';
+import type { BotNotesSnapshot } from './botNotes';
 import { buildBotModeInstruction, buildBotSystemPrompt } from './botPrompt';
 import type { BotStore } from './botStore';
 import type { BotChatStore } from './chatStore';
@@ -80,6 +82,8 @@ export interface BotSessionHostDeps {
   settleGraceMs?: number;
   /** 成员日预算：投递前与每条带用量的 assistant 消息结束后检查，超额拒绝 / 停止当前回合 */
   budget?: { exceeded(botId: string): Promise<BotBudgetVerdict | null> };
+  /** 核心笔记：成员 memory 关闭时返回 undefined */
+  notes?: { snapshot(botId: string, chatId: string | null): BotNotesSnapshot | undefined };
 }
 
 export interface BotDeliverOptions {
@@ -152,6 +156,8 @@ export class BotSessionHost {
   private readonly turnKeys = new Map<string, string>();
   private disposed = false;
   private readonly budgetChecks = new Set<string>();
+  /** 会话已看到的笔记版本（spawn 时进系统提示词，之后变化在投递前追加一次） */
+  private readonly notesSeen = new Map<string, string>();
   private readonly deliveries = new Map<string, Map<string, 'sent' | 'started'>>();
   private readonly startedListeners = new Set<
     (event: { conversationId: string; deliveryId: string }) => void
@@ -184,7 +190,7 @@ export class BotSessionHost {
                 : [];
           if (
             texts.some((text: string) => {
-              const head = text.trimStart();
+              const head = stripBotNotesUpdate(text).trimStart();
               return (
                 head.startsWith(`<delegation-result id="${deliveryId}"`) ||
                 head.startsWith(`<delegation-results id="${deliveryId}"`)
@@ -651,13 +657,34 @@ export class BotSessionHost {
     return this.slots.has(conversationId) || this.running.has(conversationId);
   }
 
+  private notesFor(conversationId: string, botId: string): BotNotesSnapshot | undefined {
+    if (!this.deps.notes) return undefined;
+    const chatId = this.deps.authority.conversation(conversationId)?.bot?.chatId;
+    const chat = chatId ? this.deps.chats.get(chatId) : undefined;
+    return this.deps.notes.snapshot(botId, chat?.kind === 'group' ? chat.id : null);
+  }
+
+  /** 运行中会话的笔记变了：在本次投递前追加一次 <notes-updated> */
+  private withNotesUpdate(delivery: Delivery): { text: string; seen?: string } {
+    const snap = this.notesFor(delivery.conversationId, delivery.botId);
+    if (!snap || snap.version === (this.notesSeen.get(delivery.conversationId) ?? ''))
+      return { text: delivery.text };
+    return {
+      text: snap.update ? `${snap.update}\n\n${delivery.text}` : delivery.text,
+      seen: snap.version,
+    };
+  }
+
   private steer(delivery: Delivery): BotDeliverResult {
+    const notes = this.withNotesUpdate(delivery);
     const sent = this.deps.runtime.steer(
       delivery.conversationId,
-      delivery.text,
+      notes.text,
       delivery.images,
       delivery.deliveryId
     );
+    if (sent.ok && notes.seen !== undefined)
+      this.notesSeen.set(delivery.conversationId, notes.seen);
     if (sent.ok) this.deliverySent(delivery);
     return sent.ok
       ? { ok: true, conversationId: delivery.conversationId }
@@ -691,9 +718,16 @@ export class BotSessionHost {
       this.slots.delete(conversationId);
       return { ok: false, error };
     };
+    let notes: { text: string; seen?: string } = { text: delivery.text };
     if (!this.live.has(conversationId)) {
       const spec = this.spawnSpec(delivery);
       if (!spec.ok) return fail(spec.error);
+      const snap = this.notesFor(conversationId, bot.id);
+      if (snap?.section)
+        spec.spec = {
+          ...spec.spec,
+          systemPrompt: `${spec.spec.systemPrompt}\n\n${snap.section}`,
+        };
       const spawned = await this.deps.runtime.spawn(spec.spec);
       if (!spawned.ok) return fail(spawned.error ?? 'spawn-failed');
       if (
@@ -705,14 +739,16 @@ export class BotSessionHost {
       }
       this.liveProfiles.set(conversationId, spec.spec.bot);
       this.live.add(conversationId);
-    }
+      this.notesSeen.set(conversationId, snap?.version ?? '');
+    } else notes = this.withNotesUpdate(delivery);
     const sent = this.deps.runtime.prompt(
       conversationId,
-      delivery.text,
+      notes.text,
       delivery.images,
       delivery.deliveryId
     );
     if (!sent.ok) return fail(sent.error ?? 'prompt-failed');
+    if (notes.seen !== undefined) this.notesSeen.set(conversationId, notes.seen);
     this.deliverySent(delivery);
     return { ok: true, conversationId };
   }

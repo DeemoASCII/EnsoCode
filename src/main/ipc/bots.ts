@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { mkdirSync, rmSync } from 'node:fs';
 import path from 'node:path';
+import { BOT_NOTES_MAX_CHARS } from '@shared/bots/notes';
 import type { SessionIdentity } from '@shared/builtinAgents';
 import { BUILTIN_AGENT_TYPES, IPC_CHANNELS } from '@shared/types';
 import type { AttachedImage } from '@shared/types/agent';
@@ -20,6 +21,7 @@ import type {
   BotEvent,
   BotGetResult,
   BotNewSessionResult,
+  BotNotesResult,
   BotPersonaSuggestResult,
   BotSendResult,
   BotsListResult,
@@ -50,6 +52,7 @@ import {
   suggestPersona,
 } from '../services/bots/abilitySuggester';
 import { BotMemoryService } from '../services/bots/botMemory';
+import { BotNotesService, BotNotesStore, type BotNotesTarget } from '../services/bots/botNotes';
 import {
   BOT_READONLY_DISABLED_TOOLS,
   mergeBotInstruction,
@@ -72,6 +75,7 @@ import { RoutineScheduler } from '../services/bots/routineScheduler';
 import { BotRoutineStore } from '../services/bots/routineStore';
 import { createSmartRouter } from '../services/bots/smartRouter';
 import { resolveGlobalInstruction } from '../services/instructionStore';
+import { listMemories } from '../services/memory/store';
 import { readStoredOauthCredentialKeys } from '../services/oauthProviders';
 import { remoteCandidates, resolveRemoteModels } from '../services/remoteModels';
 import { removeConversationSessionFiles } from '../services/sessionFileCleanup';
@@ -92,6 +96,8 @@ import {
   parseBotUpdateInput,
   parseChatCreateInput,
   parseChatUpdateInput,
+  parseNotesSaveInput,
+  parseNotesTargetInput,
   parseOpenWorkspaceInput,
   parsePersonaSuggestRequest,
   parseSendInput,
@@ -106,6 +112,7 @@ interface BotServices {
   host: BotSessionHost;
   groups: GroupChatService;
   memory: BotMemoryService;
+  notes: BotNotesService;
   delegations: DelegationService;
   routines: BotRoutineStore;
   scheduler: RoutineScheduler;
@@ -261,6 +268,13 @@ export function getBotServices(): BotServices | null {
   const botsRoot = path.join(userData, 'bots');
   const bots = new BotStore(botsRoot);
   const chats = new BotChatStore(path.join(userData, 'bot-chats'));
+  const notes = new BotNotesService({
+    store: new BotNotesStore({ bots: botsRoot, chats: path.join(userData, 'bot-chats') }),
+    complete: assistantCompleter(4096),
+    enabled: (botId) => bots.get(botId)?.memory.enabled === true,
+    recent: recentDistilled,
+    onChange: (target) => emitBotEvent(notesEvent(target)),
+  });
   const usage = new BotUsageService({
     bots,
     conversations: () => authority.botConversations(),
@@ -273,6 +287,7 @@ export function getBotServices(): BotServices | null {
     authority,
     runtime: createRuntime(botsRoot),
     emit: emitBotEvent,
+    notes,
     budget: usage,
   });
   const delegationStore = new DelegationStore(
@@ -407,6 +422,7 @@ export function getBotServices(): BotServices | null {
     },
     schedule: async (payload) =>
       (await import('../services/memoryHost')).scheduleMemoryDistill(payload),
+    onDistilled: (input) => void notes.afterDistill(input),
   });
   host.onDiscard((scope) => {
     if (scope.conversationId) memory.remove(scope.conversationId);
@@ -418,6 +434,7 @@ export function getBotServices(): BotServices | null {
     host,
     groups,
     memory,
+    notes,
     delegations,
     routines,
     scheduler,
@@ -526,6 +543,24 @@ function catalogItems(value: unknown): { id: string; name: string; description?:
     if (typeof id !== 'string' || typeof name !== 'string' || enabled === false) return [];
     return [{ id, name, ...(typeof description === 'string' ? { description } : {}) }];
   });
+}
+
+const notesEvent = (target: BotNotesTarget): BotEvent =>
+  target.kind === 'chat' ? { kind: 'notes', chatId: target.id } : { kind: 'notes' };
+
+/** since 之后整理写入某空间的结论（核心笔记重写的输入） */
+async function recentDistilled(spaceId: string, since: number): Promise<string[]> {
+  const { memoryDatabase } = await import('../services/memoryHost');
+  return listMemories(memoryDatabase(), { spaceIds: [spaceId], limit: 50 })
+    .filter((memory) => memory.source === 'distill' && Date.parse(memory.createdAt) >= since)
+    .map((memory) => `${memory.title}: ${memory.content}`);
+}
+
+/** 笔记归属必须存在；群笔记只给群聊 */
+function notesOwnerExists({ bots, chats }: BotServices, target: BotNotesTarget): boolean {
+  return target.kind === 'bot'
+    ? bots.get(target.id) !== undefined
+    : chats.get(target.id)?.kind === 'group';
 }
 
 /** Bot 辅助任务的一次性补全：Bot 助理模型 → 默认模型 */
@@ -850,6 +885,24 @@ export function registerBotHandlers(): void {
       return suggestPersona(parsed, assistantCompleter(4096));
     }
   );
+
+  handle(IPC_CHANNELS.BOT_NOTES_GET, 'read', (_sender, request, services): BotNotesResult => {
+    const target = parseNotesTargetInput(request);
+    if (!target || !notesOwnerExists(services, target)) return INVALID;
+    return {
+      ok: true,
+      notes: { ...services.notes.store.read(target), maxChars: BOT_NOTES_MAX_CHARS },
+    };
+  });
+
+  handle(IPC_CHANNELS.BOT_NOTES_SAVE, 'write', (_sender, request, services): BotNotesResult => {
+    const input = parseNotesSaveInput(request);
+    if (!input || !notesOwnerExists(services, input.target)) return INVALID;
+    const saved = services.notes.store.write(input.target, input.content, input.version);
+    if (!saved.ok) return { ok: false, error: saved.error };
+    emitBotEvent(notesEvent(input.target));
+    return { ok: true, notes: { ...saved.notes, maxChars: BOT_NOTES_MAX_CHARS } };
+  });
 
   handle(IPC_CHANNELS.BOT_UPDATE, 'write', (_sender, request, { bots }): BotWriteIpcResult => {
     const parsed = parseBotUpdateInput(request);

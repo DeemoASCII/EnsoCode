@@ -1,3 +1,4 @@
+import { stripBotNotesUpdate } from '@shared/bots/notes';
 import type { ApprovalRequestInfo, AskRequestInfo, ProjectedMessage } from '@shared/types/agent';
 import type { BotChat, GroupEntry } from '@shared/types/bot';
 import type { BotQueueItem } from '@shared/types/botIpc';
@@ -63,7 +64,8 @@ export interface ChatSummary {
 const plain = (text: string) => text.replace(/\s+/gu, ' ').trim();
 
 export function messagePreview(message: ProjectedMessage): string {
-  const text = message.content.map((part) => (part.type === 'text' ? part.text : '')).join(' ');
+  const joined = message.content.map((part) => (part.type === 'text' ? part.text : '')).join(' ');
+  const text = message.role === 'user' ? stripBotNotesUpdate(joined) : joined;
   const injected = message.role === 'user' ? parseBotInjectedMessage(text) : null;
   if (!injected) return plain(text);
   switch (injected.kind) {

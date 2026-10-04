@@ -1,3 +1,4 @@
+import { stripBotNotesUpdate } from '@shared/bots/notes';
 import { isBtwIsolationPrompt } from '@shared/btw';
 import { type PlanNoteKind, parsePlanMessage, splitPlanPrefix } from '@shared/planMode';
 import type { AgentSessionCustomEntry, TodoItem, TurnPerf } from '@shared/types/agent';
@@ -482,8 +483,13 @@ function UserText({
 }) {
   const { t } = useI18n();
   const host = useChatHost();
-  const injected = host?.speaker || host?.botSession ? parseBotInjectedMessage(text) : null;
+  const botHost = Boolean(host?.speaker || host?.botSession);
+  const injected = botHost ? parseBotInjectedMessage(text) : null;
   if (injected) return <InjectedMessageCard message={injected} />;
+  // Main 投递前追加的笔记更新块不展示
+  const withoutNotes = botHost ? stripBotNotesUpdate(text) : text;
+  if (withoutNotes !== text)
+    return <UserText text={withoutNotes} searchQuery={searchQuery} activeNth={activeNth} />;
   const planPrefix = splitPlanPrefix(text);
   if (planPrefix.note) {
     const remainder = planPrefix.rest.trim();

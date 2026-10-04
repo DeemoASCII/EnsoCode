@@ -2,6 +2,13 @@ import { describe, expect, it } from 'vitest';
 import { parseBotInjectedMessage } from './injectedMessage';
 
 describe('parseBotInjectedMessage', () => {
+  it('跳过开头的笔记更新块再识别注入消息', () => {
+    expect(
+      parseBotInjectedMessage(
+        '<notes-updated>\n- a\n</notes-updated>\n\n<delegation-result from="Bob" status="done">ok</delegation-result>'
+      )
+    ).toEqual({ kind: 'delegation-result', from: 'Bob', status: 'done', text: 'ok' });
+  });
   it('群上下文有截断提示时仍识别消息', () => {
     expect(
       parseBotInjectedMessage(

@@ -748,6 +748,8 @@ export const IPC_PRODUCT_COVERAGE = {
   BOT_ROUTINE_SAVE: excluded('Bot mode routine UI.'),
   BOT_ROUTINE_DELETE: excluded('Bot mode routine UI.'),
   BOT_ROUTINE_RUN_NOW: excluded('Bot mode routine UI.'),
+  BOT_NOTES_GET: excluded('Bot mode member / group notes editor.'),
+  BOT_NOTES_SAVE: excluded('Bot mode member / group notes editor.'),
   BOT_TASKS_LIST: excluded('Bot mode group task board UI.'),
   BOT_TASK_SAVE: excluded('Bot mode group task board UI.'),
   BOT_TASK_ASSIGN: excluded('Bot mode group task board UI.'),

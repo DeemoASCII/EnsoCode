@@ -374,6 +374,38 @@ export function parseSessionHistoryInput(
   };
 }
 
+export type NotesTargetInput = { kind: 'bot' | 'chat'; id: string };
+
+function notesTarget(input: Rec): NotesTargetInput | null {
+  if (input.botId !== undefined && input.chatId === undefined && isBotId(input.botId))
+    return { kind: 'bot', id: input.botId };
+  if (input.chatId !== undefined && input.botId === undefined && isBotId(input.chatId))
+    return { kind: 'chat', id: input.chatId };
+  return null;
+}
+
+/** 核心笔记读取：只收 botId 或 chatId 之一 */
+export function parseNotesTargetInput(value: unknown): NotesTargetInput | null {
+  const input = record(value);
+  return input && onlyKeys(input, ['botId', 'chatId']) ? notesTarget(input) : null;
+}
+
+/** 核心笔记保存：正文写入时再截断，version 用于防覆盖 */
+export function parseNotesSaveInput(
+  value: unknown
+): { target: NotesTargetInput; content: string; version: string } | null {
+  const input = record(value);
+  if (
+    !input ||
+    !onlyKeys(input, ['botId', 'chatId', 'content', 'version']) ||
+    !text(input.content, 100_000) ||
+    !text(input.version, 64)
+  )
+    return null;
+  const target = notesTarget(input);
+  return target ? { target, content: input.content, version: input.version } : null;
+}
+
 export interface AbilitySuggestRequest {
   profile: { name: string; title: string; scope: string; persona: string };
   language: 'zh' | 'en';
