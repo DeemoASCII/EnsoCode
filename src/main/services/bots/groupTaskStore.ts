@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { appendFileSync, mkdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { isFutureRecord, migrateRecord, withSchemaVersion } from '../../../shared/bots/migrations';
 import {
   GROUP_TASK_TEXT_MAX,
   GROUP_TASK_TITLE_MAX,
@@ -15,6 +16,8 @@ interface ChatTasks {
   maxSeq: number;
   /** 文件中的非空行数，用于判断冗余度 */
   lines: number;
+  /** 更新 schema 写出的行：读不懂，但压缩时原样保留，其 seq 计入 maxSeq */
+  future: string[];
 }
 
 /**
@@ -79,7 +82,7 @@ export class GroupTaskStore {
     const parsed = isBotChatId(chatId) ? parseGroupTask(task) : undefined;
     if (!parsed) return undefined;
     const state = this.load(chatId);
-    this.append(chatId, parsed);
+    this.append(chatId, withSchemaVersion('task', parsed));
     state.tasks.set(parsed.id, parsed);
     state.maxSeq = Math.max(state.maxSeq, parsed.seq);
     this.compactIfRedundant(chatId, state);
@@ -115,16 +118,17 @@ export class GroupTaskStore {
   }
 
   private compactIfRedundant(chatId: string, state: ChatTasks): void {
-    if (state.lines - state.tasks.size < Math.max(this.minRedundant, state.tasks.size)) return;
-    const records: unknown[] = [...state.tasks.values()].sort((a, b) => a.seq - b.seq);
+    const kept = state.tasks.size + state.future.length;
+    if (state.lines - kept < Math.max(this.minRedundant, kept)) return;
+    const records: unknown[] = [...state.tasks.values()]
+      .sort((a, b) => a.seq - b.seq)
+      .map((task) => withSchemaVersion('task', task));
     const top = Math.max(0, ...[...state.tasks.values()].map((task) => task.seq));
     if (state.maxSeq > top) records.push({ id: 'seq-floor', seq: state.maxSeq, deleted: true });
+    const lines = [...records.map((record) => JSON.stringify(record)), ...state.future];
     try {
-      writeAtomic(
-        this.file(chatId),
-        `${records.map((record) => JSON.stringify(record)).join('\n')}\n`
-      );
-      state.lines = records.length;
+      writeAtomic(this.file(chatId), `${lines.join('\n')}\n`);
+      state.lines = lines.length;
     } catch (error) {
       console.warn('[bots] tasks compaction failed', chatId, error);
     }
@@ -133,7 +137,7 @@ export class GroupTaskStore {
   private load(chatId: string): ChatTasks {
     const cached = this.cache.get(chatId);
     if (cached) return cached;
-    const state: ChatTasks = { tasks: new Map(), maxSeq: 0, lines: 0 };
+    const state: ChatTasks = { tasks: new Map(), maxSeq: 0, lines: 0, future: [] };
     let text = '';
     try {
       text = readFileSync(this.file(chatId), 'utf8');
@@ -145,13 +149,19 @@ export class GroupTaskStore {
       state.lines++;
       try {
         const value = JSON.parse(line) as Record<string, unknown>;
+        if (isFutureRecord('task', value)) {
+          state.future.push(line);
+          if (Number.isSafeInteger(value.seq))
+            state.maxSeq = Math.max(state.maxSeq, value.seq as number);
+          continue;
+        }
         if (value?.deleted === true && typeof value.id === 'string') {
           state.tasks.delete(value.id);
           if (Number.isSafeInteger(value.seq))
             state.maxSeq = Math.max(state.maxSeq, value.seq as number);
           continue;
         }
-        const task = parseGroupTask(value);
+        const task = parseGroupTask(migrateRecord('task', value));
         if (!task) continue;
         state.tasks.set(task.id, task);
         state.maxSeq = Math.max(state.maxSeq, task.seq);

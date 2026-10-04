@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { MISSED_RUNS_MAX, parseCron } from '../../../shared/bots/cron';
+import { migrateRecord, withSchemaVersion } from '../../../shared/bots/migrations';
 import {
   type BotRoutine,
   type BotRoutineResult,
@@ -34,7 +35,7 @@ export class BotRoutineStore {
 
   list(botId: string): BotRoutine[] {
     if (!isBotId(botId)) return [];
-    const raw = readJson(this.file(botId));
+    const raw = migrateRecord('routines', readJson(this.file(botId)));
     const items =
       raw && typeof raw === 'object' && Array.isArray((raw as { routines?: unknown }).routines)
         ? ((raw as { routines: unknown[] }).routines as unknown[])
@@ -110,6 +111,6 @@ export class BotRoutineStore {
   }
 
   private write(botId: string, routines: BotRoutine[]): void {
-    writeJsonAtomic(this.file(botId), { routines });
+    writeJsonAtomic(this.file(botId), withSchemaVersion('routines', { routines }));
   }
 }

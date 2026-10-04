@@ -1,5 +1,6 @@
 import { appendFileSync, mkdirSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
+import { isFutureRecord, migrateRecord, withSchemaVersion } from '../../../shared/bots/migrations';
 import { type Delegation, parseDelegation } from '../../../shared/types/bot';
 import { writeAtomic } from './files';
 
@@ -17,6 +18,8 @@ export interface DelegationStoreOptions {
 /** delegations.jsonl：append-only 整条快照，后写覆盖；加载与追加时按冗余度原子压缩 */
 export class DelegationStore {
   private readonly records = new Map<string, Delegation>();
+  /** 更新 schema 写出的行：读不懂，但压缩时原样保留 */
+  private readonly future: string[] = [];
   private readonly now: () => number;
   private readonly retentionMs: number;
   private readonly minRedundant: number;
@@ -39,7 +42,12 @@ export class DelegationStore {
       if (!line.trim()) continue;
       this.lines++;
       try {
-        const record = parseDelegation(JSON.parse(line));
+        const value: unknown = JSON.parse(line);
+        if (isFutureRecord('delegation', value)) {
+          this.future.push(line);
+          continue;
+        }
+        const record = parseDelegation(migrateRecord('delegation', value));
         if (record) this.records.set(record.id, record);
       } catch {
         /* torn or invalid line */
@@ -68,14 +76,19 @@ export class DelegationStore {
     if (!parsed) throw new Error('Invalid delegation record');
     mkdirSync(dirname(this.file), { recursive: true });
     // Leading newline also isolates any torn last line from the next valid record.
-    appendFileSync(this.file, `\n${JSON.stringify(parsed)}\n`, 'utf8');
+    appendFileSync(
+      this.file,
+      `\n${JSON.stringify(withSchemaVersion('delegation', parsed))}\n`,
+      'utf8'
+    );
     this.records.set(parsed.id, parsed);
     this.lines++;
     if (this.redundant()) this.compact([]);
   }
 
   private redundant(): boolean {
-    return this.lines - this.records.size >= Math.max(this.minRedundant, this.records.size);
+    const kept = this.records.size + this.future.length;
+    return this.lines - kept >= Math.max(this.minRedundant, kept);
   }
 
   /** 先追加归档、再原子替换主文件；任一步失败都保留原文件，下次再试 */
@@ -84,11 +97,14 @@ export class DelegationStore {
       if (expired.length > 0)
         appendFileSync(
           join(dirname(this.file), 'delegations.archive.jsonl'),
-          `${expired.map((record) => JSON.stringify(record)).join('\n')}\n`,
+          `${expired.map((record) => JSON.stringify(withSchemaVersion('delegation', record))).join('\n')}\n`,
           { encoding: 'utf8', mode: 0o600 }
         );
       const kept = [...this.records.values()].filter((record) => !expired.includes(record));
-      const snapshot = kept.map((record) => JSON.stringify(record));
+      const snapshot = [
+        ...kept.map((record) => JSON.stringify(withSchemaVersion('delegation', record))),
+        ...this.future,
+      ];
       writeAtomic(this.file, snapshot.length > 0 ? `${snapshot.join('\n')}\n` : '');
       for (const record of expired) this.records.delete(record.id);
       this.lines = snapshot.length;

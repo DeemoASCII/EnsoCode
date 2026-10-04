@@ -11,6 +11,7 @@ import {
 } from 'node:fs';
 import { open } from 'node:fs/promises';
 import { join } from 'node:path';
+import { migrateRecord, withSchemaVersion } from '../../../shared/bots/migrations';
 import {
   type BotChat,
   type BotChatWorkspace,
@@ -86,7 +87,7 @@ export class BotChatStore {
     }
     for (const name of names) {
       if (!isBotChatId(name)) continue;
-      const chat = parseBotChat(readJson(join(root, name, 'chat.json')));
+      const chat = parseBotChat(migrateRecord('chat', readJson(join(root, name, 'chat.json'))));
       if (chat?.id === name) this.chats.set(name, chat);
     }
   }
@@ -359,7 +360,7 @@ export class BotChatStore {
   }
 
   private persist(chat: BotChat): void {
-    writeJsonAtomic(join(this.dir(chat.id), 'chat.json'), chat);
+    writeJsonAtomic(join(this.dir(chat.id), 'chat.json'), withSchemaVersion('chat', chat));
     this.chats.set(chat.id, chat);
   }
 

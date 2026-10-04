@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { readdirSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
+import { migrateRecord, withSchemaVersion } from '../../../shared/bots/migrations';
 import { type BotProfile, checkBotName, isBotId, parseBotProfile } from '../../../shared/types/bot';
 import { readJson, writeAtomic, writeJsonAtomic } from './files';
 
@@ -42,7 +43,7 @@ export class BotStore {
     }
     for (const name of names) {
       if (!isBotId(name)) continue;
-      const bot = parseBotProfile(readJson(join(root, name, 'bot.json')));
+      const bot = parseBotProfile(migrateRecord('bot', readJson(join(root, name, 'bot.json'))));
       if (bot?.id === name) this.bots.set(name, bot);
     }
   }
@@ -142,7 +143,7 @@ export class BotStore {
   }
 
   private persist(bot: BotProfile): void {
-    writeJsonAtomic(join(this.dir(bot.id), 'bot.json'), bot);
+    writeJsonAtomic(join(this.dir(bot.id), 'bot.json'), withSchemaVersion('bot', bot));
     this.bots.set(bot.id, bot);
   }
 
