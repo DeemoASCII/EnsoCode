@@ -148,3 +148,40 @@ describe('BotSessionHost 插话', () => {
     expect(runtime.steers).toEqual([{ id, text: wrapInterjection('now', 'zh') }]);
   });
 });
+
+describe('BotSessionHost 排队优先级', () => {
+  it('出队按人 > bot > 例行任务，同级先来先出', async () => {
+    make({ maxRunningTurns: 1 });
+    const { id } = await started('Busy');
+    const deliver = async (name: string, source: 'human' | 'bot' | 'background') => {
+      const { chatId, botId } = direct(name);
+      const sent = await host.deliver(chatId, botId, name, { source });
+      expect(sent).toMatchObject({ ok: true, queued: true });
+      return sent.ok ? sent.conversationId : '';
+    };
+    const order = [
+      await deliver('routine', 'background'),
+      await deliver('relay', 'bot'),
+      await deliver('human1', 'human'),
+      await deliver('result', 'bot'),
+      await deliver('human2', 'human'),
+    ];
+    expect(host.queueState().map((item) => order.indexOf(item.conversationId))).toEqual([
+      2, 4, 1, 3, 0,
+    ]);
+    let current = id;
+    for (const _ of order) {
+      host.observe(ev({ type: 'turn-completed', turnId: 't' }, current));
+      await flush();
+      current = runtime.prompts.at(-1)!.id;
+    }
+    expect(runtime.prompts.map((item) => item.text)).toEqual([
+      'first',
+      'human1',
+      'human2',
+      'relay',
+      'result',
+      'routine',
+    ]);
+  });
+});

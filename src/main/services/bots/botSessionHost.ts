@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { realpathSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { wrapInterjection } from '../../../shared/bots/interject';
-import type { BotDeliverySource } from '../../../shared/bots/lane';
+import { type BotDeliverySource, enqueueByLane } from '../../../shared/bots/lane';
 import type {
   AgentWorkerEvent,
   AttachedImage,
@@ -636,7 +636,7 @@ export class BotSessionHost {
         this.runningCount() >= this.maxRunning ||
         holder
       ) {
-        this.queue.push(delivery);
+        this.queue = enqueueByLane(this.queue, delivery);
         if (holder) this.noteWorkspaceWait(delivery, holder);
         this.deps.emit({ kind: 'queue', chatId });
         return { ok: true, conversationId, queued: true };
