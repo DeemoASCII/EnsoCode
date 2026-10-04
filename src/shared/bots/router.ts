@@ -86,11 +86,12 @@ export function startRound(
   chat: RouterChat,
   members: readonly RouterMember[],
   humanEntry: HumanEntry,
-  /** 智能选人结果；不在群或已归档时退回群主 */
-  picked: BotId | null = null
+  /** 智能选人名单（顺序即回复顺序）；去重并滤掉不在群或已归档的，为空时退回群主 */
+  picked: readonly BotId[] = []
 ): RouterState {
   let targets = humanTargets(chat, members, humanEntry);
-  if (targets.length === 0 && picked) targets = mentionedActive(chat, members, [picked]);
+  if (targets.length === 0 && Array.isArray(picked))
+    targets = mentionedActive(chat, members, picked);
   if (targets.length === 0 && chat.bossBotId)
     targets = mentionedActive(chat, members, [chat.bossBotId]);
   return advance({
@@ -142,10 +143,14 @@ export function onReply(
   const notices: string[] = [];
   const hopBlocked: string[] = [];
   let hops = state.hops;
+  // [skip] 不算一次回复，不占 maxTurnsPerBot
+  const turnsByBot = skipped
+    ? { ...state.turnsByBot, [reply.botId]: Math.max(0, (state.turnsByBot[reply.botId] ?? 0) - 1) }
+    : state.turnsByBot;
   const targets = skipped ? [] : parseActive(chat, members, reply.text);
   for (const id of targets) {
     if (id === reply.botId || queue.includes(id)) continue;
-    const turns = state.turnsByBot[id] ?? 0;
+    const turns = turnsByBot[id] ?? 0;
     if (turns >= chat.routing.maxTurnsPerBot) {
       if (!noticed.includes(`turns:${id}`)) {
         noticed.push(`turns:${id}`);
@@ -164,7 +169,7 @@ export function onReply(
       `本轮接力已达上限（${chat.routing.maxHops} 次），未再交给「${hopBlocked.join('」「')}」。`
     );
   }
-  const next = advance({ ...state, queue, hops, noticed });
+  const next = advance({ ...state, queue, hops, noticed, turnsByBot });
   return { state: next, next: next.current, skipped, notices };
 }
 

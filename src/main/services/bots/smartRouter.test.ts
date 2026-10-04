@@ -6,6 +6,7 @@ const input: SmartRouteInput = {
   candidates: [
     { id: 'a', name: 'Alice', title: '', scope: 'lead', canAct: false, owner: true },
     { id: 'b', name: 'Bob', title: '', scope: 'backend', canAct: true, owner: false },
+    { id: 'c', name: 'Carol', title: '', scope: 'frontend', canAct: true, owner: false },
   ],
   bossBotId: 'a',
   recent: [],
@@ -31,7 +32,7 @@ describe('createSmartRouter', () => {
   it('未设置时走 judge（标题模型回退链），默认超时 3000ms', async () => {
     judge.mockResolvedValueOnce('Bob');
     expect(router().timeoutMs()).toBe(3000);
-    expect(await router().select(input, signal)).toBe('b');
+    expect(await router().select(input, signal)).toEqual(['b']);
     expect(judge.mock.calls[0][0]).toMatchObject({ preferred: undefined, timeoutMs: 3000 });
     expect(judge.mock.calls[0][0].userText).toContain('fix the api');
     expect(classify).not.toHaveBeenCalled();
@@ -41,18 +42,23 @@ describe('createSmartRouter', () => {
     settings = { botRouteClassifier: { source: 'judge', model: judgeModel, timeoutMs: 5000 } };
     judge.mockResolvedValueOnce('BOSS');
     expect(router().timeoutMs()).toBe(5000);
-    expect(await router().select(input, signal)).toBe('a');
+    expect(await router().select(input, signal)).toEqual(['a']);
     expect(judge.mock.calls[0][0]).toMatchObject({ preferred: judgeModel, timeoutMs: 5000 });
   });
 
-  it('judge 回复不认识或没有可用模型时返回 null', async () => {
-    judge.mockResolvedValueOnce('maybe Carol');
-    expect(await router().select(input, signal)).toBeNull();
-    judge.mockResolvedValueOnce(null);
-    expect(await router().select(input, signal)).toBeNull();
+  it('judge 回复多名时按顺序返回名单', async () => {
+    judge.mockResolvedValueOnce('Carol\nBob');
+    expect(await router().select(input, signal)).toEqual(['c', 'b']);
   });
 
-  it('pi-classifier 取最高概率，低于 0.4 或不可用时返回 null', async () => {
+  it('judge 回复不认识或没有可用模型时返回空名单', async () => {
+    judge.mockResolvedValueOnce('maybe Dave');
+    expect(await router().select(input, signal)).toEqual([]);
+    judge.mockResolvedValueOnce(null);
+    expect(await router().select(input, signal)).toEqual([]);
+  });
+
+  it('pi-classifier 取达到 0.4 的候选（降序），都不达标或不可用时返回空名单', async () => {
     settings = {
       botRouteClassifier: {
         source: 'pi-classifier',
@@ -61,14 +67,16 @@ describe('createSmartRouter', () => {
       },
     };
     classify.mockResolvedValueOnce({ a: 0.3, b: 0.7 });
-    expect(await router().select(input, signal)).toBe('b');
+    expect(await router().select(input, signal)).toEqual(['b']);
     const [config, question] = classify.mock.calls[0];
     expect(config).toMatchObject({ source: 'pi-classifier', model: { modelId: 'cls' } });
-    expect(Object.keys(question.criteria)).toEqual(['a', 'b']);
-    classify.mockResolvedValueOnce({ a: 0.35, b: 0.3 });
-    expect(await router().select(input, signal)).toBeNull();
+    expect(Object.keys(question.criteria)).toEqual(['a', 'b', 'c']);
+    classify.mockResolvedValueOnce({ a: 0.1, b: 0.42, c: 0.48 });
+    expect(await router().select(input, signal)).toEqual(['c', 'b']);
+    classify.mockResolvedValueOnce({ a: 0.35, b: 0.3, c: 0.35 });
+    expect(await router().select(input, signal)).toEqual([]);
     classify.mockResolvedValueOnce(null);
-    expect(await router().select(input, signal)).toBeNull();
+    expect(await router().select(input, signal)).toEqual([]);
     expect(judge).not.toHaveBeenCalled();
   });
 });

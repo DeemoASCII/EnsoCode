@@ -43,7 +43,7 @@ export function createSmartRouter(deps: SmartRouterDeps): GroupResponderSelector
       if (current?.source === 'pi-classifier') {
         const probabilities = await deps.classify(current, smartRouteQuestion(input), signal);
         if (!probabilities) console.warn('[bots] smart routing: classifier unavailable');
-        return probabilities ? pickSmartRouteChoice(probabilities, input) : null;
+        return probabilities ? pickSmartRouteChoice(probabilities, input) : [];
       }
       const text = await deps.judge(
         {
@@ -55,10 +55,11 @@ export function createSmartRouter(deps: SmartRouterDeps): GroupResponderSelector
       );
       if (text === null) {
         console.warn('[bots] smart routing: no model available');
-        return null;
+        return [];
       }
       const picked = parseSmartRouteReply(text, input);
-      if (!picked) console.warn('[bots] smart routing reply not understood:', text.slice(0, 80));
+      if (picked.length === 0)
+        console.warn('[bots] smart routing reply not understood:', text.slice(0, 80));
       return picked;
     },
   };

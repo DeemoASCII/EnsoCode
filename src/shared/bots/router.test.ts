@@ -93,19 +93,38 @@ describe('startRound', () => {
   });
 
   it('没有 @ 时用智能选中的在群成员', () => {
-    const state = startRound(chat({}, 'smart'), members, human('hi'), 'be');
+    const state = startRound(chat({}, 'smart'), members, human('hi'), ['be']);
     expect(state.current).toBe('be');
     expect(state.turnsByBot).toEqual({ be: 1 });
   });
 
+  it('智能选中多人时按名单顺序排队，不计接力跳数', () => {
+    const state = startRound(chat({}, 'smart'), members, human('hi'), ['be', 'boss', 'fe']);
+    expect([state.current, ...state.queue]).toEqual(['be', 'boss', 'fe']);
+    expect(state.hops).toBe(0);
+    expect(state.turnsByBot).toEqual({ be: 1 });
+  });
+
+  it('智能名单去重并丢弃已归档或不在群的成员', () => {
+    const state = startRound(chat({}, 'smart'), members, human('hi'), [
+      'fe',
+      'old',
+      'ghost',
+      'fe',
+      'be',
+    ]);
+    expect([state.current, ...state.queue]).toEqual(['fe', 'be']);
+  });
+
   it('智能选中已归档或不在群的成员时退回群主', () => {
-    expect(startRound(chat({}, 'smart'), members, human('hi'), 'old').current).toBe('boss');
-    expect(startRound(chat({}, 'smart'), members, human('hi'), 'ghost').current).toBe('boss');
-    expect(startRound(chat({}, 'smart'), members, human('hi'), null).current).toBe('boss');
+    expect(startRound(chat({}, 'smart'), members, human('hi'), ['old']).current).toBe('boss');
+    expect(startRound(chat({}, 'smart'), members, human('hi'), ['ghost']).current).toBe('boss');
+    expect(startRound(chat({}, 'smart'), members, human('hi'), []).current).toBe('boss');
   });
 
   it('有 @ 时忽略智能选人结果', () => {
-    expect(startRound(chat({}, 'smart'), members, human('@前端'), 'be').current).toBe('fe');
+    const state = startRound(chat({}, 'smart'), members, human('@前端'), ['be', 'boss']);
+    expect([state.current, ...state.queue]).toEqual(['fe']);
   });
 });
 
@@ -162,6 +181,17 @@ describe('onReply', () => {
     const r = onReply(begin(), chat(), members, { botId: 'boss', text: '[skip] @前端' });
     expect(r.skipped).toBe(false);
     expect(r.next).toBe('fe');
+  });
+
+  it('[skip] 照常推进到队列下一位，且不计入该成员的回复次数', () => {
+    const c = chat({ maxHops: 4, maxTurnsPerBot: 1 });
+    const s = startRound(c, members, human('@前端 @老板'));
+    const r = onReply(s, c, members, { botId: 'fe', text: '[skip]' });
+    expect(r.next).toBe('boss');
+    expect(r.state.turnsByBot.fe ?? 0).toBe(0);
+    const r2 = onReply(r.state, c, members, { botId: 'boss', text: '@前端 你看看' });
+    expect(r2.next).toBe('fe');
+    expect(r2.notices).toEqual([]);
   });
 
   it('队列空时轮次结束', () => {

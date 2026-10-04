@@ -38,6 +38,13 @@ describe('buildBotModeInstruction', () => {
     expect(text).toContain('- Alice (Backend) — APIs and databases (you)');
     expect(text).toContain('- Bob');
   });
+
+  it('群聊：被选中但无需发言时回复 [skip]，被人类直接 @ 时应尽量回复', () => {
+    const text = buildBotModeInstruction({ self: alice, kind: 'group', roster: [alice, bob] });
+    expect(text).toMatch(/already (been )?answered/i);
+    expect(text).toMatch(/outside your responsibility/i);
+    expect(text).toMatch(/human @mentions you directly.*reply/i);
+  });
 });
 
 describe('mergeBotInstruction', () => {

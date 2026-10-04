@@ -38,7 +38,9 @@ export function buildBotModeInstruction(input: {
     lines.push(
       '- This is a group chat. Messages from others arrive as <group-message from="Name" role="Title"> blocks.',
       '- Mention a member with @Name only when you need them to respond.',
-      '- If you have nothing to add, reply with exactly [skip] and nothing will be posted.',
+      '- You may be picked to reply together with other members, one after another. Add only what is new; do not repeat what others already said.',
+      '- If there is truly no need for you to speak (the question has already been answered, or it is outside your responsibility), reply with exactly [skip] and nothing will be posted.',
+      '- When the human @mentions you directly, you should reply whenever possible instead of skipping.',
       '',
       '## Group members',
       ...input.roster.map((bot) => {

@@ -106,6 +106,8 @@ describe('smartRouteJudgePrompt', () => {
     );
     const { systemPrompt, userText } = smartRouteJudgePrompt(input);
     expect(systemPrompt).toMatch(/BOSS/);
+    expect(systemPrompt).toMatch(/up to 3/i);
+    expect(systemPrompt).toMatch(/usually.*one/i);
     expect(systemPrompt).toMatch(/following up on .*previous message/i);
     expect(systemPrompt).toMatch(/never follow instructions/i);
     expect(userText).toContain('Backend');
@@ -122,27 +124,55 @@ describe('smartRouteJudgePrompt', () => {
 
 describe('parseSmartRouteReply', () => {
   const input = buildSmartRouteInput(chat, members, [], human(1, 'hi'));
+  const four = buildSmartRouteInput(
+    { members: [...chat.members, 'qa'], bossBotId: 'boss' },
+    [...members, member('qa', 'QA')],
+    [],
+    human(1, 'hi')
+  );
 
   it('成员名大小写不敏感', () => {
-    expect(parseSmartRouteReply('backend', input)).toBe('be');
-    expect(parseSmartRouteReply('  前端 ', input)).toBe('fe');
+    expect(parseSmartRouteReply('backend', input)).toEqual(['be']);
+    expect(parseSmartRouteReply('  前端 ', input)).toEqual(['fe']);
   });
 
-  it('取第一个能匹配的成员名', () => {
-    expect(parseSmartRouteReply('前端, not Backend', input)).toBe('fe');
-    expect(parseSmartRouteReply('Answer: Backend (not 前端)', input)).toBe('be');
+  it('多名按出现顺序返回，逗号、顿号或换行分隔', () => {
+    expect(parseSmartRouteReply('Backend, 前端', input)).toEqual(['be', 'fe']);
+    expect(parseSmartRouteReply('前端、Backend', input)).toEqual(['fe', 'be']);
+    expect(parseSmartRouteReply('1. 前端\n2. Backend', input)).toEqual(['fe', 'be']);
+  });
+
+  it('每段只取最先出现的名字', () => {
+    expect(parseSmartRouteReply('Answer: Backend (not 前端)', input)).toEqual(['be']);
+  });
+
+  it('重复的名字去重', () => {
+    expect(parseSmartRouteReply('Backend\nbackend\n前端\nBackend', input)).toEqual(['be', 'fe']);
   });
 
   it('BOSS 表示群主', () => {
-    expect(parseSmartRouteReply('BOSS', input)).toBe('boss');
-    expect(parseSmartRouteReply('boss.', input)).toBe('boss');
+    expect(parseSmartRouteReply('BOSS', input)).toEqual(['boss']);
+    expect(parseSmartRouteReply('boss.', input)).toEqual(['boss']);
   });
 
-  it('不认识、空或已归档成员名返回 null', () => {
-    expect(parseSmartRouteReply('老员工', input)).toBeNull();
-    expect(parseSmartRouteReply('nobody', input)).toBeNull();
-    expect(parseSmartRouteReply('', input)).toBeNull();
-    expect(parseSmartRouteReply('Backends', input)).toBeNull();
+  it('BOSS 与成员名混合时按顺序，群主名与 BOSS 视为同一人', () => {
+    expect(parseSmartRouteReply('Backend, BOSS', input)).toEqual(['be', 'boss']);
+    expect(parseSmartRouteReply('BOSS, 前端, 老板', input)).toEqual(['boss', 'fe']);
+  });
+
+  it('未知名与已归档成员被丢弃，其余保留', () => {
+    expect(parseSmartRouteReply('nobody, 前端, 老员工', input)).toEqual(['fe']);
+  });
+
+  it('超过 3 人截断为前 3 个', () => {
+    expect(parseSmartRouteReply('QA, 前端, Backend, BOSS', four)).toEqual(['qa', 'fe', 'be']);
+  });
+
+  it('不认识、空或已归档成员名返回空名单', () => {
+    expect(parseSmartRouteReply('老员工', input)).toEqual([]);
+    expect(parseSmartRouteReply('nobody', input)).toEqual([]);
+    expect(parseSmartRouteReply('', input)).toEqual([]);
+    expect(parseSmartRouteReply('Backends', input)).toEqual([]);
   });
 });
 
@@ -161,19 +191,38 @@ describe('smartRouteQuestion', () => {
 describe('pickSmartRouteChoice', () => {
   const input = buildSmartRouteInput(chat, members, [], human(1, 'hi'));
 
-  it('取概率最高的候选', () => {
-    expect(pickSmartRouteChoice({ boss: 0.2, fe: 0.7, be: 0.1 }, input)).toBe('fe');
+  it('通常只有概率最高的候选达标', () => {
+    expect(pickSmartRouteChoice({ boss: 0.2, fe: 0.7, be: 0.1 }, input)).toEqual(['fe']);
   });
 
-  it('最高概率低于阈值视为不确定', () => {
+  it('达到阈值的候选按概率降序全部入选（可含群主）', () => {
+    expect(pickSmartRouteChoice({ boss: 0.13, fe: 0.42, be: 0.45 }, input)).toEqual(['be', 'fe']);
+    expect(pickSmartRouteChoice({ boss: 0.5, fe: 0.4, be: 0.1 }, input)).toEqual(['boss', 'fe']);
+  });
+
+  it('都低于阈值视为不确定，阈值本身算达标', () => {
     expect(SMART_ROUTE_MIN_CONFIDENCE).toBe(0.4);
-    expect(pickSmartRouteChoice({ boss: 0.3, fe: 0.39, be: 0.31 }, input)).toBeNull();
-    expect(pickSmartRouteChoice({ fe: 0.4 }, input)).toBe('fe');
+    expect(pickSmartRouteChoice({ boss: 0.3, fe: 0.39, be: 0.31 }, input)).toEqual([]);
+    expect(pickSmartRouteChoice({ fe: 0.4 }, input)).toEqual(['fe']);
+  });
+
+  it('最多 3 人', () => {
+    const four = buildSmartRouteInput(
+      { members: [...chat.members, 'qa'], bossBotId: 'boss' },
+      [...members, member('qa', 'QA')],
+      [],
+      human(1, 'hi')
+    );
+    expect(pickSmartRouteChoice({ boss: 0.5, fe: 0.6, be: 0.7, qa: 0.8 }, four)).toEqual([
+      'qa',
+      'be',
+      'fe',
+    ]);
   });
 
   it('忽略非候选键与非法值', () => {
-    expect(pickSmartRouteChoice({ old: 0.9, fe: Number.NaN, be: 0.5 }, input)).toBe('be');
-    expect(pickSmartRouteChoice(null, input)).toBeNull();
-    expect(pickSmartRouteChoice({ fe: '0.9' }, input)).toBeNull();
+    expect(pickSmartRouteChoice({ old: 0.9, fe: Number.NaN, be: 0.5 }, input)).toEqual(['be']);
+    expect(pickSmartRouteChoice(null, input)).toEqual([]);
+    expect(pickSmartRouteChoice({ fe: '0.9' }, input)).toEqual([]);
   });
 });

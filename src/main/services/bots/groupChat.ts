@@ -38,8 +38,8 @@ interface Round {
   stopping?: string;
   /** 进行中的智能选人；abort 同时充当本次结果的身份 */
   routing?: { entry: HumanEntry; abort: AbortController };
-  /** 本轮首位回复人由智能选人选出，其发言标 routedBy */
-  smartPicked?: string;
+  /** 本轮由智能选人选出、尚未发言的成员；其发言标 routedBy */
+  smartPicked?: string[];
 }
 interface AutonomousReply {
   botId: string;
@@ -48,10 +48,10 @@ interface AutonomousReply {
   options: BotDeliverOptions;
   resolve: (result: BotSendResult) => void;
 }
-/** 智能选人：返回成员 id；null 交给群主。超时由 GroupChatService 统一兜底 */
+/** 智能选人：返回有序成员 id 名单（1–3 位）；空名单交给群主。超时由 GroupChatService 统一兜底 */
 export interface GroupResponderSelector {
   timeoutMs(): number;
-  select(input: SmartRouteInput, signal: AbortSignal): Promise<string | null>;
+  select(input: SmartRouteInput, signal: AbortSignal): Promise<string[]>;
 }
 interface GroupChatDeps {
   bots: BotStore;
@@ -268,7 +268,7 @@ export class GroupChatService {
         `${this.deps.bots.get(event.botId)?.name ?? '已删除成员'} 回复失败：${event.error ?? '未知错误'}`
       );
     else if (!isSkipReply(event.text) && event.turnId) {
-      const smart = round.smartPicked === event.botId;
+      const smart = round.smartPicked?.includes(event.botId) ?? false;
       this.append(chat.id, {
         kind: 'bot',
         botId: event.botId,
@@ -280,7 +280,7 @@ export class GroupChatService {
         at: Date.now(),
       });
     }
-    delete round.smartPicked;
+    round.smartPicked = round.smartPicked?.filter((botId) => botId !== event.botId);
     this.advance(chat, event.ok ? event.text : '');
     const pending = mergePending(round.pending);
     if (pending) {
@@ -326,19 +326,20 @@ export class GroupChatService {
     const timeout = new AbortController();
     const timer = setTimeout(() => timeout.abort(), responder.timeoutMs());
     const signal = AbortSignal.any([abort.signal, timeout.signal]);
-    let picked: string | null = null;
+    let picked: string[] = [];
     try {
-      const cut = new Promise<null>((resolve) => {
-        if (signal.aborted) resolve(null);
-        signal.addEventListener('abort', () => resolve(null), { once: true });
+      const cut = new Promise<string[]>((resolve) => {
+        if (signal.aborted) resolve([]);
+        signal.addEventListener('abort', () => resolve([]), { once: true });
       });
       const selecting = Promise.resolve()
         .then(() => responder.select(input, signal))
         .catch((error) => {
           if (!signal.aborted) console.warn('[bots] smart routing failed', error);
-          return null;
+          return [];
         });
-      picked = await Promise.race([selecting, cut]);
+      const result = await Promise.race([selecting, cut]);
+      picked = Array.isArray(result) ? result : [];
       if (timeout.signal.aborted && !abort.signal.aborted)
         console.warn('[bots] smart routing timed out');
     } finally {
@@ -356,8 +357,11 @@ export class GroupChatService {
         return;
       }
       round.state = startRound(chat, this.members(chat), routing.entry, picked);
-      if (picked && round.state.current === picked && picked !== chat.bossBotId)
-        round.smartPicked = picked;
+      const order = [round.state.current, ...round.state.queue];
+      const smart = [...new Set(picked)].filter((botId) => order.includes(botId));
+      // 只剩群主一人时等同兜底，不标
+      if (smart.length > 1 || (smart.length === 1 && smart[0] !== chat.bossBotId))
+        round.smartPicked = smart;
       if (!round.state.current) this.system(chatId, '请先指定群主');
       await this.dispatch(chatId);
       this.persist(chatId);
@@ -398,6 +402,7 @@ export class GroupChatService {
           return this.dispatch(chatId);
         }
         if (job.title !== undefined) this.system(chatId, `例行任务：${job.title}`);
+        delete round.smartPicked;
         round.state = { ...empty(), current: job.botId, turnsByBot: { [job.botId]: 1 } };
         round.options = { ...job.options, queueIfBusy: true };
         round.generation++;
