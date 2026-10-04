@@ -446,7 +446,13 @@ export function getBotServices(): BotServices | null {
     const name = bots.get(event.botId)?.name ?? '?';
     notifyQuietly(chat.id, (lang) =>
       directTurnNotice(
-        { name, ok: event.ok, text: event.text, ...(event.error ? { error: event.error } : {}) },
+        {
+          name,
+          ok: event.ok,
+          text: event.text,
+          ...(event.error ? { error: event.error } : {}),
+          ...(event.estimated ? { estimated: event.estimated } : {}),
+        },
         lang
       )
     );

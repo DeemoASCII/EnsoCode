@@ -1,4 +1,6 @@
 /** Bot 回合结束的系统通知文案；main 段不走共享 i18n（见 notifications.ts） */
+import { BOT_TURN_LIMIT_ERROR } from '../../../shared/usage/botUsage';
+
 export type NoticeLang = 'zh' | 'en';
 export interface BotNotice {
   title: string;
@@ -9,15 +11,22 @@ const BODY_MAX = 100;
 const plain = (text: string) => text.replace(/\s+/gu, ' ').trim().slice(0, BODY_MAX);
 
 export function directTurnNotice(
-  input: { name: string; ok: boolean; text: string; error?: string },
+  input: { name: string; ok: boolean; text: string; error?: string; estimated?: true },
   lang: NoticeLang
 ): BotNotice {
   const zh = lang === 'zh';
-  if (!input.ok)
+  if (!input.ok) {
+    const estimated = input.estimated ? (zh ? '（按估算）' : ' (estimated)') : '';
     return {
       title: `${input.name} · ${zh ? '回复失败' : 'Reply failed'}`,
-      body: plain(input.error ?? '') || (zh ? '本轮没有完成。' : 'The turn did not finish.'),
+      body:
+        input.error === BOT_TURN_LIMIT_ERROR
+          ? zh
+            ? `本回合用量${estimated}超过单回合上限，已停止`
+            : `Stopped: per-turn token limit exceeded${estimated}.`
+          : plain(input.error ?? '') || (zh ? '本轮没有完成。' : 'The turn did not finish.'),
     };
+  }
   return {
     title: `${input.name} · ${zh ? '回复完成' : 'Replied'}`,
     body: plain(input.text) || (zh ? '已完成，等你查看。' : 'Finished and waiting for you.'),

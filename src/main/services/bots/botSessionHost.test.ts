@@ -1084,6 +1084,112 @@ describe('BotSessionHost budget reservation and per-turn cap', () => {
     await flush();
     expect(runtime.aborted).toEqual([]);
   });
+
+  describe('OpenAI-compatible stream without usage until message_end', () => {
+    const zero = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
+    const meta = (id: string, used: number) =>
+      host.observe(ev({ type: 'session-meta', occupancy: { used } }, id));
+    const stream = (
+      id: string,
+      index: number,
+      text: string,
+      reported: Partial<typeof zero> = {},
+      final = false
+    ) =>
+      host.observe(
+        ev(
+          {
+            type: 'message-upsert',
+            index,
+            message: {
+              role: 'assistant',
+              stopReason: 'stop',
+              timing: final ? { stepStartMs: 1, completedMs: 2 } : { stepStartMs: 1 },
+              usage: { ...zero, ...reported },
+              content: [{ type: 'text', text }],
+            },
+          },
+          id
+        )
+      );
+    async function cappedTurn(cap?: number) {
+      if (cap === undefined) reserving(10_000);
+      else
+        host = new BotSessionHost({
+          bots,
+          chats,
+          authority: registry,
+          runtime,
+          emit: (event) => events.push(event),
+        });
+      const alice = bot('Alice');
+      if (cap !== undefined) bots.update(alice.id, { maxTokensPerTurn: cap }, []);
+      const chat = direct(alice.id);
+      const results: BotTurnFinished[] = [];
+      host.onTurnFinished((event) => results.push(event));
+      const sent = await host.deliver(chat.id, alice.id, 'write a long essay');
+      if (!sent.ok) throw new Error(sent.error);
+      host.observe(ev({ type: 'status', status: 'running' }, sent.conversationId));
+      return { id: sent.conversationId, results };
+    }
+
+    it('stops mid-stream once context + streamed Chinese text passes the cap', async () => {
+      const { id, results } = await cappedTurn(3_000);
+      meta(id, 2_000);
+      stream(id, 1, '字'.repeat(1_200));
+      await flush();
+      expect(runtime.aborted).toEqual([]);
+      stream(id, 1, '字'.repeat(1_800));
+      await flush();
+      await flush();
+      expect(runtime.aborted).toEqual([id]);
+      expect(results).toEqual([
+        expect.objectContaining({ ok: false, error: 'turn-token-limit', estimated: true }),
+      ]);
+    });
+
+    it('trusts reported usage over the estimate and only flags estimated stops', async () => {
+      const { id, results } = await cappedTurn(3_000);
+      meta(id, 2_900);
+      stream(id, 1, '字'.repeat(1_200), { input: 1_000 });
+      await flush();
+      expect(runtime.aborted).toEqual([]);
+      stream(id, 1, '字'.repeat(1_200), { input: 1_000, output: 300 }, true);
+      meta(id, 2_400);
+      await flush();
+      expect(runtime.aborted).toEqual([]);
+      stream(id, 3, 'ok', { input: 2_500, output: 10 }, true);
+      await flush();
+      await flush();
+      expect(runtime.aborted).toEqual([id]);
+      expect(results[0]).toMatchObject({ error: 'turn-token-limit' });
+      expect(results[0]).not.toHaveProperty('estimated');
+    });
+
+    it('does not stop a normal short turn', async () => {
+      const { id, results } = await cappedTurn(3_000);
+      meta(id, 2_000);
+      stream(id, 1, '你好，我是 Alice。');
+      stream(id, 1, '你好，我是 Alice。', { input: 2_050, output: 12 }, true);
+      host.observe(ev({ type: 'turn-completed', turnId: 't' }, id));
+      await flush();
+      expect(runtime.aborted).toEqual([]);
+      expect(results).toEqual([expect.objectContaining({ ok: true })]);
+    });
+
+    it('checks the daily budget while streaming with the same estimate', async () => {
+      const { id, results } = await cappedTurn();
+      meta(id, 2_000);
+      stream(id, 1, 'a'.repeat(4_000));
+      await flush();
+      expect(runtime.aborted).toEqual([]);
+      stream(id, 1, 'a'.repeat(40_000));
+      await flush();
+      await flush();
+      expect(runtime.aborted).toEqual([id]);
+      expect(results).toEqual([expect.objectContaining({ ok: false, error: 'budget-exceeded' })]);
+    });
+  });
 });
 
 describe('BotSessionHost silence watchdog', () => {

@@ -154,6 +154,23 @@ it('a turn stopped by the per-turn token cap says so and relays onwards', async 
   });
   expect(deliver.mock.calls.map((call) => call[1])).toEqual([b, a]);
 });
+it('a turn stopped by the estimated per-turn usage says it was estimated', async () => {
+  await group.send(id, '@Bob hello');
+  finish({
+    chatId: id,
+    botId: b,
+    conversationId: b,
+    text: '',
+    ok: false,
+    error: 'turn-token-limit',
+    estimated: true,
+  });
+  await group.settled(id);
+  expect(entries().at(-1)).toMatchObject({
+    kind: 'system',
+    text: 'Bob 本回合用量（按估算）超过单回合上限，已停止',
+  });
+});
 it('a routine run over budget resolves with the budget error and notes it', async () => {
   deliver.mockResolvedValueOnce({ ok: false, error: 'budget-exceeded' });
   expect(await group.runAs(id, b, 'routine', 'check')).toEqual({

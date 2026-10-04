@@ -333,7 +333,7 @@ export class GroupChatService {
         event.error === BOT_BUDGET_ERROR
           ? budgetNotice(name)
           : event.error === BOT_TURN_LIMIT_ERROR
-            ? `${name} 本回合用量超过单回合上限，已停止`
+            ? `${name} 本回合用量${event.estimated ? '（按估算）' : ''}超过单回合上限，已停止`
             : `${name} 回复失败：${event.error ?? '未知错误'}`
       );
     } else if (!isSkipReply(event.text) && event.turnId) {

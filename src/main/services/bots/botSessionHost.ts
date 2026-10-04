@@ -24,6 +24,7 @@ import { buildBotModeInstruction, buildBotSystemPrompt } from './botPrompt';
 import type { BotStore } from './botStore';
 import type { BotChatStore } from './chatStore';
 import { StartedDeliveryIndex } from './startedDeliveries';
+import { messageTokens } from './turnTokens';
 
 /** bot 会话同时在跑的轮次上限（私聊、群聊、委派、例行合计，Code 会话不计） */
 export const BOT_MAX_RUNNING_TURNS = 4;
@@ -31,21 +32,6 @@ export const BOT_MAX_RUNNING_TURNS = 4;
 export const BOT_SILENCE_MS = 90_000;
 /** 进行中的回合为成员日预算预留的估算 token：本回合已用部分抵扣，回合结束即释放 */
 export const BOT_TURN_RESERVE_TOKENS = 32_000;
-
-/** 一条 assistant 消息的 token：结束后取上报用量；流式中多数厂商只在末尾报输出，按约 4 字符/token 估算 */
-function messageTokens(message: ProjectedMessage, final: boolean): number {
-  const usage = message.usage;
-  if (final && usage) return usage.input + usage.output + usage.cacheRead + usage.cacheWrite;
-  let chars = 0;
-  for (const part of message.content) {
-    if (part.type === 'text' || part.type === 'thinking') chars += part.text.length;
-    else if (part.type === 'toolCall') chars += JSON.stringify(part.arguments ?? '').length;
-  }
-  return (
-    (usage ? usage.input + usage.cacheRead + usage.cacheWrite : 0) +
-    Math.max(usage?.output ?? 0, Math.ceil(chars / 4))
-  );
-}
 
 type ActionResult = { ok: boolean; error?: string };
 type Fail = { ok: false; error: string };
@@ -164,6 +150,8 @@ export interface BotTurnFinished {
   turnKey?: string;
   /** 进行中的轮次被用户停止或中断（不含预算 / 出错）；委派据此级联取消该轮发起的子委派 */
   stopped?: true;
+  /** 单回合上限停止时，只算厂商实报用量并未超限，是按估算停的 */
+  estimated?: true;
 }
 
 interface Delivery extends BotDeliverOptions {
@@ -202,8 +190,16 @@ export class BotSessionHost {
   private readonly turnKeys = new Map<string, string>();
   private disposed = false;
   private readonly budgetChecks = new Set<string>();
-  /** 本宿主发起的回合内每条 assistant 消息的用量（含流式中的），按 turnKey 隔离各回合 */
-  private readonly turnUsage = new Map<string, { turnKey: string; byIndex: Map<number, number> }>();
+  /** 本宿主发起的回合内每条 assistant 消息的用量（含流式估算；settled = 实报用量已记入日账本），按 turnKey 隔离各回合 */
+  private readonly turnUsage = new Map<
+    string,
+    {
+      turnKey: string;
+      byIndex: Map<number, { tokens: number; real: number; settled: boolean }>;
+    }
+  >();
+  /** 会话最近一次上报的上下文占用，估算流式中未报 input 的消息 */
+  private readonly contextTokens = new Map<string, number>();
   /** 会话已看到的笔记版本（spawn 时进系统提示词，之后变化在投递前追加一次） */
   private readonly notesSeen = new Map<string, string>();
   private readonly deliveries = new Map<string, Map<string, 'sent' | 'started'>>();
@@ -353,11 +349,11 @@ export class BotSessionHost {
   }
 
   /** 中止会话当前回合并清掉它的排队投递，回合以 reason 结算 */
-  private async stopConversation(id: string, reason: string): Promise<void> {
+  private async stopConversation(id: string, reason: string, estimated = false): Promise<void> {
     this.cancelQueued((item) => item.conversationId === id, reason);
     await this.withLock(id, async () => {
       this.deps.runtime.abort?.(id);
-      this.cancelActive(id, reason);
+      this.cancelActive(id, reason, estimated);
       // 等旧 generation 结束再允许后续发送，避免迟到的完成事件污染新一轮。
       await this.deps.runtime.release(id);
       this.live.delete(id);
@@ -370,10 +366,11 @@ export class BotSessionHost {
   private async overBudget(
     botId: string,
     chatId: string | null,
-    conversationId?: string
+    conversationId?: string,
+    inflight = 0
   ): Promise<boolean> {
     await this.prepareBudget(botId);
-    return this.budgetExceeded(botId, chatId, conversationId);
+    return this.budgetExceeded(botId, chatId, conversationId, inflight);
   }
 
   private async prepareBudget(botId: string): Promise<void> {
@@ -382,12 +379,20 @@ export class BotSessionHost {
     });
   }
 
-  /** 同步判定，计入该成员其他进行中回合的预留；开始回合的调用方须在同一同步段里占住 slot */
-  private budgetExceeded(botId: string, chatId: string | null, conversationId?: string): boolean {
+  /** 同步判定，计入该成员其他进行中回合的预留与本回合尚未入账的 inflight；开始回合的调用方须在同一同步段里占住 slot */
+  private budgetExceeded(
+    botId: string,
+    chatId: string | null,
+    conversationId?: string,
+    inflight = 0
+  ): boolean {
     if (!this.deps.budget) return false;
     let verdict: BotBudgetVerdict | null = null;
     try {
-      verdict = this.deps.budget.verdict(botId, this.reservedTokens(botId, conversationId));
+      verdict = this.deps.budget.verdict(
+        botId,
+        this.reservedTokens(botId, conversationId) + inflight
+      );
     } catch (error) {
       console.warn('[bots] budget check failed', error);
     }
@@ -404,20 +409,30 @@ export class BotSessionHost {
     let total = 0;
     for (const id of new Set([...this.slots.keys(), ...this.running])) {
       if (id !== exceptId && this.binding(id)?.botId === botId)
-        total += Math.max(0, hold - this.turnTokens(id));
+        total += Math.max(0, hold - this.turnTally(id).tokens);
     }
     return total;
   }
 
-  private turnTokens(id: string): number {
+  /** 本回合用量：tokens 含估算，real 只算实报，inflight 为尚未记入日账本的部分 */
+  private turnTally(id: string): { tokens: number; real: number; inflight: number } {
+    const tally = { tokens: 0, real: 0, inflight: 0 };
     const usage = this.turnUsage.get(id);
-    if (!usage || usage.turnKey !== this.turnKeys.get(id)) return 0;
-    let total = 0;
-    for (const tokens of usage.byIndex.values()) total += tokens;
-    return total;
+    if (!usage || usage.turnKey !== this.turnKeys.get(id)) return tally;
+    for (const entry of usage.byIndex.values()) {
+      tally.tokens += entry.tokens;
+      tally.real += entry.real;
+      if (!entry.settled) tally.inflight += entry.tokens;
+    }
+    return tally;
   }
 
-  private noteTurnUsage(id: string, index: number, tokens: number): void {
+  private noteTurnUsage(
+    id: string,
+    index: number,
+    message: ProjectedMessage,
+    final: boolean
+  ): void {
     const turnKey = this.turnKeys.get(id);
     if (!turnKey) return;
     let usage = this.turnUsage.get(id);
@@ -425,24 +440,30 @@ export class BotSessionHost {
       usage = { turnKey, byIndex: new Map() };
       this.turnUsage.set(id, usage);
     }
-    usage.byIndex.set(index, tokens);
+    const counted = messageTokens(message, final, this.contextTokens.get(id));
+    usage.byIndex.set(index, { ...counted, settled: final && counted.real > 0 });
   }
 
-  /** 回合内用量超过成员单回合上限，或一条消息结束后日预算超额：停掉这一回合 */
+  /** 回合内用量（含流式估算）超过成员单回合上限或使日预算超额：停掉这一回合 */
   private async enforceBudget(id: string, final: boolean): Promise<void> {
     const binding = this.binding(id);
     if (!binding || this.budgetChecks.has(id)) return;
     this.budgetChecks.add(id);
     try {
+      const tally = this.turnTally(id);
       const cap = this.deps.bots.get(binding.botId)?.maxTokensPerTurn;
-      const reason =
-        cap !== undefined && this.turnTokens(id) > cap
-          ? BOT_TURN_LIMIT_ERROR
-          : final && (await this.overBudget(binding.botId, binding.chatId, id))
-            ? BOT_BUDGET_ERROR
-            : undefined;
+      const overCap = cap !== undefined && tally.tokens > cap;
+      const reason = overCap
+        ? BOT_TURN_LIMIT_ERROR
+        : (
+              final
+                ? await this.overBudget(binding.botId, binding.chatId, id, tally.inflight)
+                : this.budgetExceeded(binding.botId, binding.chatId, id, tally.inflight)
+            )
+          ? BOT_BUDGET_ERROR
+          : undefined;
       if (!reason || !this.turnActive(id)) return;
-      await this.stopConversation(id, reason);
+      await this.stopConversation(id, reason, overCap && tally.real <= cap);
       if (binding.chatId) this.deps.emit({ kind: 'queue', chatId: binding.chatId });
       this.pump();
     } finally {
@@ -693,9 +714,13 @@ export class BotSessionHost {
         if (!binding) return;
         if (final) this.deps.budget?.record?.(binding.botId, id, event.index, event.message);
         const capped = this.deps.bots.get(binding.botId)?.maxTokensPerTurn !== undefined;
-        if (!this.turnActive(id) || (!usage && !capped)) return;
-        this.noteTurnUsage(id, event.index, messageTokens(event.message, final));
-        if ((final && this.deps.budget) || capped) void this.enforceBudget(id, final);
+        if (!this.turnActive(id)) return;
+        this.noteTurnUsage(id, event.index, event.message, final);
+        if (this.deps.budget || capped) void this.enforceBudget(id, final);
+        return;
+      }
+      case 'session-meta': {
+        if (event.occupancy) this.contextTokens.set(id, event.occupancy.used);
         return;
       }
       case 'turn-completed': {
@@ -1167,7 +1192,8 @@ export class BotSessionHost {
     error?: string,
     text = '',
     deliveryId: string | null | undefined = this.activeDeliveries.get(conversationId),
-    stopped = false
+    stopped = false,
+    estimated = false
   ): void {
     const binding = this.binding(conversationId);
     if (!binding) return;
@@ -1184,6 +1210,7 @@ export class BotSessionHost {
       ...(binding.delegationId ? { delegationId: binding.delegationId } : {}),
       ...(turnKey ? { turnKey } : {}),
       ...(stopped ? { stopped: true as const } : {}),
+      ...(estimated ? { estimated: true as const } : {}),
     };
     if (deliveryId === this.activeDeliveries.get(conversationId))
       this.activeDeliveries.delete(conversationId);
@@ -1245,7 +1272,7 @@ export class BotSessionHost {
     }
   }
 
-  private cancelActive(id: string, reason = 'canceled'): void {
+  private cancelActive(id: string, reason = 'canceled', estimated = false): void {
     this.cancelSettle(id);
     if (this.turnActive(id))
       this.finish(
@@ -1255,7 +1282,8 @@ export class BotSessionHost {
         reason,
         '',
         undefined,
-        reason !== BOT_BUDGET_ERROR && reason !== BOT_TURN_LIMIT_ERROR
+        reason !== BOT_BUDGET_ERROR && reason !== BOT_TURN_LIMIT_ERROR,
+        estimated
       );
     this.running.delete(id);
     this.slots.delete(id);
@@ -1266,6 +1294,7 @@ export class BotSessionHost {
   private clearSession(id: string): void {
     this.cancelSettle(id);
     this.turnUsage.delete(id);
+    this.contextTokens.delete(id);
     this.running.delete(id);
     this.slots.delete(id);
     this.lastAssistant.delete(id);

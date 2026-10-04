@@ -18,6 +18,22 @@ describe('bot turn notices', () => {
     );
   });
 
+  it('explains a per-turn token cap stop and whether it was estimated', () => {
+    const stop = (estimated?: true) =>
+      directTurnNotice(
+        {
+          name: 'Bob',
+          ok: false,
+          text: '',
+          error: 'turn-token-limit',
+          ...(estimated ? { estimated } : {}),
+        },
+        'zh'
+      ).body;
+    expect(stop()).toBe('本回合用量超过单回合上限，已停止');
+    expect(stop(true)).toBe('本回合用量（按估算）超过单回合上限，已停止');
+  });
+
   it('merges a relay batch into one notice listing every participant', () => {
     expect(
       groupBatchNotice(
