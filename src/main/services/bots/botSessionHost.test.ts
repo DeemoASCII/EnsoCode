@@ -942,6 +942,23 @@ describe('BotSessionHost budget reservation and per-turn cap', () => {
     const sent = await host.deliver(one.id, alice.id, 'a');
     if (!sent.ok) throw new Error(sent.error);
     usage(sent.conversationId, 1, 10);
+    host.observe(
+      ev(
+        {
+          type: 'message-upsert',
+          index: 1,
+          message: {
+            role: 'assistant',
+            content: [],
+            stopReason: 'stop',
+            timing: { stepStartMs: 1 },
+            usage: { input: 15, output: 0, cacheRead: 0, cacheWrite: 0 },
+          },
+        },
+        sent.conversationId
+      )
+    );
+    expect(recorded).toEqual([]);
     usage(sent.conversationId, 1, 20, 'stop');
     expect(recorded).toEqual([[alice.id, sent.conversationId, 1]]);
   });
@@ -994,6 +1011,78 @@ describe('BotSessionHost budget reservation and per-turn cap', () => {
     await flush();
     expect(results.at(-1)).toMatchObject({ ok: false, error: 'budget-exceeded' });
     expect(results.at(-1)).not.toHaveProperty('stopped');
+  });
+
+  it('estimates streamed output (~4 chars per token) when the provider reports usage only at the end', async () => {
+    host = new BotSessionHost({
+      bots,
+      chats,
+      authority: registry,
+      runtime,
+      emit: (event) => events.push(event),
+    });
+    const alice = bot('Alice');
+    bots.update(alice.id, { maxTokensPerTurn: 1_000 }, []);
+    const chat = direct(alice.id);
+    const sent = await host.deliver(chat.id, alice.id, 'a');
+    if (!sent.ok) throw new Error(sent.error);
+    const stream = (text: string, args: unknown) =>
+      host.observe(
+        ev(
+          {
+            type: 'message-upsert',
+            index: 1,
+            // pi 的流式中间态也带 stopReason，只有 message_end 才有 completedMs
+            message: {
+              role: 'assistant',
+              stopReason: 'stop',
+              timing: { stepStartMs: 1 },
+              usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+              content: [
+                { type: 'thinking', text },
+                { type: 'toolCall', id: 'c', name: 'write', arguments: args },
+              ],
+            },
+          },
+          sent.conversationId
+        )
+      );
+    stream('x'.repeat(2_000), { body: 'y'.repeat(1_900) });
+    await flush();
+    expect(runtime.aborted).toEqual([]);
+    stream('x'.repeat(2_000), { body: 'y'.repeat(2_100) });
+    await flush();
+    await flush();
+    expect(runtime.aborted).toEqual([sent.conversationId]);
+  });
+
+  it('does not double count: the reported usage replaces the estimate once the message ends', async () => {
+    host = new BotSessionHost({
+      bots,
+      chats,
+      authority: registry,
+      runtime,
+      emit: (event) => events.push(event),
+    });
+    const alice = bot('Alice');
+    bots.update(alice.id, { maxTokensPerTurn: 1_000 }, []);
+    const chat = direct(alice.id);
+    const sent = await host.deliver(chat.id, alice.id, 'a');
+    if (!sent.ok) throw new Error(sent.error);
+    host.observe(
+      ev(
+        {
+          type: 'message-upsert',
+          index: 1,
+          message: { role: 'assistant', content: [{ type: 'text', text: 'z'.repeat(2_800) }] },
+        },
+        sent.conversationId
+      )
+    );
+    usage(sent.conversationId, 1, 300, 'toolUse');
+    usage(sent.conversationId, 3, 600, 'toolUse');
+    await flush();
+    expect(runtime.aborted).toEqual([]);
   });
 });
 

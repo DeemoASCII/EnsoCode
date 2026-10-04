@@ -32,6 +32,21 @@ export const BOT_SILENCE_MS = 90_000;
 /** 进行中的回合为成员日预算预留的估算 token：本回合已用部分抵扣，回合结束即释放 */
 export const BOT_TURN_RESERVE_TOKENS = 32_000;
 
+/** 一条 assistant 消息的 token：结束后取上报用量；流式中多数厂商只在末尾报输出，按约 4 字符/token 估算 */
+function messageTokens(message: ProjectedMessage, final: boolean): number {
+  const usage = message.usage;
+  if (final && usage) return usage.input + usage.output + usage.cacheRead + usage.cacheWrite;
+  let chars = 0;
+  for (const part of message.content) {
+    if (part.type === 'text' || part.type === 'thinking') chars += part.text.length;
+    else if (part.type === 'toolCall') chars += JSON.stringify(part.arguments ?? '').length;
+  }
+  return (
+    (usage ? usage.input + usage.cacheRead + usage.cacheWrite : 0) +
+    Math.max(usage?.output ?? 0, Math.ceil(chars / 4))
+  );
+}
+
 type ActionResult = { ok: boolean; error?: string };
 type Fail = { ok: false; error: string };
 
@@ -668,23 +683,19 @@ export class BotSessionHost {
           ...(event.message.stopReason ? { stopReason: event.message.stopReason } : {}),
           ...(event.message.errorMessage ? { errorMessage: event.message.errorMessage } : {}),
         });
-        const usage = event.message.usage;
-        if (!usage) return;
         const binding = this.binding(id);
-        const final = event.message.stopReason !== undefined;
-        if (final && binding)
-          this.deps.budget?.record?.(binding.botId, id, event.index, event.message);
-        if (!binding || !this.turnActive(id)) return;
-        this.noteTurnUsage(
-          id,
-          event.index,
-          usage.input + usage.output + usage.cacheRead + usage.cacheWrite
-        );
-        if (
-          (final && this.deps.budget) ||
-          this.deps.bots.get(binding.botId)?.maxTokensPerTurn !== undefined
-        )
-          void this.enforceBudget(id, final);
+        const usage = event.message.usage;
+        // pi 的流式中间态也带 stopReason；live 消息以 message_end 打上的 completedMs 为准
+        const final =
+          event.message.stopReason !== undefined &&
+          usage !== undefined &&
+          (event.message.timing === undefined || event.message.timing.completedMs !== undefined);
+        if (!binding) return;
+        if (final) this.deps.budget?.record?.(binding.botId, id, event.index, event.message);
+        const capped = this.deps.bots.get(binding.botId)?.maxTokensPerTurn !== undefined;
+        if (!this.turnActive(id) || (!usage && !capped)) return;
+        this.noteTurnUsage(id, event.index, messageTokens(event.message, final));
+        if ((final && this.deps.budget) || capped) void this.enforceBudget(id, final);
         return;
       }
       case 'turn-completed': {
