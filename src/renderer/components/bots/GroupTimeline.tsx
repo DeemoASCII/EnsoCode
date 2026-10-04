@@ -35,6 +35,7 @@ import {
 import { useSettingsStore } from '@/stores/settings';
 import { ArtifactCards } from './ArtifactCards';
 import { BotAvatar } from './BotAvatar';
+import { BotLiveStatus } from './BotLiveStatus';
 import { chatTitle } from './botText';
 import { DelegationCard } from './DelegationCard';
 import { RoutineProposalCard } from './RoutineCards';
@@ -131,8 +132,9 @@ export function GroupTimeline({
   );
   const replying = runtime?.current ? bots.get(runtime.current) : undefined;
   const replyingId = runtime?.current ? chat.sessions[runtime.current]?.conversationId : undefined;
-  const replyingSession = useBotsStore((s) => (replyingId ? s.sessions[replyingId] : undefined));
-  const activity = currentActivity(replyingSession?.messages);
+  const activity = useBotsStore((s) =>
+    replyingId ? s.sessions[replyingId]?.messages.length : undefined
+  );
 
   // 进入聊天先贴底
   // biome-ignore lint/correctness/useExhaustiveDependencies: 只在切换聊天时执行
@@ -337,16 +339,20 @@ export function GroupTimeline({
                   <span className="mr-1.5 font-semibold text-foreground">{replying.name}</span>
                   {t('Replying')}
                 </div>
-                <div className="flex items-center gap-2 text-muted-foreground text-xs">
-                  <TypingDots />
-                  {activity && <span className="truncate">{toolLabel(activity, t)}…</span>}
-                  <SilenceNote conversationId={replyingId} />
-                  {replyingId && (
-                    <span className="shrink-0 underline-offset-2 hover:underline">
-                      {t('View live')}
-                    </span>
-                  )}
-                </div>
+                <BotLiveStatus
+                  conversationId={replyingId}
+                  leading={<TypingDots />}
+                  trailing={
+                    <>
+                      <SilenceNote conversationId={replyingId} />
+                      {replyingId && (
+                        <span className="shrink-0 underline-offset-2 hover:underline">
+                          {t('View live')}
+                        </span>
+                      )}
+                    </>
+                  }
+                />
               </div>
             </button>
           )}
@@ -364,14 +370,6 @@ export function GroupTimeline({
       )}
     </div>
   );
-}
-
-/** 正在进行的最后一个工具调用名 */
-function currentActivity(messages: ProjectedMessage[] | undefined): string | undefined {
-  const last = messages?.at(-1);
-  if (last?.role !== 'assistant') return undefined;
-  const call = [...last.content].reverse().find((part) => part.type === 'toolCall');
-  return call?.type === 'toolCall' ? call.name : undefined;
 }
 
 function TypingDots() {

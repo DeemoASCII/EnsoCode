@@ -129,7 +129,7 @@ export interface TurnStep {
 
 const DETAIL_KEYS = ['path', 'command', 'pattern', 'query', 'url', 'prompt', 'name'];
 
-function detailOf(args: unknown): string {
+export function detailOf(args: unknown): string {
   if (!args || typeof args !== 'object') return '';
   const record = args as Record<string, unknown>;
   for (const key of DETAIL_KEYS) {

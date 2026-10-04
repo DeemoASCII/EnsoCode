@@ -265,3 +265,39 @@ describe('BotSessionHost 工作区写锁', () => {
     expect(retries).toEqual([]);
   });
 });
+
+describe('BotSessionHost 排队原因', () => {
+  it('等工作目录时带持锁成员，等同会话上一轮时为 turn', async () => {
+    const projectId = project();
+    const a = bot('A');
+    const b = bot('B');
+    const direct = chat([a.id], projectId);
+    await send(direct.id, a.id, 'a');
+    await send(chat([b.id], projectId).id, b.id, 'b');
+    await host.deliver(direct.id, a.id, 'next', { queueIfBusy: true });
+    expect(
+      host.queueState().map(({ botId, reason, holderBotId }) => [botId, reason, holderBotId])
+    ).toEqual([
+      [b.id, 'workspace', a.id],
+      [a.id, 'turn', undefined],
+    ]);
+  });
+
+  it('并发名额满时为 capacity；原因变化时补发 queue 事件', async () => {
+    const events: Array<{ kind: string; chatId?: string }> = [];
+    make({ maxRunningTurns: 1, emit: (event) => events.push(event as never) });
+    const projectId = project();
+    const [a, b, c] = ['A', 'B', 'C'].map((name) => bot(name));
+    const first = await send(chat([a.id], projectId).id, a.id, 'a');
+    await send(chat([b.id], project('other')).id, b.id, 'b');
+    const third = chat([c.id], projectId);
+    await send(third.id, c.id, 'c');
+    expect(host.queueState().map((item) => item.reason)).toEqual(['capacity', 'workspace']);
+    events.length = 0;
+    complete(first.conversationId);
+    await flush();
+    expect(prompted()).toEqual(['a', 'b']);
+    expect(host.queueState()).toMatchObject([{ botId: c.id, reason: 'capacity' }]);
+    expect(events).toContainEqual({ kind: 'queue', chatId: third.id });
+  });
+});

@@ -204,6 +204,7 @@ export class BotSessionHost {
   /** 由本宿主发起、尚未结束的轮次；sawRunning 防止 spawn 后的 idle 误释放 */
   private readonly slots = new Map<string, { sawRunning: boolean }>();
   private queue: Delivery[] = [];
+  private queueReasons = new Map<string, string>();
   private readonly lastAssistant = new Map<string, LastAssistant>();
   private readonly bindings = new Map<string, ConversationBotBinding | null>();
   private readonly locks = new Map<string, Promise<unknown>>();
@@ -374,7 +375,35 @@ export class BotSessionHost {
       botId: item.botId,
       conversationId: item.conversationId,
       position,
+      ...this.queueReason(item, position),
     }));
+  }
+
+  private queueReason(
+    item: Delivery,
+    position: number
+  ): Pick<BotQueueItem, 'reason' | 'holderBotId'> {
+    const id = item.conversationId;
+    if (this.turnActive(id) || this.queue.slice(0, position).some((o) => o.conversationId === id))
+      return { reason: 'turn' };
+    const holder = this.workspaceHolder(id);
+    const holderBotId = holder && this.effectiveBot(holder)?.id;
+    if (holder) return holderBotId ? { reason: 'workspace', holderBotId } : { reason: 'workspace' };
+    return this.runningCount() >= this.maxRunning ? { reason: 'capacity' } : {};
+  }
+
+  /** 排队原因变了的聊天（出队之外，如并发位让出后改等工作目录） */
+  private changedQueueReasons(): string[] {
+    const next = new Map<string, string>();
+    for (const item of this.queueState()) {
+      const note = `${item.conversationId}:${item.reason ?? ''}:${item.holderBotId ?? ''}`;
+      next.set(item.chatId, `${next.get(item.chatId) ?? ''}|${note}`);
+    }
+    const changed = [...next].filter(
+      ([chatId, note]) => chatId && this.queueReasons.get(chatId) !== note
+    );
+    this.queueReasons = next;
+    return changed.map(([chatId]) => chatId);
   }
 
   async stopTurn(chatId: string, botId: string): Promise<void> {
@@ -1247,6 +1276,7 @@ export class BotSessionHost {
         }
       });
     }
+    for (const chatId of this.changedQueueReasons()) touched.add(chatId);
     for (const chatId of touched) this.deps.emit({ kind: 'queue', chatId });
   }
 

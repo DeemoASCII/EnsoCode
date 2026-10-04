@@ -32,6 +32,7 @@ import {
   type ChatRefOption,
   type SkillOption,
 } from './BotComposer';
+import { BotLiveStatus } from './BotLiveStatus';
 import { BotProfilePanel } from './BotProfilePanel';
 import { chatErrorText, chatTitle } from './botText';
 import { DelegationCard } from './DelegationCard';
@@ -214,7 +215,6 @@ export function BotChatView({ chat }: { chat: BotChat }) {
         return `${base} · ${t('{{name}} is replying; new messages are routed after they finish', { name: replying.name })}`;
       return base;
     }
-    if (summary.queued) return t('Queued until a session slot frees up');
     if (summary.running && direct)
       return t('{{name}} is working; your message joins the current turn', { name: direct.name });
     return null;
@@ -319,6 +319,12 @@ export function BotChatView({ chat }: { chat: BotChat }) {
 
         <div className="@container pt-1">
           <div className={cn(CHAT_COL, 'pb-4')}>
+            {direct && (summary.running || summary.queued) && (
+              <BotLiveStatus
+                conversationId={chat.sessions[direct.id]?.conversationId}
+                className="mb-2 rounded-lg border bg-muted/30 px-3 py-2"
+              />
+            )}
             <PendingBars items={pending} bots={byId} showNames={chat.kind === 'group'} />
             <BotComposer
               key={chat.id}

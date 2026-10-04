@@ -654,3 +654,13 @@ Main 在 `spawnSession` 里根据 `ConversationAuthority.bot` 组装提示词，
 **测试**：`botSessionHost.lock.test`（同目录只放行一个、唤醒一个、只读 / 不同目录 / 同会话 steer 不受阻、worker 退出清锁、`onlyIfIdle` 按忙、群提示只写一次、父轮仍在跑时子 / 孙委派开跑、兄弟委派互斥且父新轮等子写完、重试按忙），`botSessionHost.delivery.test`（人类插话包装与非人类原样、英文与笔记块顺序、重试倒计时插话排下一轮、重试恢复后 steer、出队优先级），`interject` / `lane` / `notes` 纯函数；委派相关旧用例改为符合写锁的顺序（`groupDelegation` 全员只读，只验证接力与回传）。
 
 **真机**（隔离 userData，Max claude-sonnet-4-6 + hei qwen3.8-max-0902，同一 Code 项目工作区）：阿克私聊跑 `sleep 20` 写日志时，阿Q 私聊投递返回 `queued`，群里 @阿Q 也排队并出现一条「等待 阿克 释放工作目录」；日志顺序为 K start/end → Q start/end → G，全程只一条提示。阿克委派阿Q 后在本轮里 `sleep 5` + `check_delegation` 轮询，子委派在父轮仍在跑时即开跑完成，父轮第一次查询即拿到 completed；反过来阿Q（qwen，用 codemode 轮询）委派阿克同样即时开跑。两人各自 `sleep 15` 写诗时插话「诗里要提到月亮」：jsonl 里该条 user 消息带补充说明前缀，两位都在同一轮结果里写进月亮、没有单独回「收到」；私聊气泡只显示原话。未在真机验证：自动重试倒计时（需要上游瞬态错误）与出队优先级（需要占满并发），由单测覆盖。
+
+## 正在回复行内嵌进度与排队原因（2026-10 补充）
+
+**行为**：群时间线「XX 正在回复」行（点击仍打开实时会话弹窗）与私聊输入框上方的状态条直接显示：状态（排队中 / 思考中 / 输出中 / 调用工具 / 重试中）、本轮已运行时长（每秒刷新）、本轮最近 3 个工具步骤（工具名 + 单行参数摘要 ≤80 字 + 运行中 / 完成 / 出错 / 已拒绝 + 耗时，运行中按 `toolStartedAt` 实时计），更早的折成「+N」。
+
+**数据**：不新增快照推送。运行态全部来自 renderer 已订阅的成员会话投影（`stores/bots/liveActivity.ts` 纯函数）：本轮 = 最后一条 user 消息之后；`retry` → 重试中，有未收口工具 → 调用工具，末条 assistant 以正文结尾 → 输出中，其余思考中；拒绝只认精确文本 `User denied this operation`。排队原因由 Main 的 `queueState()` 按项计算并随 `BOT_CHATS_LIST` 返回：`BotQueueItem.reason` = `turn`（同会话上一轮未结束 / 前面已有同会话投递）> `workspace`（带 `holderBotId`，只发成员标识不发路径）> `capacity`（并发名额满）。`pump()` 结束时比较各聊天排队原因签名，出队之外原因变化（如并发位让出后改等工作目录）也补发 `queue` 事件。预算超限是直接拒绝不排队，没有对应原因。私聊排队时不再显示「等有空闲会话名额」的输入框提示（与状态条原因冲突）。手机协议不变。
+
+**测试**：`botSessionHost.lock.test`（工作目录原因带持锁成员、同会话为 turn、并发满为 capacity、原因变化补发事件），`liveActivity.test`（空闲 / 排队、本轮最近 3 步与 +N、出错 / 拒绝 / 耗时 / 截断、思考 / 输出 / 重试）。
+
+**真机**（隔离 userData，Max claude-sonnet-4-6 + hei qwen3.8-max-0902，同一项目工作区）：群里 @阿克 分 5 次跑 bash，行内依次出现「思考中 → 调用工具 · sleep 3 运行中 2.3s → 完成 3.2s」，第 4 步起显示「+1」「+2」，计时逐秒递增；@阿Q 分 4 次跑 bash，最后 `cat no_such_file.txt` 显示「出错」。阿克私聊跑 `sleep 30` 时群里 @阿Q，行内显示「排队中 · 等待 阿克 释放工作目录」，阿克结束后阿Q 开跑；私聊同样场景状态条显示同一原因，开跑后切为思考中 / 调用工具与步骤。
