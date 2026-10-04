@@ -1,11 +1,14 @@
 import type { BotChat, BotProfile } from '@shared/types/bot';
 import { findVirtualModel } from '@shared/virtualModels';
+import { motion } from 'framer-motion';
 import { MessageSquarePlus, Shield, Sparkles } from 'lucide-react';
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ApprovalBar } from '@/components/chat/ApprovalBar';
 import { APPROVAL_MODE_META } from '@/components/chat/ApprovalModePicker';
 import { AskBar } from '@/components/chat/AskBar';
 import { CHAT_COL } from '@/components/chat/MessageTimeline';
+import { ResizeHandle } from '@/components/chat/ResizeHandle';
+import { sidePanelWidthTransition } from '@/components/sidepanel/sidePanelWidthAnim';
 import { addToast } from '@/components/ui/toast';
 import { useI18n } from '@/i18n';
 import { cn } from '@/lib/utils';
@@ -13,6 +16,11 @@ import { useBotsStore } from '@/stores/bots';
 import { activeDelegations, pendingOwners } from '@/stores/bots/delegations';
 import { chatSummary, type PendingItem, pendingItems } from '@/stores/bots/selectors';
 import { useSettingsStore } from '@/stores/settings';
+import {
+  CHAT_MIN_WIDTH,
+  resolveSidePanelWidth,
+  SIDE_PANEL_HANDLE_WIDTH,
+} from '@/stores/sidePanel/width';
 import { BotAvatar, GroupAvatar } from './BotAvatar';
 import { BotComposer } from './BotComposer';
 import { BotProfilePanel } from './BotProfilePanel';
@@ -47,6 +55,25 @@ export function BotChatView({ chat }: { chat: BotChat }) {
   const runtime = useBotsStore((s) => s.runtime[chat.id]);
   const markRead = useBotsStore((s) => s.markRead);
   const panelOpen = useBotsStore((s) => s.panelOpen);
+  const panelWidth = useBotsStore((s) => s.panelWidth);
+  const [resizing, setResizing] = useState(false);
+  const [workspaceW, setWorkspaceW] = useState(0);
+  const asideRef = useRef<HTMLElement>(null);
+  useEffect(() => {
+    const parent = asideRef.current?.parentElement;
+    if (!parent) return;
+    const update = () => setWorkspaceW(parent.clientWidth);
+    update();
+    const ro = new ResizeObserver(update);
+    ro.observe(parent);
+    return () => ro.disconnect();
+  }, []);
+  const width = resolveSidePanelWidth(panelWidth, workspaceW);
+  const targetW = panelOpen ? width : 0;
+  const resizePanel = useCallback((deltaX: number) => {
+    const parent = asideRef.current?.parentElement;
+    if (parent) useBotsStore.getState().nudgePanelWidth(-deltaX, parent.clientWidth);
+  }, []);
   const [history, setHistory] = useState<{ id: string; title: string } | null>(null);
   const [live, setLive] = useState<{ id: string; botId: string } | null>(null);
 
@@ -222,8 +249,20 @@ export function BotChatView({ chat }: { chat: BotChat }) {
         </div>
       </div>
 
-      {panelOpen && (
-        <aside className="flex w-80 shrink-0 flex-col overflow-hidden border-l bg-background">
+      {panelOpen && <ResizeHandle onResize={resizePanel} onResizingChange={setResizing} />}
+      <motion.aside
+        ref={asideRef}
+        initial={false}
+        animate={{ width: targetW }}
+        style={{ maxWidth: `max(0px, calc(100% - ${CHAT_MIN_WIDTH + SIDE_PANEL_HANDLE_WIDTH}px))` }}
+        transition={sidePanelWidthTransition({ skip: resizing, cover: false, targetW })}
+        className="relative flex min-h-0 shrink-0 flex-col overflow-hidden bg-background"
+      >
+        {/* 内容固定目标宽度，开合动画只裁切不重排 */}
+        <div
+          className={cn('flex h-full min-h-0 flex-col', !panelOpen && 'invisible')}
+          style={{ width }}
+        >
           {direct ? (
             <BotProfilePanel
               botId={direct.id}
@@ -236,8 +275,8 @@ export function BotChatView({ chat }: { chat: BotChat }) {
               onOpenConversation={(id, title) => setHistory({ id, title })}
             />
           )}
-        </aside>
-      )}
+        </div>
+      </motion.aside>
 
       <SessionHistoryDialog
         conversationId={history?.id ?? null}

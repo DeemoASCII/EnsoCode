@@ -3,6 +3,7 @@ import type { BotChat, BotProfile, Delegation, GroupEntry, GroupTask } from '@sh
 import type { BotEvent, BotQueueItem, BotSendResult } from '@shared/types/botIpc';
 import { create } from 'zustand';
 import { applyHistoryPage, emptyProjection } from '@/stores/sessions/reducer';
+import { resizeSidePanelWidth, SIDE_PANEL_DEFAULT_WIDTH } from '@/stores/sidePanel/width';
 import { isActiveDelegation } from './delegations';
 import { mergeLatest, mergeOlder } from './groupTimeline';
 import { applyBotAgentEvent, type BotSessions, seedHistory } from './projection';
@@ -36,6 +37,7 @@ export type BotView = { kind: 'chat'; chatId: string } | { kind: 'inbox' } | nul
 const TIMELINE_PAGE = 50;
 const READS_KEY = 'enso-bot-reads';
 const PANEL_KEY = 'enso-bot-panel';
+const PANEL_WIDTH_KEY = 'enso-bot-panel-width';
 const VIEW_KEY = 'enso-bot-view';
 const DISMISSED_KEY = 'enso-bot-dismissed-delegations';
 
@@ -84,6 +86,7 @@ interface BotsState {
   view: BotView;
   /** 聊天右侧的成员资料 / 群信息面板 */
   panelOpen: boolean;
+  panelWidth: number;
 
   /** 订阅 Bot 事件与 agent 事件流并拉一次全量；返回清理函数 */
   bind: () => () => void;
@@ -101,6 +104,7 @@ interface BotsState {
   loadOlderSession: (conversationId: string) => Promise<void>;
   setView: (view: BotView) => void;
   togglePanel: () => void;
+  nudgePanelWidth: (delta: number, workspaceWidth: number) => void;
   markRead: (key: string, marker: number) => void;
   send: (chatId: string, text: string, images: AttachedImage[]) => Promise<BotSendResult>;
   stop: (chatId: string) => Promise<void>;
@@ -203,6 +207,7 @@ export const useBotsStore = create<BotsState>()((set, get) => {
     reads: storedReads ?? {},
     view: loadView(),
     panelOpen: localStorage.getItem(PANEL_KEY) !== '0',
+    panelWidth: Number(localStorage.getItem(PANEL_WIDTH_KEY)) || SIDE_PANEL_DEFAULT_WIDTH,
 
     bind: () => {
       let active = true;
@@ -407,6 +412,12 @@ export const useBotsStore = create<BotsState>()((set, get) => {
       const panelOpen = !get().panelOpen;
       localStorage.setItem(PANEL_KEY, panelOpen ? '1' : '0');
       set({ panelOpen });
+    },
+
+    nudgePanelWidth: (delta, workspaceWidth) => {
+      const panelWidth = resizeSidePanelWidth(get().panelWidth, delta, workspaceWidth);
+      localStorage.setItem(PANEL_WIDTH_KEY, String(panelWidth));
+      set({ panelWidth });
     },
 
     markRead: (key, marker) => {
