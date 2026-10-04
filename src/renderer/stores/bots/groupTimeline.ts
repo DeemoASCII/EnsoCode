@@ -1,5 +1,5 @@
 import type { ProjectedMessage } from '@shared/types/agent';
-import type { GroupEntry } from '@shared/types/bot';
+import type { Delegation, GroupEntry } from '@shared/types/bot';
 
 const CONTINUE_WINDOW_MS = 5 * 60_000;
 
@@ -51,6 +51,27 @@ export function buildRows(entries: readonly GroupEntry[]): TimelineRow[] {
     previous = entry;
   }
   return rows;
+}
+
+/** 进行中的委派按时间插进时间线：优先挂在发起者那一轮的群回复后，其次挂在创建前最后一条后 */
+export function anchorDelegations(
+  entries: readonly GroupEntry[],
+  active: readonly Delegation[]
+): { head: Delegation[]; after: Map<string, Delegation[]> } {
+  const head: Delegation[] = [];
+  const after = new Map<string, Delegation[]>();
+  for (const item of [...active].sort((a, b) => a.createdAt - b.createdAt)) {
+    const anchor =
+      entries.find(
+        (entry) =>
+          entry.kind === 'bot' &&
+          entry.conversationId === item.parentConversationId &&
+          entry.at >= item.createdAt
+      ) ?? entries.findLast((entry) => entry.at <= item.createdAt);
+    if (!anchor) head.push(item);
+    else after.set(anchor.id, [...(after.get(anchor.id) ?? []), item]);
+  }
+  return { head, after };
 }
 
 const textOf = (message: ProjectedMessage): string =>

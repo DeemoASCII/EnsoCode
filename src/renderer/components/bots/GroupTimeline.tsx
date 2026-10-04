@@ -1,14 +1,20 @@
 import type { ProjectedMessage } from '@shared/types/agent';
 import type { BotChat, BotProfile, Delegation, GroupEntry } from '@shared/types/bot';
 import { ChevronDown, ChevronRight, Loader2 } from 'lucide-react';
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Markdown } from '@/components/chat/Markdown';
 import { useI18n } from '@/i18n';
 import { toolLabel } from '@/lib/toolLabels';
 import { cn } from '@/lib/utils';
 import { type ChatRuntime, type TimelineState, useBotsStore } from '@/stores/bots';
 import { isRetried } from '@/stores/bots/delegations';
-import { buildRows, locateTurn, type TurnStep, turnSteps } from '@/stores/bots/groupTimeline';
+import {
+  anchorDelegations,
+  buildRows,
+  locateTurn,
+  type TurnStep,
+  turnSteps,
+} from '@/stores/bots/groupTimeline';
 import { BotAvatar } from './BotAvatar';
 import { DelegationCard } from './DelegationCard';
 
@@ -60,6 +66,15 @@ export function GroupTimeline({
         .filter((item) => item.state === 'queued' || item.state === 'running')
         .sort((a, b) => a.createdAt - b.createdAt),
     [delegations]
+  );
+  const placed = useMemo(() => anchorDelegations(entries, active), [entries, active]);
+  const card = (record: Delegation) => (
+    <DelegationCard
+      key={record.id}
+      record={record}
+      bots={bots}
+      onOpenConversation={onOpenConversation}
+    />
   );
   const replying = runtime?.current ? bots.get(runtime.current) : undefined;
   const replyingId = runtime?.current ? chat.sessions[runtime.current]?.conversationId : undefined;
@@ -125,30 +140,25 @@ export function GroupTimeline({
             {t('Say something. Mention a member with @, or the group owner replies.')}
           </p>
         )}
+        {placed.head.map(card)}
         {rows.map((row) =>
           row.kind === 'day' ? (
             <div key={row.key} className="py-1 text-center text-[11px] text-muted-foreground">
               {new Date(row.at).toLocaleDateString()}
             </div>
           ) : (
-            <EntryRow
-              key={row.key}
-              entry={row.entry}
-              continued={row.continued}
-              bots={bots}
-              records={records}
-              onOpenConversation={onOpenConversation}
-            />
+            <Fragment key={row.key}>
+              <EntryRow
+                entry={row.entry}
+                continued={row.continued}
+                bots={bots}
+                records={records}
+                onOpenConversation={onOpenConversation}
+              />
+              {placed.after.get(row.entry.id)?.map(card)}
+            </Fragment>
           )
         )}
-        {active.map((record) => (
-          <DelegationCard
-            key={record.id}
-            record={record}
-            bots={bots}
-            onOpenConversation={onOpenConversation}
-          />
-        ))}
         {!replying && runtime?.routing && (
           <div className="flex items-center gap-2 text-muted-foreground text-xs">
             <TypingDots />

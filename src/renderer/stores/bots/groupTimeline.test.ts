@@ -1,7 +1,14 @@
 import type { ProjectedMessage } from '@shared/types/agent';
-import type { GroupEntry } from '@shared/types/bot';
+import type { Delegation, GroupEntry } from '@shared/types/bot';
 import { describe, expect, it } from 'vitest';
-import { buildRows, locateTurn, mergeLatest, mergeOlder, turnSteps } from './groupTimeline';
+import {
+  anchorDelegations,
+  buildRows,
+  locateTurn,
+  mergeLatest,
+  mergeOlder,
+  turnSteps,
+} from './groupTimeline';
 
 const human = (seq: number, at = seq * 1000): GroupEntry => ({
   kind: 'human',
@@ -129,5 +136,32 @@ describe('turnSteps', () => {
       { id: '1', name: 'read', detail: 'src/a.ts', error: false },
       { id: '2', name: 'bash', detail: 'pnpm test', error: true },
     ]);
+  });
+});
+
+describe('anchorDelegations', () => {
+  const del = (id: string, createdAt: number, parentConversationId = 'p'): Delegation =>
+    ({ id, createdAt, parentConversationId }) as Delegation;
+  const reply = (seq: number, at: number, conversationId: string): GroupEntry =>
+    ({ ...bot(seq, 'x', at), conversationId }) as GroupEntry;
+
+  it('挂在发起者那一轮的群回复之后，而不是时间线末尾', () => {
+    const entries = [human(1, 1000), reply(2, 3000, 'p'), reply(3, 5000, 'q')];
+    const { after, head } = anchorDelegations(entries, [del('d1', 2000), del('d2', 2500)]);
+    expect(after.get('b2')?.map((d) => d.id)).toEqual(['d1', 'd2']);
+    expect(after.has('b3')).toBe(false);
+    expect(head).toEqual([]);
+  });
+
+  it('发起者这一轮还没回复时挂在创建时间之前的最后一条之后', () => {
+    const entries = [human(1, 1000), reply(2, 3000, 'q')];
+    const { after } = anchorDelegations(entries, [del('d1', 2000)]);
+    expect(after.get('h1')?.map((d) => d.id)).toEqual(['d1']);
+  });
+
+  it('早于已加载的第一条时放在最前', () => {
+    const { head, after } = anchorDelegations([human(5, 9000)], [del('d1', 100, 'z')]);
+    expect(head.map((d) => d.id)).toEqual(['d1']);
+    expect(after.size).toBe(0);
   });
 });
