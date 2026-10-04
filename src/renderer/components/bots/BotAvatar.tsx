@@ -1,6 +1,8 @@
+import { avatarPalette } from '@shared/bots/avatarPalette';
+import Avatar from 'boring-avatars';
 import { useState } from 'react';
 import { cn } from '@/lib/utils';
-import { type AvatarBot, botAvatarSrc, initialOf } from './avatarImage';
+import { type AvatarBot, botAvatarSrc } from './avatarImage';
 
 const SIZES = {
   xs: 'h-5 w-5 text-[9px]',
@@ -9,7 +11,7 @@ const SIZES = {
   lg: 'h-16 w-16 text-2xl',
 } as const;
 
-/** 成员头像：有图显示图片（加载失败回落），否则 avatar.color 底色 + 名字首字；busy 时右下角呼吸点 */
+/** 成员头像：有图显示图片（加载失败回落），否则按名字与成员色生成 boring-avatars；busy 时右下角呼吸点 */
 export function BotAvatar({
   bot,
   src: override,
@@ -29,12 +31,11 @@ export function BotAvatar({
   return (
     <span
       className={cn(
-        'relative grid shrink-0 select-none place-items-center rounded-full font-semibold text-white',
-        !bot && 'bg-muted text-muted-foreground',
+        'relative grid shrink-0 select-none place-items-center rounded-full',
+        !bot && 'bg-muted',
         SIZES[size],
         className
       )}
-      style={bot ? { backgroundColor: bot.avatar.color } : undefined}
     >
       {src && failed !== src ? (
         <img
@@ -44,13 +45,25 @@ export function BotAvatar({
           onError={() => setFailed(src)}
           className="absolute inset-0 h-full w-full rounded-full object-cover"
         />
-      ) : (
-        initialOf(bot?.name ?? '?')
-      )}
+      ) : bot ? (
+        <GeneratedAvatar name={bot.name} color={bot.avatar.color} />
+      ) : null}
       {busy && (
         <span className="-right-px -bottom-px absolute h-2.5 w-2.5 animate-pulse rounded-full border-2 border-background bg-success" />
       )}
     </span>
+  );
+}
+
+export function GeneratedAvatar({ name, color }: { name: string; color: string }) {
+  return (
+    <Avatar
+      name={name}
+      variant="beam"
+      colors={avatarPalette(color)}
+      size="100%"
+      className="absolute inset-0 h-full w-full"
+    />
   );
 }
 

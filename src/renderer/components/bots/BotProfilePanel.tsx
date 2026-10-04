@@ -16,10 +16,10 @@ import { buildCharacterCard } from '@/stores/bots/characterCard';
 import { AvatarButtons } from './AvatarCropDialog';
 import {
   botAvatarSrc,
-  colorAvatar,
   coverSquare,
   dataUrlBytes,
   downloadBlob,
+  generatedAvatarPng,
   saveBotAvatar,
 } from './avatarImage';
 import { type AbilityForm, BotAbilityFields } from './BotAbilities';
@@ -94,7 +94,7 @@ async function exportCard(bot: BotProfile, persona: string) {
         .catch(() => null)
     : null;
   const png = writePngText(
-    dataUrlBytes(image ?? colorAvatar(bot.name, bot.avatar.color)),
+    dataUrlBytes(image ?? (await generatedAvatarPng(bot.name, bot.avatar.color))),
     'chara',
     utf8ToBase64(JSON.stringify(buildCharacterCard(bot, persona))),
     ['ccv3']

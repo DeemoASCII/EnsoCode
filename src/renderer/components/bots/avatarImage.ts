@@ -1,12 +1,14 @@
+import { avatarPalette } from '@shared/bots/avatarPalette';
 import { botAvatarUrl } from '@shared/localImage';
 import type { BotProfile } from '@shared/types/bot';
+import Avatar from 'boring-avatars';
+import { createElement } from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
 import { useBotsStore } from '@/stores/bots';
 
 export const AVATAR_EDGE = 512;
 
 export type AvatarBot = Pick<BotProfile, 'name' | 'avatar'> & { id?: string };
-
-export const initialOf = (name: string): string => [...name.trim()][0]?.toUpperCase() ?? '?';
 
 /** 有图片头像时的受控 URL（只按 botId 寻址，带版本号失效缓存） */
 export const botAvatarSrc = (bot: AvatarBot): string | undefined =>
@@ -57,20 +59,20 @@ export async function coverSquare(blob: Blob): Promise<string> {
   }
 }
 
-/** 无图片头像时：颜色圆 + 首字 */
-export function colorAvatar(name: string, color: string): string {
-  const [el, ctx] = canvas();
-  const half = AVATAR_EDGE / 2;
-  ctx.fillStyle = color;
-  ctx.beginPath();
-  ctx.arc(half, half, half, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.fillStyle = '#ffffff';
-  ctx.font = `600 ${AVATAR_EDGE * 0.45}px system-ui, sans-serif`;
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'middle';
-  ctx.fillText(initialOf(name), half, half + AVATAR_EDGE * 0.02);
-  return el.toDataURL('image/png');
+/** 无图片头像时：与界面一致的生成头像，栅格化为 512 PNG */
+export async function generatedAvatarPng(name: string, color: string): Promise<string> {
+  const svg = renderToStaticMarkup(
+    createElement(Avatar, {
+      name,
+      variant: 'beam',
+      colors: avatarPalette(color),
+      size: AVATAR_EDGE,
+    })
+  );
+  const image = new Image();
+  image.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
+  await image.decode();
+  return renderSquare(image, 0, 0, AVATAR_EDGE);
 }
 
 export function downloadBlob(blob: Blob, fileName: string): void {

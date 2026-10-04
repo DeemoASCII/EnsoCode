@@ -1,7 +1,9 @@
 import type { PairBotMember } from '@enso/pair';
+import { avatarPalette } from '@shared/bots/avatarPalette';
+import Avatar from 'boring-avatars';
 import { cn } from '@/lib/utils';
 
-/** 头像：成员色 + 名字首字；运行中加脉冲环 */
+/** 头像：按名字与成员色生成；运行中加脉冲环 */
 export function BotAvatar({
   bot,
   size = 'md',
@@ -15,13 +17,19 @@ export function BotAvatar({
     <span
       aria-hidden
       className={cn(
-        'flex shrink-0 items-center justify-center rounded-full font-medium text-white',
-        size === 'sm' ? 'h-7 w-7 text-xs' : 'h-9 w-9 text-sm',
+        'flex shrink-0 overflow-hidden rounded-full bg-muted',
+        size === 'sm' ? 'h-7 w-7' : 'h-9 w-9',
         busy && 'ring-2 ring-brand/60 ring-offset-1 ring-offset-background animate-pulse'
       )}
-      style={{ backgroundColor: bot?.avatarColor ?? '#888' }}
     >
-      {[...(bot?.name ?? '?')][0]}
+      {bot && (
+        <Avatar
+          name={bot.name}
+          variant="beam"
+          colors={avatarPalette(bot.avatarColor)}
+          size="100%"
+        />
+      )}
     </span>
   );
 }
