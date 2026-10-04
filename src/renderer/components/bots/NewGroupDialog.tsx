@@ -105,14 +105,14 @@ export function NewGroupDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-xl">
+      <DialogContent className="max-h-[85vh] max-w-xl">
         <DialogHeader>
           <DialogTitle>{t('New group chat')}</DialogTitle>
           <DialogDescription>
             {t('One member replies at a time. Without @, the best-fit member is picked to reply.')}
           </DialogDescription>
         </DialogHeader>
-        <DialogPanel className="max-h-[65vh] space-y-4">
+        <DialogPanel className="space-y-4">
           <div>
             <FieldLabel>{t('Group name')}</FieldLabel>
             <Input value={title} onChange={(event) => setTitle(event.target.value)} />

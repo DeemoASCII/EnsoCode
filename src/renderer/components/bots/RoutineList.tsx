@@ -330,11 +330,11 @@ function RoutineEditor({
 
   return (
     <Dialog open onOpenChange={(open) => !open && onClose(false)}>
-      <DialogContent className="max-w-lg">
+      <DialogContent className="max-h-[85vh] max-w-lg">
         <DialogHeader>
           <DialogTitle>{routine ? t('Edit routine') : t('New routine')}</DialogTitle>
         </DialogHeader>
-        <DialogPanel className="max-h-[65vh] space-y-4">
+        <DialogPanel className="space-y-4">
           <div>
             <FieldLabel>{t('Routine title')}</FieldLabel>
             <Input value={title} onChange={(event) => setTitle(event.target.value)} />

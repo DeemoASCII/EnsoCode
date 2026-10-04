@@ -144,7 +144,7 @@ export function NewBotDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-3xl">
+      <DialogContent className="max-h-[85vh] max-w-3xl">
         <DialogHeader>
           <DialogTitle>{t('New member')}</DialogTitle>
           <DialogDescription>
@@ -153,7 +153,7 @@ export function NewBotDialog({
             )}
           </DialogDescription>
         </DialogHeader>
-        <DialogPanel className="max-h-[65vh] space-y-4">
+        <DialogPanel className="space-y-4">
           <div className="flex gap-2">
             <Button
               size="sm"
