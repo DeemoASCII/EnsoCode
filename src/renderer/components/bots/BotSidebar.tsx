@@ -16,6 +16,7 @@ import {
   PinOff,
   Plus,
   RotateCcw,
+  Search,
   Settings,
   Target,
   Trash2,
@@ -34,6 +35,14 @@ import {
   ContextMenuSubTrigger,
   ContextMenuTrigger,
 } from '@/components/ui/context-menu';
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogPanel,
+  DialogTitle,
+} from '@/components/ui/dialog';
+import { InputGroup, InputGroupAddon, InputGroupInput } from '@/components/ui/input-group';
 import { Menu, MenuItem, MenuPopup, MenuTrigger } from '@/components/ui/menu';
 import { addToast } from '@/components/ui/toast';
 import { useI18n } from '@/i18n';
@@ -93,7 +102,8 @@ export function BotSidebar({
   const openDirect = useBotsStore((s) => s.openDirect);
   const upsertChat = useBotsStore((s) => s.upsertChat);
   const upsertBot = useBotsStore((s) => s.upsertBot);
-  const [showArchived, setShowArchived] = useState(false);
+  const [archiveOpen, setArchiveOpen] = useState(false);
+  const [archiveQuery, setArchiveQuery] = useState('');
   const [deleting, setDeleting] = useState<BotChat | null>(null);
 
   const byId = useMemo(() => new Map(bots.map((bot) => [bot.id, bot])), [bots]);
@@ -151,6 +161,16 @@ export function BotSidebar({
   const [showSettled, setShowSettled] = useState(true);
   const archivedChats = rows.filter((row) => row.chat.archivedAt !== undefined);
   const archivedBots = bots.filter((bot) => bot.archivedAt !== undefined);
+  const archivedCount = archivedChats.length + archivedBots.length;
+  const archiveNeedle = archiveQuery.trim().toLowerCase();
+  const archiveMatch = (...texts: string[]) =>
+    !archiveNeedle || texts.some((text) => text.toLowerCase().includes(archiveNeedle));
+  const shownArchivedChats = archivedChats
+    .filter(({ chat, summary }) => archiveMatch(chatTitle(chat, bots, t), summary.preview ?? ''))
+    .sort((a, b) => (b.chat.archivedAt ?? 0) - (a.chat.archivedAt ?? 0));
+  const shownArchivedBots = archivedBots
+    .filter((bot) => archiveMatch(bot.name, bot.title, bot.scope))
+    .sort((a, b) => (b.archivedAt ?? 0) - (a.archivedAt ?? 0));
   const inboxCount = useBotPendingCount();
   const activeChatId = view?.kind === 'chat' ? view.chatId : null;
 
@@ -352,45 +372,6 @@ export function BotSidebar({
               </ChatContextMenu>
             );
           })}
-
-        {showArchived && (
-          <>
-            <SectionHeader title={t('Archived')} />
-            {archivedChats.length === 0 && archivedBots.length === 0 && (
-              <p className="px-4 py-1 text-muted-foreground text-xs">{t('Nothing archived')}</p>
-            )}
-            {archivedChats.map(({ chat, summary }) => (
-              <ChatRow
-                key={chat.id}
-                active={activeChatId === chat.id}
-                avatar={
-                  chat.kind === 'group' ? (
-                    <GroupAvatar bots={chat.members.map((id) => byId.get(id))} />
-                  ) : (
-                    <BotAvatar bot={byId.get(chat.members[0])} />
-                  )
-                }
-                title={chatTitle(chat, bots, t)}
-                preview={summary.preview}
-                action={{
-                  label: t('Restore'),
-                  onClick: () => void updateChat(chat, { archived: false }),
-                }}
-                onClick={() => setView({ kind: 'chat', chatId: chat.id })}
-              />
-            ))}
-            {archivedBots.map((bot) => (
-              <ChatRow
-                key={bot.id}
-                active={false}
-                avatar={<BotAvatar bot={bot} />}
-                title={bot.name}
-                preview={bot.title || bot.scope}
-                action={{ label: t('Restore'), onClick: () => void archiveBot(bot, false) }}
-              />
-            ))}
-          </>
-        )}
       </div>
 
       <div className="@container flex shrink-0 items-center justify-between border-t p-2">
@@ -447,14 +428,19 @@ export function BotSidebar({
               )}
             </button>
           )}
-          <button
-            type="button"
-            className={cn(ICON_BUTTON_CLASS, showArchived && 'bg-muted text-foreground')}
-            onClick={() => setShowArchived((value) => !value)}
-            title={t('Archived')}
-          >
-            <Archive className="h-4 w-4" />
-          </button>
+          {archivedCount > 0 && (
+            <button
+              type="button"
+              className={ICON_BUTTON_CLASS}
+              onClick={() => {
+                setArchiveQuery('');
+                setArchiveOpen(true);
+              }}
+              title={`${t('Archived')} (${archivedCount})`}
+            >
+              <Archive className="h-4 w-4" />
+            </button>
+          )}
           <button
             type="button"
             className={ICON_BUTTON_CLASS}
@@ -465,6 +451,73 @@ export function BotSidebar({
           </button>
         </div>
       </div>
+
+      <Dialog open={archiveOpen} onOpenChange={setArchiveOpen}>
+        <DialogContent className="h-[min(40rem,85vh)] max-w-xl">
+          <DialogHeader>
+            <DialogTitle className="flex items-baseline gap-2">
+              {t('Archived')}
+              <span className="font-sans text-muted-foreground text-sm tabular-nums">
+                {archivedCount}
+              </span>
+            </DialogTitle>
+            <InputGroup data-size="sm" className="mt-1">
+              <InputGroupAddon>
+                <Search />
+              </InputGroupAddon>
+              <InputGroupInput
+                value={archiveQuery}
+                placeholder={t('Search conversations...')}
+                onChange={(event) => setArchiveQuery(event.target.value)}
+              />
+            </InputGroup>
+          </DialogHeader>
+          <DialogPanel className="flex flex-col gap-y-3 border-t pt-3!">
+            {shownArchivedChats.length + shownArchivedBots.length === 0 && (
+              <p className="py-10 text-center text-muted-foreground text-sm">
+                {archiveQuery.trim() ? t('No matching conversations') : t('Nothing archived')}
+              </p>
+            )}
+            {shownArchivedChats.length > 0 && (
+              <ArchivedGroup title={t('Chat threads')} count={shownArchivedChats.length}>
+                {shownArchivedChats.map(({ chat, summary }) => (
+                  <ArchivedRow
+                    key={chat.id}
+                    avatar={
+                      chat.kind === 'group' ? (
+                        <GroupAvatar bots={chat.members.map((id) => byId.get(id))} />
+                      ) : (
+                        <BotAvatar bot={byId.get(chat.members[0])} />
+                      )
+                    }
+                    title={chatTitle(chat, bots, t)}
+                    preview={summary.preview}
+                    onOpen={() => {
+                      setView({ kind: 'chat', chatId: chat.id });
+                      setArchiveOpen(false);
+                    }}
+                    onRestore={() => void updateChat(chat, { archived: false })}
+                    onDelete={chat.kind === 'group' ? () => setDeleting(chat) : undefined}
+                  />
+                ))}
+              </ArchivedGroup>
+            )}
+            {shownArchivedBots.length > 0 && (
+              <ArchivedGroup title={t('Members')} count={shownArchivedBots.length}>
+                {shownArchivedBots.map((bot) => (
+                  <ArchivedRow
+                    key={bot.id}
+                    avatar={<BotAvatar bot={bot} />}
+                    title={bot.name}
+                    preview={bot.title || bot.scope}
+                    onRestore={() => void archiveBot(bot, false)}
+                  />
+                ))}
+              </ArchivedGroup>
+            )}
+          </DialogPanel>
+        </DialogContent>
+      </Dialog>
 
       <ConfirmDialog
         open={deleting !== null}
@@ -501,6 +554,79 @@ export function CountBadge({ count, className }: { count: number; className?: st
     >
       {count > 99 ? '99+' : count}
     </span>
+  );
+}
+
+function ArchivedGroup({
+  title,
+  count,
+  children,
+}: {
+  title: string;
+  count: number;
+  children: ReactNode;
+}) {
+  return (
+    <div>
+      <div className="flex items-center gap-2 pr-0.5 pl-2">
+        <span className="min-w-0 flex-1 truncate py-1 font-medium text-[10px] text-muted-foreground uppercase tracking-wide">
+          {title}
+        </span>
+        <span className="shrink-0 text-[10px] text-muted-foreground tabular-nums">{count}</span>
+      </div>
+      <div className="flex flex-col gap-y-0.5">{children}</div>
+    </div>
+  );
+}
+
+function ArchivedRow({
+  avatar,
+  title,
+  preview,
+  onOpen,
+  onRestore,
+  onDelete,
+}: {
+  avatar: ReactNode;
+  title: string;
+  preview?: string;
+  onOpen?: () => void;
+  onRestore: () => void;
+  onDelete?: () => void;
+}) {
+  const { t } = useI18n();
+  const action =
+    'shrink-0 rounded p-1 text-muted-foreground opacity-0 hover:bg-muted hover:text-foreground group-hover:opacity-100';
+  return (
+    <div className="group flex items-center gap-2.5 rounded-md px-2 py-1.5 hover:bg-muted/60">
+      <button
+        type="button"
+        disabled={!onOpen}
+        onClick={onOpen}
+        className="flex min-w-0 flex-1 items-center gap-2.5 text-left disabled:cursor-default"
+      >
+        {avatar}
+        <span className="min-w-0 flex-1">
+          <span className="block truncate text-sm">{title}</span>
+          {preview && (
+            <span className="block truncate text-muted-foreground text-xs">{preview}</span>
+          )}
+        </span>
+      </button>
+      <button type="button" className={action} onClick={onRestore} title={t('Unarchive')}>
+        <ArchiveRestore className="h-3.5 w-3.5" />
+      </button>
+      {onDelete && (
+        <button
+          type="button"
+          className={cn(action, 'hover:text-destructive')}
+          onClick={onDelete}
+          title={t('Delete')}
+        >
+          <Trash2 className="h-3.5 w-3.5" />
+        </button>
+      )}
+    </div>
   );
 }
 
