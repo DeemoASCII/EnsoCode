@@ -10,6 +10,7 @@ import {
   isUnitType,
 } from '@shared/memory/constants';
 import {
+  DISTILL_GROUP_SCOPE_RULES,
   DISTILL_THREAD_PROMPT,
   distillChunkPrompt,
   distillConsolidatePrompt,
@@ -51,6 +52,28 @@ export interface DistilledMemory {
   confidence: number | null;
   unitType: string | null;
   temporal: { start: string | null; end: string | null } | null;
+  /** 群聊蒸馏的归属：chat = 整个群共享，self = 成员自身；缺省 / 未知按 self */
+  scope?: DistillScope | null;
+}
+
+export type DistillScope = 'chat' | 'self';
+
+const CHAT_SCOPES = new Set(['chat', 'group', 'team', 'shared']);
+const SELF_SCOPES = new Set(['self', 'bot', 'member', 'personal', 'own']);
+
+export function parseDistillScope(value: unknown): DistillScope | null {
+  if (typeof value !== 'string') return null;
+  const v = value.trim().toLowerCase();
+  return CHAT_SCOPES.has(v) ? 'chat' : SELF_SCOPES.has(v) ? 'self' : null;
+}
+
+/** 条目落库 space：只有 scope=chat 且会话有群 space 时进群，其余进自身 space */
+export function distillTargetSpace(
+  m: Pick<DistilledMemory, 'scope'>,
+  spaceId: string,
+  chatSpaceId?: string
+): string {
+  return m.scope === 'chat' && chatSpaceId ? chatSpaceId : spaceId;
 }
 
 // ---------------------------------------------------------------------------
@@ -307,6 +330,8 @@ export function parseDistillResponse(raw: string): DistilledMemory[] | null {
       unitType: str(o.unit_type) ?? str(o.unitType),
       temporal: t && (str(t.start) || str(t.end)) ? { start: str(t.start), end: str(t.end) } : null,
     });
+    const scope = parseDistillScope(o.scope);
+    if (scope) out[out.length - 1].scope = scope;
   }
   return out;
 }
@@ -366,11 +391,19 @@ class DistillTruncatedError extends Error {
 export async function distillTranscript(
   transcript: string,
   complete: Complete,
-  opts: { maxChunkChars?: number; language?: unknown; extractMaxTokens?: number } = {}
+  opts: {
+    maxChunkChars?: number;
+    language?: unknown;
+    extractMaxTokens?: number;
+    /** 群聊成员会话：要求每条带 scope（chat / self） */
+    groupScope?: boolean;
+  } = {}
 ): Promise<DistilledMemory[]> {
   const chunks = chunkTranscript(transcript, opts.maxChunkChars);
   const extractMaxTokens = opts.extractMaxTokens ?? DISTILL_SINGLE_EXTRACT_MAX_TOKENS;
-  const systemPrompt = withMemoryLanguage(DISTILL_THREAD_PROMPT, opts.language);
+  const scoped = (prompt: string) =>
+    opts.groupScope ? `${prompt}\n\n${DISTILL_GROUP_SCOPE_RULES}` : prompt;
+  const systemPrompt = scoped(withMemoryLanguage(DISTILL_THREAD_PROMPT, opts.language));
   const infer = async (
     system: string,
     user: string,
@@ -452,13 +485,13 @@ export async function distillTranscript(
   const listing = collected
     .map(
       (m, i) =>
-        `${i + 1}. [${m.unitType ?? 'unknown'} | importance ${m.importance}] ${m.title ?? ''}\n${m.content}` +
+        `${i + 1}. [${m.unitType ?? 'unknown'} | importance ${m.importance}${opts.groupScope ? ` | scope ${m.scope ?? 'self'}` : ''}] ${m.title ?? ''}\n${m.content}` +
         (m.temporal ? `\n(temporal: ${m.temporal.start ?? '?'} → ${m.temporal.end ?? '?'})` : '')
     )
     .join('\n\n');
   try {
     const merged = await parseWithTruncationRetry(
-      DISTILL_THREAD_PROMPT,
+      scoped(DISTILL_THREAD_PROMPT),
       distillConsolidatePrompt(collected.length, listing),
       {
         maxTokens:
@@ -495,6 +528,8 @@ export interface DistillPayload {
   projectId: string | null;
   /** Bot 模式会话：蒸馏落 bot:<botId>（与 capture 缺省一致） */
   botId?: string;
+  /** 群聊成员会话：scope=chat 的条目落 chat:<chatId>；私聊 / 委派子会话没有 */
+  chatId?: string;
   /** 增量蒸馏起点（不含）：上次返回的水位；缺省从头 */
   fromEntryId?: string;
   /** 增量终点（含）：建任务时盖章，续跑时据此复原同一段，不吞之后新增的内容 */
@@ -655,6 +690,8 @@ export interface RunDistillOptions {
   embedder?: Embedder | null;
   now?: Date;
   spaceId?: string;
+  /** 有值时按群聊分流：提示词要求 scope，scope=chat 的条目写这里 */
+  chatSpaceId?: string;
   /** 透传 createMemory 的 on_memory_created hook（蒸馏出的记忆同样要排 KG 抽取） */
   onCreated?: (memory: Memory) => void;
 }
@@ -718,6 +755,7 @@ export async function runDistillJob(
     distilled = await distillTranscript(opts.transcript, opts.complete, {
       language: jobLanguage ?? 'en',
       extractMaxTokens: attempts >= 2 ? DISTILL_MAX_OUTPUT_TOKENS : undefined,
+      groupScope: Boolean(opts.chatSpaceId),
     });
   } catch (error) {
     const message = `distill failed: ${error instanceof Error ? error.message : String(error)}`;
@@ -736,7 +774,7 @@ export async function runDistillJob(
     notes.push({ kind, title: m.title ?? m.content.slice(0, 40), detail });
   let written = 0;
   for (const m of distilled) {
-    const input = toCreateInput(m, spaceId);
+    const input = toCreateInput(m, distillTargetSpace(m, spaceId, opts.chatSpaceId));
     if (!input) {
       note('low_importance', m, `importance ${m.importance} < ${DISTILL_MIN_IMPORTANCE}`);
       continue;

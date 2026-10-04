@@ -231,7 +231,10 @@ export function BotChatView({ chat }: { chat: BotChat }) {
               onOpenHistory={(id, title) => setHistory({ id, title })}
             />
           ) : (
-            <GroupInfoPanel chat={chat} />
+            <GroupInfoPanel
+              chat={chat}
+              onOpenConversation={(id, title) => setHistory({ id, title })}
+            />
           )}
         </aside>
       )}

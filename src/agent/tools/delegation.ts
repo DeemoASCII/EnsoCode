@@ -1,18 +1,23 @@
 import type { ToolDefinition } from '@earendil-works/pi-coding-agent';
 import type { MemoryInvoker } from './memory';
 
-export type DelegationOp = 'delegate' | 'check_delegation';
+export type DelegationOp = 'delegate' | 'check_delegation' | 'group_tasks';
 
 export function normalizeDelegationParams(raw: unknown): unknown {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return raw;
   const params = { ...raw } as Record<string, unknown>;
-  for (const key of ['id', 'context', 'cancel']) if (params[key] === null) delete params[key];
+  for (const key of ['id', 'context', 'cancel', 'taskId'])
+    if (params[key] === null) delete params[key];
   if (params.cancel === 'true') params.cancel = true;
   if (params.cancel === 'false') params.cancel = false;
+  if (typeof params.taskId === 'number') params.taskId = String(params.taskId);
   return params;
 }
 
-export function createDelegationTools(invoker: MemoryInvoker<DelegationOp>): ToolDefinition[] {
+export function createDelegationTools(
+  invoker: MemoryInvoker<DelegationOp>,
+  options: { groupTasks?: boolean } = {}
+): ToolDefinition[] {
   const define = (
     name: DelegationOp,
     description: string,
@@ -45,11 +50,15 @@ export function createDelegationTools(invoker: MemoryInvoker<DelegationOp>): Too
   return [
     define(
       'delegate',
-      'Delegate a task to another member by name or id. Returns immediately; results arrive asynchronously. Context is truncated to 8000 characters.',
+      'Delegate a task to another member by name or id. Returns immediately; results arrive asynchronously. Context is truncated to 8000 characters.' +
+        (options.groupTasks
+          ? ' Pass taskId (e.g. "#3") to hand a group board task to the member: the task becomes doing with them as assignee, and is marked done (or returned to todo on failure/cancel) when the delegation ends.'
+          : ''),
       {
         to: { type: 'string', minLength: 1 },
         task: { type: 'string', minLength: 1 },
         context: { type: 'string' },
+        ...(options.groupTasks ? { taskId: { type: 'string', minLength: 1 } } : {}),
       },
       ['to', 'task']
     ),

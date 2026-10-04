@@ -83,6 +83,28 @@ it('persists incremental watermarks and does not distill disabled members', asyn
   expect(schedule).toHaveBeenCalledTimes(2);
 });
 
+it('passes chatId to distill only for group chat sessions', async () => {
+  await memory.distill(conversation());
+  expect(schedule.mock.calls[0][0]).not.toHaveProperty('chatId');
+  const bob = bots.create({ name: 'Bob' }, []);
+  if (!bob.ok) throw new Error('fixture');
+  const group = chats.create({
+    kind: 'group',
+    title: 'Team',
+    members: [botId, bob.bot.id],
+    bossBotId: botId,
+    workspace: { kind: 'project', projectId: 'project' },
+  })!;
+  await memory.distill({
+    ...conversation(),
+    conversationId: 'g',
+    bot: { botId, chatId: group.id },
+  });
+  expect(schedule).toHaveBeenLastCalledWith(
+    expect.objectContaining({ botId, chatId: group.id, sessionId: 'g' })
+  );
+});
+
 it('does not overwrite a replacement session watermark', async () => {
   schedule.mockImplementationOnce(async () => {
     chats.update(chatId, (c) => ({

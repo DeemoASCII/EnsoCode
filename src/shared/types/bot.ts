@@ -98,6 +98,8 @@ export interface Delegation {
   effectivePermissions?: BotPermissions;
   /** 发起时父会话所在轮次的键；同父会话同 batchId 的委派结果合并回传 */
   batchId?: string;
+  /** 关联的群任务看板任务 id；委派终态时同步任务状态 */
+  taskId?: string;
 }
 
 export function parseDelegation(value: unknown): Delegation | undefined {
@@ -146,6 +148,7 @@ export function parseDelegation(value: unknown): Delegation | undefined {
   if (isTime(value.deliveredAt)) record.deliveredAt = value.deliveredAt;
   if (isTime(value.finishedAt)) record.finishedAt = value.finishedAt;
   if (isText(value.batchId)) record.batchId = value.batchId;
+  if (isBotId(value.taskId)) record.taskId = value.taskId;
   if (value.effectivePermissions !== undefined) {
     const permissions = value.effectivePermissions;
     if (
@@ -491,4 +494,55 @@ export function parseBotRoutine(value: unknown): BotRoutine | undefined {
   if (isSeq(value.missed) && value.missed > 0)
     routine.missed = Math.min(MISSED_RUNS_MAX, value.missed);
   return routine;
+}
+
+export const GROUP_TASK_STATUSES = ['todo', 'doing', 'done', 'canceled'] as const;
+export type GroupTaskStatus = (typeof GROUP_TASK_STATUSES)[number];
+export const GROUP_TASK_TITLE_MAX = 200;
+export const GROUP_TASK_TEXT_MAX = 4000;
+
+/** userData/bot-chats/<chatId>/tasks.jsonl 的一条快照；seq 群内自增，显示为 #N */
+export interface GroupTask {
+  id: string;
+  seq: number;
+  title: string;
+  detail?: string;
+  status: GroupTaskStatus;
+  assigneeBotId?: BotId;
+  createdBy: 'human' | BotId;
+  delegationId?: string;
+  /** 完成说明 */
+  result?: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export function parseGroupTask(value: unknown): GroupTask | undefined {
+  if (
+    !isObject(value) ||
+    !isBotId(value.id) ||
+    !Number.isSafeInteger(value.seq) ||
+    (value.seq as number) < 1 ||
+    !isText(value.title) ||
+    value.title.length > GROUP_TASK_TITLE_MAX ||
+    !GROUP_TASK_STATUSES.includes(value.status as GroupTaskStatus) ||
+    (value.createdBy !== 'human' && !isBotId(value.createdBy)) ||
+    !isTime(value.createdAt) ||
+    !isTime(value.updatedAt)
+  )
+    return undefined;
+  const task: GroupTask = {
+    id: value.id,
+    seq: value.seq as number,
+    title: value.title,
+    status: value.status as GroupTaskStatus,
+    createdBy: value.createdBy as GroupTask['createdBy'],
+    createdAt: value.createdAt,
+    updatedAt: value.updatedAt,
+  };
+  if (isText(value.detail)) task.detail = value.detail.slice(0, GROUP_TASK_TEXT_MAX);
+  if (isBotId(value.assigneeBotId)) task.assigneeBotId = value.assigneeBotId;
+  if (isBotId(value.delegationId)) task.delegationId = value.delegationId;
+  if (isText(value.result)) task.result = value.result.slice(0, GROUP_TASK_TEXT_MAX);
+  return task;
 }

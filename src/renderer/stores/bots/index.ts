@@ -1,5 +1,5 @@
 import type { AttachedImage } from '@shared/types/agent';
-import type { BotChat, BotProfile, Delegation, GroupEntry } from '@shared/types/bot';
+import type { BotChat, BotProfile, Delegation, GroupEntry, GroupTask } from '@shared/types/bot';
 import type { BotEvent, BotQueueItem, BotSendResult } from '@shared/types/botIpc';
 import { create } from 'zustand';
 import { applyHistoryPage, emptyProjection } from '@/stores/sessions/reducer';
@@ -76,6 +76,8 @@ interface BotsState {
   dismissedDelegations: string[];
   timelines: Record<string, TimelineState>;
   runtime: Record<string, ChatRuntime>;
+  /** 群任务看板；只缓存打开过看板的群 */
+  tasks: Record<string, GroupTask[]>;
   sessions: BotSessions;
   sessionHistoryLoading: Record<string, boolean>;
   reads: Record<string, number>;
@@ -90,6 +92,7 @@ interface BotsState {
   /** 拉委派列表，并跟踪进行中委派的子会话（审批/提问归属发起聊天） */
   refreshDelegations: () => Promise<void>;
   dismissDelegation: (id: string) => void;
+  refreshTasks: (chatId: string) => Promise<void>;
   loadLatest: (chatId: string) => Promise<void>;
   loadOlder: (chatId: string) => Promise<void>;
   refreshRuntime: (chatId: string) => Promise<void>;
@@ -178,6 +181,9 @@ export const useBotsStore = create<BotsState>()((set, get) => {
         void get().refreshDelegations();
         if (event.chatId) void get().loadLatest(event.chatId);
         break;
+      case 'tasks':
+        if (event.chatId && get().tasks[event.chatId]) void get().refreshTasks(event.chatId);
+        break;
     }
   };
 
@@ -191,6 +197,7 @@ export const useBotsStore = create<BotsState>()((set, get) => {
     dismissedDelegations: loadDismissed(),
     timelines: {},
     runtime: {},
+    tasks: {},
     sessions: {},
     sessionHistoryLoading: {},
     reads: storedReads ?? {},
@@ -268,6 +275,12 @@ export const useBotsStore = create<BotsState>()((set, get) => {
         )
           void get().trackSession(item.childConversationId);
       }
+    },
+
+    refreshTasks: async (chatId) => {
+      const result = await window.electronAPI.bots.tasks.list(chatId).catch(() => null);
+      if (!result?.ok) return;
+      set((state) => ({ tasks: { ...state.tasks, [chatId]: result.tasks } }));
     },
 
     dismissDelegation: (id) => {

@@ -52,6 +52,12 @@ export function distillSpaceId(ctx: MemorySpaceContext): string {
   return ctx.projectId ? projectSpaceId(ctx.projectId) : GLOBAL_SPACE;
 }
 
+/** 群聊成员会话的蒸馏落点：自身 space 之外再给群 space，由模型按 scope 分流；其余会话只有 self */
+export function distillSpaces(ctx: MemorySpaceContext): { self: string; chat?: string } {
+  const self = distillSpaceId(ctx);
+  return ctx.botId && isBotChatId(ctx.chatId) ? { self, chat: chatSpaceId(ctx.chatId) } : { self };
+}
+
 /**
  * 模型只说 space 语义，这里换成真实 space_id。`project` 无项目时返回空集合让调用方决定拒绝还是空结果；
  * `bot` / `chat` 没有对应上下文直接报错。`all` 的顺序：bot → chat → project → global。

@@ -1,6 +1,6 @@
 import type { AbilitySuggestion } from '../bots/abilitySuggest';
 import type { AttachedImage, ConversationAuthority } from './agent';
-import type { BotChat, BotProfile, BotRoutine, Delegation, GroupEntry } from './bot';
+import type { BotChat, BotProfile, BotRoutine, Delegation, GroupEntry, GroupTask } from './bot';
 
 export type BotDelegationsResult =
   | { ok: true; delegations: Delegation[]; enabled: boolean }
@@ -16,6 +16,15 @@ export type BotRoutineSaveInput = Pick<
   'botId' | 'title' | 'prompt' | 'schedule' | 'chatId'
 > & { id?: string; enabled?: boolean };
 export type BotRoutineSaveResult = { ok: true; routine: BotRoutine } | BotIpcError;
+export type BotTasksResult = { ok: true; tasks: GroupTask[]; enabled: boolean } | BotIpcError;
+export type BotTaskWriteResult = { ok: true; task: GroupTask } | BotIpcError;
+/** 新建传 title/detail；编辑另带 id（只改标题 / 详情，不写时间线） */
+export interface BotTaskSaveInput {
+  chatId: string;
+  id?: string;
+  title: string;
+  detail?: string;
+}
 
 /** renderer 可写的成员字段；engine:null = 跟随全局默认模型 */
 export type BotDraftInput = Partial<
@@ -62,7 +71,15 @@ export interface BotChatUpdateInput {
   workspace?: BotChatWorkspaceInput;
 }
 
-export type BotEventKind = 'catalog' | 'chat' | 'timeline' | 'queue' | 'delegation' | 'routine';
+export type BotEventKind =
+  | 'catalog'
+  | 'chat'
+  | 'timeline'
+  | 'queue'
+  | 'delegation'
+  | 'routine'
+  /** 群任务看板变化（带 chatId）；手机端协议不转发 */
+  | 'tasks';
 
 /** main → renderer：Bot 数据变化提示，renderer 按 kind/chatId 重新拉取 */
 export interface BotEvent {

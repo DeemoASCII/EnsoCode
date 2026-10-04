@@ -27,6 +27,7 @@ import { type TFunction, useI18n } from '@/i18n';
 import { cn } from '@/lib/utils';
 import { Z_INDEX } from '@/lib/z-index';
 import { useBotsStore } from '@/stores/bots';
+import { chatRoutines } from '@/stores/bots/groupBoard';
 import {
   ROUTINE_PRESETS,
   type RoutineDraftIssue,
@@ -77,8 +78,14 @@ function issueText(issue: RoutineDraftIssue, t: TFunction): string {
   }
 }
 
-/** 成员资料「例行」页签：列表、启停、立即运行、编辑、删除 */
-export function RoutineList({ botId }: { botId: string }) {
+/**
+ * 例行任务列表：列表、启停、立即运行、编辑、删除。
+ * 传 botId = 成员资料「例行」页签；传 chatId = 群信息里本群的例行任务（跨成员，显示成员名）。
+ */
+export function RoutineList({
+  botId,
+  chatId,
+}: { botId: string; chatId?: never } | { botId?: never; chatId: string }) {
   const { t, locale } = useI18n();
   const chats = useBotsStore((s) => s.chats);
   const bots = useBotsStore((s) => s.bots);
@@ -87,9 +94,12 @@ export function RoutineList({ botId }: { botId: string }) {
   const [deleting, setDeleting] = useState<BotRoutine | null>(null);
 
   const refresh = useCallback(async () => {
-    const result = await window.electronAPI.bots.routines.list({ botId }).catch(() => null);
-    setRoutines(result?.ok ? result.routines : []);
-  }, [botId]);
+    const result = await window.electronAPI.bots.routines
+      .list(botId ? { botId } : {})
+      .catch(() => null);
+    const list = result?.ok ? result.routines : [];
+    setRoutines(chatId ? chatRoutines(list, chatId) : list);
+  }, [botId, chatId]);
 
   useEffect(() => {
     setRoutines(null);
@@ -100,14 +110,14 @@ export function RoutineList({ botId }: { botId: string }) {
   }, [refresh]);
 
   const toggle = async (routine: BotRoutine, enabled: boolean) => {
-    const { id, title, prompt, schedule, chatId } = routine;
+    const { id, title, prompt, schedule } = routine;
     const result = await window.electronAPI.bots.routines.save({
-      botId,
+      botId: routine.botId,
       id,
       title,
       prompt,
       schedule,
-      chatId,
+      chatId: routine.chatId,
       enabled,
     });
     if (!result.ok)
@@ -120,7 +130,10 @@ export function RoutineList({ botId }: { botId: string }) {
   };
 
   const runNow = async (routine: BotRoutine) => {
-    const result = await window.electronAPI.bots.routines.runNow({ botId, id: routine.id });
+    const result = await window.electronAPI.bots.routines.runNow({
+      botId: routine.botId,
+      id: routine.id,
+    });
     if (result.ok) addToast({ type: 'success', title: t('Routine started') });
     else
       addToast({
@@ -132,7 +145,10 @@ export function RoutineList({ botId }: { botId: string }) {
 
   const remove = async (routine: BotRoutine) => {
     setDeleting(null);
-    const result = await window.electronAPI.bots.routines.remove({ botId, id: routine.id });
+    const result = await window.electronAPI.bots.routines.remove({
+      botId: routine.botId,
+      id: routine.id,
+    });
     if (!result.ok)
       addToast({
         type: 'error',
@@ -171,11 +187,17 @@ export function RoutineList({ botId }: { botId: string }) {
               />
             </div>
             <div className="mt-0.5 text-muted-foreground">
+              {chatId
+                ? `${bots.find((bot) => bot.id === routine.botId)?.name ?? t('Deleted member')} · `
+                : ''}
               {describeCron(routine.schedule, locale)}
-              {' · '}
-              {chat
-                ? t('Posts to {{chat}}', { chat: chatTitle(chat, bots, t) })
-                : t('Target chat missing')}
+              {chatId
+                ? ''
+                : ` · ${
+                    chat
+                      ? t('Posts to {{chat}}', { chat: chatTitle(chat, bots, t) })
+                      : t('Target chat missing')
+                  }`}
             </div>
             <div className="mt-0.5 flex flex-wrap items-center gap-x-2 text-muted-foreground">
               <span>
@@ -223,6 +245,7 @@ export function RoutineList({ botId }: { botId: string }) {
       {editing && (
         <RoutineEditor
           botId={botId}
+          chatId={chatId}
           routine={editing === 'new' ? undefined : editing}
           onClose={(saved) => {
             setEditing(null);
@@ -242,23 +265,34 @@ export function RoutineList({ botId }: { botId: string }) {
   );
 }
 
+/** 群模式（fixedChatId）：目标聊天固定为本群，新建时选本群成员，编辑时成员不可改 */
 function RoutineEditor({
-  botId,
+  botId: memberId,
+  chatId: fixedChatId,
   routine,
   onClose,
 }: {
-  botId: string;
+  botId?: string;
+  chatId?: string;
   routine?: BotRoutine;
   onClose: (saved: boolean) => void;
 }) {
   const { t, locale } = useI18n();
   const chats = useBotsStore((s) => s.chats);
   const bots = useBotsStore((s) => s.bots);
+  const members = useMemo(() => {
+    const chat = chats.find((item) => item.id === fixedChatId);
+    return (chat?.members ?? []).flatMap((id) => {
+      const bot = bots.find((item) => item.id === id && item.archivedAt === undefined);
+      return bot ? [bot] : [];
+    });
+  }, [chats, bots, fixedChatId]);
+  const [botId, setBotId] = useState(routine?.botId ?? memberId ?? members[0]?.id ?? '');
   const targets = useMemo(() => routineTargets(chats, botId), [chats, botId]);
   const [title, setTitle] = useState(routine?.title ?? '');
   const [prompt, setPrompt] = useState(routine?.prompt ?? '');
   const [schedule, setSchedule] = useState(routine?.schedule ?? ROUTINE_PRESETS[0]);
-  const [chatId, setChatId] = useState(routine?.chatId ?? targets[0]?.id ?? '');
+  const [chatId, setChatId] = useState(routine?.chatId ?? fixedChatId ?? targets[0]?.id ?? '');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const preview = schedulePreview(schedule, locale, Date.now());
@@ -273,6 +307,7 @@ function RoutineEditor({
       : [chatId, ...targets.map((chat) => chat.id)];
 
   const save = async () => {
+    if (!botId) return setError(t('Choose a member.'));
     const issue = routineDraftIssue({ title, prompt, schedule, chatId });
     if (issue) return setError(issueText(issue, t));
     setBusy(true);
@@ -346,31 +381,54 @@ function RoutineEditor({
                 : issueText('schedule', t)}
             </p>
           </div>
-          <div>
-            <FieldLabel>{t('Target chat')}</FieldLabel>
-            {options.length === 0 ? (
-              <p className="text-muted-foreground text-xs">
-                {t('This member is not in any chat yet. Start a private chat first.')}
-              </p>
-            ) : (
+          {fixedChatId ? (
+            <div>
+              <FieldLabel>{t('Member')}</FieldLabel>
               <Select
-                items={options.map((id) => ({ value: id, label: chatLabel(id) }))}
-                value={chatId}
-                onValueChange={(value) => setChatId(value as string)}
+                items={members.map((bot) => ({ value: bot.id, label: bot.name }))}
+                value={botId}
+                disabled={Boolean(routine)}
+                onValueChange={(value) => setBotId(value as string)}
               >
                 <SelectTrigger className="w-full">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectPopup zIndex={Z_INDEX.DROPDOWN_IN_MODAL}>
-                  {options.map((id) => (
-                    <SelectItem key={id} value={id}>
-                      {chatLabel(id)}
+                  {members.map((bot) => (
+                    <SelectItem key={bot.id} value={bot.id}>
+                      {bot.name}
                     </SelectItem>
                   ))}
                 </SelectPopup>
               </Select>
-            )}
-          </div>
+            </div>
+          ) : (
+            <div>
+              <FieldLabel>{t('Target chat')}</FieldLabel>
+              {options.length === 0 ? (
+                <p className="text-muted-foreground text-xs">
+                  {t('This member is not in any chat yet. Start a private chat first.')}
+                </p>
+              ) : (
+                <Select
+                  items={options.map((id) => ({ value: id, label: chatLabel(id) }))}
+                  value={chatId}
+                  onValueChange={(value) => setChatId(value as string)}
+                >
+                  <SelectTrigger className="w-full">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectPopup zIndex={Z_INDEX.DROPDOWN_IN_MODAL}>
+                    {options.map((id) => (
+                      <SelectItem key={id} value={id}>
+                        {chatLabel(id)}
+                      </SelectItem>
+                    ))}
+                  </SelectPopup>
+                </Select>
+              )}
+            </div>
+          )}
           {error && <p className="text-destructive text-sm">{error}</p>}
         </DialogPanel>
         <DialogFooter>

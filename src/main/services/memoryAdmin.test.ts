@@ -56,6 +56,28 @@ it('deletes all versions and archived memories in a bot space, preserving other 
   expect(listResumableDistillJobs(db)).toEqual([]);
 });
 
+it('deleting a chat space keeps pending member jobs but stops them routing into the chat', async () => {
+  const chatId = '33333333-3333-4333-8333-333333333333';
+  const kept = await add('member note', 'bot:11111111-1111-4111-8111-111111111111');
+  await add('group note', `chat:${chatId}`);
+  ensureDistillJob(
+    db,
+    {
+      sessionId: 'g',
+      sessionFile: 'g.jsonl',
+      projectId: null,
+      botId: '11111111-1111-4111-8111-111111111111',
+      chatId,
+    },
+    'g#hash'
+  );
+  expect(deleteMemorySpace(db, `chat:${chatId}`)).toBe(1);
+  expect(getMemory(db, kept.id)).not.toBeNull();
+  const [job] = listResumableDistillJobs(db);
+  expect(job.payload.botId).toBe('11111111-1111-4111-8111-111111111111');
+  expect(job.payload).not.toHaveProperty('chatId');
+});
+
 describe('memory admin — 语义搜索模式', () => {
   const embedder: Embedder = {
     model: 'kw',

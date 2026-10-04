@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { defaultCaptureSpace, distillSpaceId, memorySpaceContext, resolveSpaceIds } from './space';
+import {
+  defaultCaptureSpace,
+  distillSpaceId,
+  distillSpaces,
+  memorySpaceContext,
+  resolveSpaceIds,
+} from './space';
 import {
   botSpaceId,
   chatSpaceId,
@@ -80,6 +86,18 @@ describe('defaultCaptureSpace / distillSpaceId', () => {
     expect(distillSpaceId({ botId: BOT, chatId: CHAT, projectId: PROJECT })).toBe(botSpaceId(BOT));
     expect(distillSpaceId({ projectId: PROJECT })).toBe(projectSpaceId(PROJECT));
     expect(distillSpaceId({ projectId: null })).toBe('global');
+  });
+
+  it('群聊会话蒸馏同时给出群空间，其余会话只有一个落点', () => {
+    expect(distillSpaces({ botId: BOT, chatId: CHAT, projectId: PROJECT })).toEqual({
+      self: botSpaceId(BOT),
+      chat: chatSpaceId(CHAT),
+    });
+    expect(distillSpaces({ botId: BOT, projectId: PROJECT })).toEqual({ self: botSpaceId(BOT) });
+    expect(distillSpaces({ chatId: CHAT, projectId: PROJECT })).toEqual({
+      self: projectSpaceId(PROJECT),
+    });
+    expect(distillSpaces({ botId: BOT, chatId: '../x' })).toEqual({ self: botSpaceId(BOT) });
   });
 });
 

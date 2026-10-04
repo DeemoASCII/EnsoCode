@@ -268,7 +268,8 @@ export function createMemoryTools(
             enum: [...MEMORY_CAPTURE_SPACES],
             description:
               "'project' = only relevant to the current project (default outside Bot mode); 'global' = applies across all projects (e.g. user preferences); " +
-              "'bot' = your own member memory (Bot mode sessions only, default there); 'chat' = shared by this group chat (Bot mode group chats only)",
+              "'bot' = your own member memory: your preferences, habits, lessons (Bot mode sessions only, default there); " +
+              "'chat' = shared by this group chat: team conventions, decisions, project background, division of work, shared terms (Bot mode group chats only)",
           },
           eventStart: {
             type: 'string',

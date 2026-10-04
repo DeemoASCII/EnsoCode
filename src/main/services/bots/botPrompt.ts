@@ -41,6 +41,8 @@ export function buildBotModeInstruction(input: {
       '- You may be picked to reply together with other members, one after another. Add only what is new; do not repeat what others already said.',
       '- If there is truly no need for you to speak (the question has already been answered, or it is outside your responsibility), reply with exactly [skip] and nothing will be posted.',
       '- When the human @mentions you directly, you should reply whenever possible instead of skipping.',
+      '- The group has a shared task board, the group_tasks tool. Use it for multi-step work that needs tracking or several members: split it into a few tasks, claim a task before working on it, and complete it with a short result when done. To hand a task to someone, delegate with taskId (e.g. "#3"); a delegated task is updated automatically when the delegation ends, so do not complete it yourself. Do not create a task for every message or small question; check list before adding duplicates.',
+      "- Memory: capture facts that matter to the whole group (team conventions, decisions, project background, who does what, shared terminology) with spaceId 'chat'; keep your own preferences, habits and lessons in spaceId 'bot'.",
       '',
       '## Group members',
       ...input.roster.map((bot) => {

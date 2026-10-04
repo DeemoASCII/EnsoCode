@@ -145,6 +145,7 @@ interface Delegation {
   result?: string; deliveredAt?: string;    // 只投递一次
   depth: number; createdAt; finishedAt?;
   batchId?: string;                         // 发起时父会话所在轮次的键（host turnKey），同父会话同 batchId 为一批
+  taskId?: string;                          // 关联的群任务看板任务（见「群任务看板」）
 }
 ```
 
@@ -217,6 +218,8 @@ Code 模式现有的 `subagent/workflow` 对 bot 会话照常可用，用于临�
 - 新增空间：`bot:<botId>`、`chat:<chatId>`（群）。需要修改 `isSpaceId`、`resolveSpaceIds`、工具 schema 的 `spaceId` 枚举（新增 `bot`、`chat`）和蒸馏归属。
 - bot 会话默认检索顺序：`bot` → `chat`（仅群聊）→ `project`（工作区是 Code 项目时）→ `global`。`capture` 默认写入 `bot`。
 - 自动蒸馏：bot 会话很少「结束」，因此除会话结束外，在空闲释放（30 分钟）和私聊「新对话」时各蒸馏一次增量（记录已蒸馏到的 entry，避免重复）。归属按 `ConversationAuthority.bot` 推导出 bot/chat 空间。
+- 群聊分流：群聊成员会话（authority 有 `bot.chatId` 且该聊天是 group）的蒸馏任务 payload 带 `chatId`，提示词追加 `DISTILL_GROUP_SCOPE_RULES`，模型给每条结论标 `scope`：`chat` = 与整个群相关（团队约定、决定、项目背景、分工、术语）→ `chat:<chatId>`；`self` = 成员个人偏好 / 工作习惯 / 经验 → `bot:<botId>`；缺省或无法识别按 `self`。大线程合并阶段把 scope 带进候选清单并保留。私聊、委派子会话（`chatId=null`）不带 `chatId`，行为不变。水位线 / 指纹 / 去重都不变（去重本来就按 space）。删除群时 `deleteMemorySpace('chat:<id>')` 除了删记忆，还把待续跑任务 payload 里的 `chatId` 去掉，避免重启续跑把结论写回已删的群空间（成员自身部分照常落 bot 空间）。
+- 主动 capture：memory 工具的 `spaceId` 描述与群聊成员提示都说明——群约定 / 决定 / 背景 / 分工 / 术语写 `'chat'`，个人偏好与经验写 `'bot'`。
 - Bot 资料面板里可以查看、编辑、删除该成员的记忆。
 
 ### 人设与提示词
@@ -251,6 +254,23 @@ Main 在 `spawnSession` 里根据 `ConversationAuthority.bot` 组装提示词，
 
 `routineScheduler` 在 Main 里用 cron 解析器计算下次触发时间，用单个 timer 驱动。触发时如果目标聊天正在忙就排队。如果应用没在运行，错过的触发不补跑，只在 UI 上标出「错过 N 次」。headless 托盘模式下照常运行。
 
+群信息面板的「例行」页签列出所有 `chatId = 本群` 的例行任务（跨成员，renderer 侧用 `BOT_ROUTINES_LIST` 全量结果按 chatId 过滤聚合，不改 IPC），显示成员、标题、cron 描述、启停、上次运行与结果；新建时选本群成员、目标聊天固定为本群，编辑时成员不可改（例行任务按成员存放），删除 / 启停 / 立即运行复用原通道。
+
+### 群任务看板
+
+每个群一份共享任务清单，给多步工作做显式的拆分、认领和交付记录。
+
+- **存储**：`userData/bot-chats/<chatId>/tasks.jsonl`，append-only 整条快照（与 `delegations.jsonl` 一致，后写覆盖），删除写墓碑 `{id, seq, deleted:true}`；坏行 / 截断行跳过；每次追加带前导换行隔离撕裂的末行。`seq` 取历史最大值 +1（含已删除），显示为 `#N`，不复用。删群时整个聊天目录被删，同时清掉内存缓存。
+- **字段**：`{id, seq, title, detail?, status: todo|doing|done|canceled, assigneeBotId?, createdBy: 'human'|botId, delegationId?, result?, createdAt, updatedAt}`；标题 ≤ 200，详情 / 结果 ≤ 4000。
+- **成员工具 `group_tasks`**：只挂在群聊成员会话（spawn 命令 `botGroupTasks`，由 `BotSpawnSpec.groupTasks` 在 chat.kind=group 时置位），私聊与委派子会话不挂；`action: list | add | claim | update | complete | cancel`，参数 `id / title / detail / result` 全部声明类型；`prepareArguments` 在 schema 校验前归一化（action 别名与大小写、`taskId`/`task_id` → `id`、数字 id → 字符串、可选键 null 删除）。经 `delegation-invoke`（op=`group_tasks`）进 Main，Main 再校验：开关开启、会话是该成员在该群的当前会话、成员仍在群里且未归档。规则：claim 只认领 `todo` 且无人负责的任务，「读-判-写」在 Main 单线程里一次同步完成，第二个认领返回 `Task #N is already claimed by X.`；complete 只能由负责人完成且必须写 result；cancel 只能由创建者或负责人取消。只读成员同样可以使用全部动作：看板是 Main 内的协调元数据，不涉及工作区文件写入，不突破只读档的边界。
+- **与委派打通**：`delegate` 在群聊会话里多一个可选参数 `taskId`（`#N` 或 id）。创建前过闸门：任务必须是 `todo`，或发起人自己认领中且尚无委派；否则拒绝且不建记录。委派记录每次落盘后同步任务（纯函数 `taskAfterDelegation`）：创建 → `doing`、负责人 = 目标、记 `delegationId`；完成 → `done`，result 取委派结果；失败 / 超时 / 中断 / 取消 → 退回 `todo` 并清负责人与 `delegationId`。只有任务仍由这条委派负责时终态才生效。委派进行中的任务成员不能用 `group_tasks` complete / cancel（真机里被委派的成员在群会话里看到「委派给你」后自己标了完成，导致委派被连带取消、卡片显示「已取消」），只能等委派结束自动同步；取消走 `check_delegation`，人类仍可直接完成 / 取消。UI 重试时，任务仍空闲才沿用关联。人类取消 / 完成 / 删除任务、成员离开时，先落新状态再取消关联中的委派，委派终态回写时任务已不归它负责，不会二次改写。
+- **人类 UI**：群信息面板「看板」页签，按 待办 / 进行中 / 已完成（默认最近 5 条）/ 已取消（默认折叠）分组；新建、编辑标题与详情、指派、标记完成、取消、删除。指派 = 任务置 `doing` + 负责人，再以人类身份在群里发「@成员 请处理任务 #N：标题」，复用群路由；投递失败回滚任务。
+- **群上下文**：新建、认领、完成、取消，以及委派接手 / 完成 / 退回、负责人离开退回，各写一条简短 system 时间线条目（如「阿全 认领了 #3 登录页」），进入其他成员的增量上下文；编辑标题 / 详情不写。system 条目不触发路由。
+- **成员提示**：群聊 Bot 模式说明里写明看板的用途（多步工作拆任务、先认领再做、完成写结果、交给别人用 `delegate` 带 `taskId`），并要求不要为每条消息建任务、建前先 list 查重。
+- **成员离开**：移出群时其认领中的任务退回 `todo`；删除成员时对所有群执行同样处理。
+- **事件与开关**：任务变更推 `BOT_EVENT {kind:'tasks', chatId}`，renderer 只刷新打开过看板的群。botModeEnabled 关闭时 IPC 返回 disabled（列表返回空 + `enabled:false`），worker 侧工具不挂，Main 侧调用一律拒绝。
+- **手机端**：本期不做；`tasks` 事件不经 pair 转发，pair 协议不变。
+
 ## UI
 
 - **模式切换**：侧栏顶部 NodeSwitcher 旁边放 `Code | Bot` 分段控件，存到 `localStorage['enso-mode']`。只在本机生效：切到远程节点时隐藏切换并回到 Code 视图。快捷键、标题栏按钮、SidePanel 照远程节点的做法按模式屏蔽。
@@ -265,6 +285,7 @@ Main 在 `spawnSession` 里根据 `ConversationAuthority.bot` 组装提示词，
   - 输入框复用 `Composer`，支持 @ 成员补全；工具栏是工作区徽标、成员模型（私聊）、审批档。
   - 必须提供 `ChatHostContext`，避免 retry、fork 落到 Code 模式的当前会话上。
 - **BotProfilePanel**（右侧）：人设、头衔/scope、模型、工具/技能/MCP、审批档、工作区、委派权限、记忆、例行任务、历史会话、导入导出人物卡。
+- **GroupInfoPanel**（群聊右侧）：与 BotProfilePanel 一样用页签——群信息（成员、回复队列、工作区、路由上限、群记忆）/ 看板（群任务看板）/ 委派（本群委派按 进行中 / 已完成 / 失败·中断·取消 汇总，终态默认最近 5 条，复用委派卡片的取消、重试、查看过程）/ 例行（本群例行任务）。
 - **新建成员**：从空白开始、导入人物卡，或者从内置模板（经理 / 全栈 / 运维 / 测试 / 设计）创建。
 - Code 模式的 Sidebar、ChatView 只增加一处过滤：`bot-home` 项目和带 `bot` 字段的会话不显示。
 
@@ -275,8 +296,9 @@ Main 在 `spawnSession` 里根据 `ConversationAuthority.bot` 组装提示词，
 - `BOT_SEND(chatId, text, attachments, deliveryId)`
 - `BOT_DELEGATION_CANCEL / BOT_DELEGATION_RETRY`
 - `BOT_ROUTINE_SAVE / BOT_ROUTINE_DELETE / BOT_ROUTINE_RUN_NOW`
+- `BOT_TASKS_LIST(chatId) / BOT_TASK_SAVE(chatId, id?, title, detail?) / BOT_TASK_ASSIGN(chatId, id, botId) / BOT_TASK_COMPLETE(chatId, id, result?) / BOT_TASK_CANCEL(chatId, id) / BOT_TASK_DELETE(chatId, id)`：群任务看板，只接受 group 聊天
 - `BOT_SUGGEST_ABILITIES(name, title, scope, persona, language, botId?)`：「自动设置能力」。候选技能 / MCP / 成员由 Main 从设置与成员库取；模型链为群聊选人的快聊天模型（judge 时）→ 标题总结模型回退链，20s 超时；回复严格解析（未知 id 丢弃、枚举校验，没有其他成员时不给委派建议），只返回建议，renderer 逐项确认后写入表单，仍需保存 / 创建。
-- 推送 `BOT_EVENT`：`{kind:'catalog'|'chat'|'timeline'|'delegation'|'routine', chatId?, seq}`，按 chatId 去重，过期 seq 丢弃。
+- 推送 `BOT_EVENT`：`{kind:'catalog'|'chat'|'timeline'|'delegation'|'routine'|'tasks', chatId?, seq}`，按 chatId 去重，过期 seq 丢弃；`tasks` 不转发到手机。
 
 所有入参都按 `unknown` 收窄。
 

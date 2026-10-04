@@ -284,3 +284,116 @@ describe('bots IPC', () => {
     expect(existsSync(join(mocks.root, 'bot-chats', chatId))).toBe(false);
   });
 });
+
+describe('群任务看板 IPC', () => {
+  async function team() {
+    const alice = await createBot('Alice');
+    const bob = await createBot('Bob');
+    const carol = await createBot('Carol');
+    const created = await call(IPC_CHANNELS.BOT_CHAT_CREATE, {
+      kind: 'group',
+      title: 'team',
+      members: [alice, bob, carol],
+      bossBotId: alice,
+      workspace: { kind: 'chat-home' },
+    });
+    const chat = created.chat as { id: string; version: number };
+    return { alice, bob, carol, chatId: chat.id, version: chat.version };
+  }
+
+  it('入参收窄、新建 / 编辑 / 完成 / 删除，删除群时清理任务文件', async () => {
+    const { chatId } = await team();
+    expect(await call(IPC_CHANNELS.BOT_TASK_SAVE, { chatId, title: 1 })).toEqual({
+      ok: false,
+      error: 'invalid',
+    });
+    expect(await call(IPC_CHANNELS.BOT_TASK_SAVE, { chatId: '../x', title: 'a' })).toEqual({
+      ok: false,
+      error: 'invalid',
+    });
+    const saved = await call(IPC_CHANNELS.BOT_TASK_SAVE, { chatId, title: 'Login', detail: 'd' });
+    expect(saved).toMatchObject({ ok: true, task: { seq: 1, status: 'todo', createdBy: 'human' } });
+    const id = (saved.task as { id: string }).id;
+    expect(await call(IPC_CHANNELS.BOT_TASK_SAVE, { chatId, id, title: 'Login v2' })).toMatchObject(
+      { ok: true, task: { title: 'Login v2' } }
+    );
+    expect(await call(IPC_CHANNELS.BOT_TASK_COMPLETE, { chatId, id, result: 'ok' })).toMatchObject({
+      ok: true,
+      task: { status: 'done', result: 'ok' },
+    });
+    expect(await call(IPC_CHANNELS.BOT_TASKS_LIST, { chatId })).toMatchObject({
+      ok: true,
+      enabled: true,
+      tasks: [{ id, status: 'done' }],
+    });
+    expect(await call(IPC_CHANNELS.BOT_TASK_DELETE, { chatId, id })).toEqual({ ok: true });
+    await call(IPC_CHANNELS.BOT_TASK_SAVE, { chatId, title: 'Keep' });
+    const file = join(mocks.root, 'bot-chats', chatId, 'tasks.jsonl');
+    expect(existsSync(file)).toBe(true);
+    expect(await call(IPC_CHANNELS.BOT_CHAT_DELETE, { chatId })).toEqual({ ok: true });
+    expect(existsSync(file)).toBe(false);
+    expect(await call(IPC_CHANNELS.BOT_TASKS_LIST, { chatId })).toEqual({
+      ok: false,
+      error: 'invalid',
+    });
+  });
+
+  it('移出成员时其认领中的任务退回 todo；开关关闭时列表为空、写返回 disabled', async () => {
+    const { alice, bob, carol, chatId, version } = await team();
+    const { getBotServices } = await import('./bots');
+    const services = getBotServices()!;
+    services.tasks.add(chatId, 'human', { title: 'Login' });
+    expect(services.tasks.claim(chatId, bob, '#1')).toMatchObject({ ok: true });
+    expect(
+      await call(IPC_CHANNELS.BOT_CHAT_UPDATE, {
+        chatId,
+        expectedVersion: version,
+        members: [alice, carol],
+      })
+    ).toMatchObject({ ok: true });
+    expect(services.tasks.list(chatId)[0]).toMatchObject({ status: 'todo' });
+    expect(services.tasks.list(chatId)[0]).not.toHaveProperty('assigneeBotId');
+    mocks.settings.botModeEnabled = false;
+    expect(await call(IPC_CHANNELS.BOT_TASKS_LIST, { chatId })).toEqual({
+      ok: true,
+      tasks: [],
+      enabled: false,
+    });
+    expect(await call(IPC_CHANNELS.BOT_TASK_SAVE, { chatId, title: 'x' })).toEqual({
+      ok: false,
+      error: 'disabled',
+    });
+  });
+
+  it('group_tasks 工具只对群聊当前会话开放', async () => {
+    const { alice, chatId } = await team();
+    const { getBotServices, groupTasksTool } = await import('./bots');
+    const services = getBotServices()!;
+    const session = services.host.ensureSession(chatId, alice);
+    if (!session.ok) throw new Error(session.error);
+    expect(
+      groupTasksTool(
+        services,
+        session.conversationId,
+        { botId: alice, chatId },
+        {
+          action: 'add',
+          title: 'Plan',
+        }
+      )
+    ).toMatchObject({ ok: true, task: { id: '#1', createdBy: 'Alice' } });
+    expect(
+      groupTasksTool(services, 'stale', { botId: alice, chatId }, { action: 'list' })
+    ).toMatchObject({ ok: false });
+    expect(
+      groupTasksTool(
+        services,
+        session.conversationId,
+        { botId: alice, chatId: null },
+        {
+          action: 'list',
+        }
+      )
+    ).toMatchObject({ ok: false });
+  });
+});

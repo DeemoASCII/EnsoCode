@@ -79,6 +79,7 @@ export class BotMemoryService {
           sessionFile: conversation.sessionFile,
           projectId: context.projectId ?? null,
           ...(context.botId ? { botId: context.botId } : {}),
+          ...(context.botId && context.chatId ? { chatId: context.chatId } : {}),
           ...(fromEntryId ? { fromEntryId } : {}),
         });
         if (this.disposed || this.removed.has(id)) return;

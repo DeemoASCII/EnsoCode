@@ -4,7 +4,13 @@ import path from 'node:path';
 import type { SessionIdentity } from '@shared/builtinAgents';
 import { BUILTIN_AGENT_TYPES, IPC_CHANNELS } from '@shared/types';
 import type { AttachedImage } from '@shared/types/agent';
-import { type BotChat, type BotChatWorkspace, isBotId } from '@shared/types/bot';
+import {
+  type BotChat,
+  type BotChatWorkspace,
+  GROUP_TASK_TEXT_MAX,
+  GROUP_TASK_TITLE_MAX,
+  isBotId,
+} from '@shared/types/bot';
 import type {
   BotAbilitySuggestResult,
   BotActionResult,
@@ -51,6 +57,8 @@ import { turnDelegationTargets } from '../services/bots/delegationBatch';
 import { DelegationService } from '../services/bots/delegationService';
 import { DelegationStore } from '../services/bots/delegationStore';
 import { GroupChatService } from '../services/bots/groupChat';
+import { GroupTaskStore } from '../services/bots/groupTaskStore';
+import { GroupTaskService } from '../services/bots/groupTasks';
 import { removeBotMemorySpace } from '../services/bots/memoryCleanup';
 import { RoutineRunner } from '../services/bots/routineRunner';
 import { RoutineScheduler } from '../services/bots/routineScheduler';
@@ -91,6 +99,7 @@ interface BotServices {
   routines: BotRoutineStore;
   scheduler: RoutineScheduler;
   runner: RoutineRunner;
+  tasks: GroupTaskService;
 }
 
 type GroupSender = (
@@ -192,6 +201,7 @@ function createRuntime(botsRoot: string): BotRuntimePort {
             ),
             skillIds: spec.bot.skillIds,
             mcpServerIds: spec.bot.mcpServerIds,
+            ...(spec.groupTasks ? { groupTasks: true } : {}),
           },
         }
       );
@@ -285,6 +295,20 @@ export function getBotServices(): BotServices | null {
   host.onDiscard((scope) => {
     if (scope.chatId) groups.discard(scope.chatId);
   });
+  let delegationsRef: DelegationService | undefined;
+  const tasks = new GroupTaskService({
+    store: new GroupTaskStore(path.join(userData, 'bot-chats')),
+    chats,
+    bots,
+    emit: emitBotEvent,
+    send: (chatId, text) => groups.send(chatId, text, { deliveryId: randomUUID() }),
+    cancelDelegation: (id) => {
+      delegationsRef?.cancel(id);
+    },
+  });
+  host.onDiscard((scope) => {
+    if (scope.botId) tasks.releaseBot(scope.botId);
+  });
   const delegations = new DelegationService({
     bots,
     chats,
@@ -292,6 +316,7 @@ export function getBotServices(): BotServices | null {
     authority,
     store: delegationStore,
     emit: emitBotEvent,
+    tasks,
     deliverGroupResult: async (record, text, deliveryId) => {
       if (
         !record.chatId ||
@@ -305,6 +330,7 @@ export function getBotServices(): BotServices | null {
       });
     },
   });
+  delegationsRef = delegations;
   const routines = new BotRoutineStore(botsRoot);
   const runner = new RoutineRunner({
     host,
@@ -351,7 +377,18 @@ export function getBotServices(): BotServices | null {
     if (scope.conversationId) memory.remove(scope.conversationId);
   });
   setBotGroupSender((chat, text, options) => groups.send(chat.id, text, options));
-  services = { bots, chats, host, groups, memory, delegations, routines, scheduler, runner };
+  services = {
+    bots,
+    chats,
+    host,
+    groups,
+    memory,
+    delegations,
+    routines,
+    scheduler,
+    runner,
+    tasks,
+  };
   if (botModeEnabled()) scheduler.start();
   return services;
 }
@@ -492,6 +529,38 @@ const objectInput = (value: unknown): Record<string, unknown> | undefined =>
     ? (value as Record<string, unknown>)
     : undefined;
 
+const optionalText = (value: unknown, max: number): value is string | undefined =>
+  value === undefined || (typeof value === 'string' && value.length <= max);
+
+/** 看板写入口的公共收窄：chatId + 已存在的群 + 任务 id */
+function taskTarget(
+  { chats }: BotServices,
+  request: unknown
+): { input: Record<string, unknown>; chatId: string; id: string } | undefined {
+  const input = objectInput(request);
+  if (!input || !isBotId(input.chatId) || !isBotId(input.id)) return undefined;
+  return chats.get(input.chatId)?.kind === 'group'
+    ? { input, chatId: input.chatId, id: input.id }
+    : undefined;
+}
+
+/** worker 的 group_tasks 调用：只对群聊里该成员的当前会话开放 */
+export function groupTasksTool(
+  services: BotServices | null | undefined,
+  conversationId: string,
+  binding: { botId: string; chatId: string | null },
+  params: Record<string, unknown>
+): unknown {
+  const chat = services && binding.chatId ? services.chats.get(binding.chatId) : undefined;
+  if (
+    !services ||
+    chat?.kind !== 'group' ||
+    chat.sessions[binding.botId]?.conversationId !== conversationId
+  )
+    return { ok: false, error: 'Tasks are only available in the current group chat session.' };
+  return services.tasks.tool(chat.id, binding.botId, params);
+}
+
 export function registerBotHandlers(): void {
   syncBotModeServices();
   handle(
@@ -599,6 +668,58 @@ export function registerBotHandlers(): void {
       return { ok: true };
     }
   );
+  handle(
+    IPC_CHANNELS.BOT_TASKS_LIST,
+    'read',
+    (_sender, request, { chats, tasks }) => {
+      const chatId = chatIdOf(request);
+      if (!chatId || chats.get(chatId)?.kind !== 'group') return INVALID;
+      return { ok: true, tasks: tasks.list(chatId), enabled: true };
+    },
+    { ok: true, tasks: [], enabled: false }
+  );
+  handle(IPC_CHANNELS.BOT_TASK_SAVE, 'write', (_sender, request, { chats, tasks }) => {
+    const input = objectInput(request);
+    if (
+      !input ||
+      !isBotId(input.chatId) ||
+      chats.get(input.chatId)?.kind !== 'group' ||
+      typeof input.title !== 'string' ||
+      input.title.length > GROUP_TASK_TITLE_MAX ||
+      !optionalText(input.detail, GROUP_TASK_TEXT_MAX) ||
+      (input.id !== undefined && !isBotId(input.id))
+    )
+      return INVALID;
+    const detail = typeof input.detail === 'string' ? input.detail : undefined;
+    return typeof input.id === 'string'
+      ? tasks.update(input.chatId, 'human', input.id, {
+          title: input.title,
+          ...(detail !== undefined ? { detail } : {}),
+        })
+      : tasks.add(input.chatId, 'human', {
+          title: input.title,
+          ...(detail ? { detail } : {}),
+        });
+  });
+  handle(IPC_CHANNELS.BOT_TASK_ASSIGN, 'write', (_sender, request, services) => {
+    const target = taskTarget(services, request);
+    if (!target || !isBotId(target.input.botId)) return INVALID;
+    return services.tasks.assign(target.chatId, target.id, target.input.botId);
+  });
+  handle(IPC_CHANNELS.BOT_TASK_COMPLETE, 'write', (_sender, request, services) => {
+    const target = taskTarget(services, request);
+    if (!target || !optionalText(target.input.result, GROUP_TASK_TEXT_MAX)) return INVALID;
+    const result = typeof target.input.result === 'string' ? target.input.result : undefined;
+    return services.tasks.complete(target.chatId, 'human', target.id, result);
+  });
+  handle(IPC_CHANNELS.BOT_TASK_CANCEL, 'write', (_sender, request, services) => {
+    const target = taskTarget(services, request);
+    return target ? services.tasks.cancel(target.chatId, 'human', target.id) : INVALID;
+  });
+  handle(IPC_CHANNELS.BOT_TASK_DELETE, 'write', (_sender, request, services) => {
+    const target = taskTarget(services, request);
+    return target ? services.tasks.remove(target.chatId, target.id) : INVALID;
+  });
   handle(
     IPC_CHANNELS.BOTS_LIST,
     'read',
@@ -799,6 +920,8 @@ export function registerBotHandlers(): void {
           services.host.retireSession(session.conversationId);
         }
       }
+      for (const botId of current.members)
+        if (!chat.members.includes(botId)) services.tasks.releaseMember(chat.id, botId);
       emitBotEvent({ kind: 'chat', chatId: chat.id });
       return { ok: true, chat };
     }
@@ -807,7 +930,7 @@ export function registerBotHandlers(): void {
   handle(
     IPC_CHANNELS.BOT_CHAT_DELETE,
     'write',
-    async (_sender, request, { host, chats, groups }): Promise<BotActionResult> => {
+    async (_sender, request, { host, chats, groups, tasks }): Promise<BotActionResult> => {
       const chatId = chatIdOf(request);
       if (!chatId || !chats.get(chatId)) return INVALID;
       if (chats.get(chatId)?.kind === 'group') {
@@ -815,6 +938,7 @@ export function registerBotHandlers(): void {
         if (!stopped.ok) return stopped;
       }
       if (!host.discardChat(chatId)) return INVALID;
+      tasks.forget(chatId);
       await removeBotMemorySpace(app.getPath('userData'), `chat:${chatId}`);
       return { ok: true };
     }

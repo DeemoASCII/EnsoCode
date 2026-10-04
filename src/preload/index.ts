@@ -146,6 +146,9 @@ import type {
   BotSendRequest,
   BotSendResult,
   BotsListResult,
+  BotTaskSaveInput,
+  BotTasksResult,
+  BotTaskWriteResult,
   BotTimelineResult,
   BotWriteIpcResult,
 } from '@shared/types/botIpc';
@@ -1138,6 +1141,27 @@ const electronAPI = {
         ipcRenderer.invoke(IPC_CHANNELS.BOT_ROUTINE_DELETE, request),
       runNow: (request: { botId: string; id: string }): Promise<BotActionResult> =>
         ipcRenderer.invoke(IPC_CHANNELS.BOT_ROUTINE_RUN_NOW, request),
+    },
+    tasks: {
+      list: (chatId: string): Promise<BotTasksResult> =>
+        ipcRenderer.invoke(IPC_CHANNELS.BOT_TASKS_LIST, { chatId }),
+      save: (request: BotTaskSaveInput): Promise<BotTaskWriteResult> =>
+        ipcRenderer.invoke(IPC_CHANNELS.BOT_TASK_SAVE, request),
+      assign: (request: {
+        chatId: string;
+        id: string;
+        botId: string;
+      }): Promise<BotTaskWriteResult> => ipcRenderer.invoke(IPC_CHANNELS.BOT_TASK_ASSIGN, request),
+      complete: (request: {
+        chatId: string;
+        id: string;
+        result?: string;
+      }): Promise<BotTaskWriteResult> =>
+        ipcRenderer.invoke(IPC_CHANNELS.BOT_TASK_COMPLETE, request),
+      cancel: (request: { chatId: string; id: string }): Promise<BotTaskWriteResult> =>
+        ipcRenderer.invoke(IPC_CHANNELS.BOT_TASK_CANCEL, request),
+      remove: (request: { chatId: string; id: string }): Promise<BotActionResult> =>
+        ipcRenderer.invoke(IPC_CHANNELS.BOT_TASK_DELETE, request),
     },
     list: (): Promise<BotsListResult> => ipcRenderer.invoke(IPC_CHANNELS.BOTS_LIST),
     get: (botId: string): Promise<BotGetResult> =>

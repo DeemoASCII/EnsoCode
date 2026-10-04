@@ -45,6 +45,8 @@ export interface BotSpawnSpec {
   systemPrompt: string;
   /** Bot 模式说明，追加在全局指令之后 */
   instructionText: string;
+  /** 群聊成员会话：挂 group_tasks 工具 */
+  groupTasks?: boolean;
 }
 
 export interface BotRuntimePort {
@@ -723,6 +725,7 @@ export class BotSessionHost {
         bot,
         systemPrompt: buildBotSystemPrompt(bot, this.deps.bots.readPersona(bot.id)),
         instructionText: buildBotModeInstruction({ self: bot, kind: chat.kind, roster }),
+        ...(chat.kind === 'group' ? { groupTasks: true } : {}),
       },
     };
   }

@@ -30,6 +30,17 @@ describe('buildBotModeInstruction', () => {
     expect(text).toMatch(/final reply/i);
     expect(text).not.toContain('[skip]');
     expect(text).not.toContain('Group members');
+    expect(text).not.toContain('group_tasks');
+  });
+
+  it('群聊：说明任务看板（拆分多步工作、先认领、完成写结果、别刷屏）与群记忆归属', () => {
+    const text = buildBotModeInstruction({ self: alice, kind: 'group', roster: [alice, bob] });
+    expect(text).toContain('group_tasks');
+    expect(text).toMatch(/claim/i);
+    expect(text).toMatch(/result/i);
+    expect(text).toMatch(/do not create a task for every/i);
+    expect(text).toMatch(/taskId/);
+    expect(text).toContain("spaceId 'chat'");
   });
 
   it('群聊：说明 [skip] 并列出名册（标出自己）', () => {

@@ -145,7 +145,7 @@ import { titleModelCandidates } from '../services/titleSummary';
 import { ingestSessionJsonl } from '../services/usage/ledgerStore';
 import { sendToAllWindows } from '../windows/createAppWindow';
 import { isMainWebContents } from '../windows/MainWindow';
-import { botModeEnabled, getBotServices } from './bots';
+import { botModeEnabled, getBotServices, groupTasksTool } from './bots';
 import { agentSessionIndex, capabilityGateway, handleCapabilityInvoke } from './capabilities';
 import { readSettings, readSshTimeoutSeconds } from './settings';
 import {
@@ -1100,10 +1100,11 @@ export function registerAgentHandlers(): void {
       const { identity, requestId, op, params } = workerEvent;
       try {
         const conversation = sourceAuthority?.conversation(identity.sessionId);
-        const service =
+        const services =
           botModeEnabled() && conversation?.bot && agentSessionIndex.isCurrent(identity)
-            ? getBotServices()?.delegations
+            ? getBotServices()
             : undefined;
+        const service = services?.delegations;
         if (!service || !params || typeof params !== 'object' || Array.isArray(params)) {
           sendDelegationResultToSession(identity, requestId, {
             ok: false,
@@ -1115,16 +1116,20 @@ export function registerAgentHandlers(): void {
         }
         const input = params as Record<string, unknown>;
         let result: unknown;
-        if (
+        if (op === 'group_tasks' && conversation?.bot) {
+          result = groupTasksTool(services, identity.sessionId, conversation.bot, input);
+        } else if (
           op === 'delegate' &&
           typeof input.to === 'string' &&
           typeof input.task === 'string' &&
-          (input.context === undefined || typeof input.context === 'string')
+          (input.context === undefined || typeof input.context === 'string') &&
+          (input.taskId === undefined || typeof input.taskId === 'string')
         ) {
           result = service.delegate(identity.sessionId, {
             to: input.to,
             task: input.task,
             ...(typeof input.context === 'string' ? { context: input.context } : {}),
+            ...(typeof input.taskId === 'string' ? { taskId: input.taskId } : {}),
           });
         } else if (
           op === 'check_delegation' &&

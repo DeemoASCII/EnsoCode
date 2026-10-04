@@ -207,6 +207,7 @@ import { ComputerInvoker, createComputerTool, withComputerApproval } from './too
 import { createDelegationTools, type DelegationOp } from './tools/delegation';
 import { createEnsoAppTool, EnsoAppInvoker } from './tools/ensoApp';
 import { createEnsoCapabilitiesTool } from './tools/ensoCapabilities';
+import { createGroupTasksTool } from './tools/groupTasks';
 import { createMemoryTools, MemoryInvoker } from './tools/memory';
 import { createWebTools } from './tools/web';
 import { createVirtualChooser, resolveClassifierModel } from './virtualClassifier';
@@ -1118,7 +1119,8 @@ export class SessionSupervisor {
           command.trustedProjectCode,
           command.pluginCommands,
           command.pluginHooks,
-          command.botMode
+          command.botMode,
+          command.botGroupTasks
         );
         return;
       case 'spawn-child':
@@ -1603,7 +1605,8 @@ export class SessionSupervisor {
     trustedProjectCode: readonly string[] = [],
     pluginCommands: readonly PluginCommandSpawn[] = [],
     pluginHooks: readonly PluginHookSpawn[] = [],
-    botMode = false
+    botMode = false,
+    botGroupTasks = false
   ): Promise<void> {
     const sessionId = identity.sessionId;
     const sessionEditMode = resolveEditMode(requestedEditMode, hashlineEditEnabled);
@@ -2243,7 +2246,8 @@ export class SessionSupervisor {
         ? createBrowserTools(browser).map((tool) => withNavigateApproval(gate, tool))
         : []),
       ...(memory ? createMemoryTools(memory, { language: memoryLanguage }) : []),
-      ...(delegation ? createDelegationTools(delegation) : []),
+      ...(delegation ? createDelegationTools(delegation, { groupTasks: botGroupTasks }) : []),
+      ...(delegation && botGroupTasks ? [createGroupTasksTool(delegation)] : []),
       ...(toolEnabled('web') ? createWebTools() : []),
       ...(toolEnabled('todo') ? [createTodoTool((todos) => todoReminder.update(todos))] : []),
       ...(computer ? [withComputerApproval(gate, createComputerTool(computer))] : []),

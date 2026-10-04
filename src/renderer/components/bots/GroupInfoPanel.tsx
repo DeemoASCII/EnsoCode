@@ -13,13 +13,16 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
+import { Tabs, TabsList, TabsPanel, TabsTab } from '@/components/ui/tabs';
 import { addToast } from '@/components/ui/toast';
 import { useI18n } from '@/i18n';
 import { useBotsStore } from '@/stores/bots';
 import { useSettingsStore } from '@/stores/settings';
 import { BotAvatar } from './BotAvatar';
 import { chatErrorText } from './botText';
+import { GroupDelegations, TaskBoard } from './GroupBoard';
 import { MemorySpaceList } from './MemorySpaceList';
+import { RoutineList } from './RoutineList';
 import { WorkspaceMenu } from './WorkspaceMenu';
 
 export function PanelSection({ title, children }: { title: string; children: React.ReactNode }) {
@@ -42,7 +45,13 @@ export function KeyValue({ label, value }: { label: string; value: React.ReactNo
   );
 }
 
-export function GroupInfoPanel({ chat }: { chat: BotChat }) {
+export function GroupInfoPanel({
+  chat,
+  onOpenConversation,
+}: {
+  chat: BotChat;
+  onOpenConversation: (conversationId: string, title: string) => void;
+}) {
   const { t } = useI18n();
   const bots = useBotsStore((s) => s.bots);
   const runtime = useBotsStore((s) => s.runtime[chat.id]);
@@ -91,193 +100,211 @@ export function GroupInfoPanel({ chat }: { chat: BotChat }) {
   ];
 
   return (
-    <div className="min-h-0 flex-1 overflow-y-auto p-4">
-      <div className="font-semibold text-sm">{t('Group info')}</div>
-      <Input
-        className="mt-2"
-        value={title}
-        placeholder={t('Group name')}
-        onChange={(event) => setTitle(event.target.value)}
-        onBlur={() => title.trim() !== chat.title && void update({ title: title.trim() })}
-        onKeyDown={(event) => event.key === 'Enter' && event.currentTarget.blur()}
-      />
-
-      <PanelSection title={t('Members')}>
-        {members.map(({ id, bot }) => (
-          <div key={id} className="group flex items-center gap-2 rounded-lg py-1.5">
-            <button
-              type="button"
-              onClick={() => void openDirect(id)}
-              className="flex min-w-0 flex-1 items-center gap-2 text-left"
-            >
-              <BotAvatar bot={bot} size="sm" busy={runtime?.current === id} />
-              <div className="min-w-0 flex-1">
-                <div className="flex items-center gap-1.5 text-sm">
-                  <span className="truncate">{bot?.name ?? t('Deleted member')}</span>
-                  {chat.bossBotId === id && (
-                    <span className="shrink-0 rounded bg-muted px-1.5 text-[10px] text-muted-foreground">
-                      {t('Owner')}
-                    </span>
-                  )}
-                </div>
-                <div className="truncate text-muted-foreground text-xs">
-                  {bot?.scope || bot?.title}
-                </div>
-              </div>
-            </button>
-            <Menu>
-              <MenuTrigger className="rounded p-1 text-muted-foreground opacity-0 hover:bg-muted group-hover:opacity-100 data-popup-open:opacity-100">
-                <MoreHorizontal className="h-3.5 w-3.5" />
-              </MenuTrigger>
-              <MenuPopup align="end">
-                <MenuItem
-                  disabled={chat.bossBotId === id}
-                  onClick={() => void update({ bossBotId: id })}
-                >
-                  <Crown />
-                  {t('Make owner')}
-                </MenuItem>
-                <MenuItem
-                  disabled={chat.bossBotId === id || chat.members.length <= 2}
-                  onClick={() =>
-                    void update({ members: chat.members.filter((member) => member !== id) })
-                  }
-                >
-                  <UserMinus />
-                  {t('Remove from group')}
-                </MenuItem>
-              </MenuPopup>
-            </Menu>
-          </div>
-        ))}
-        <Popover open={adding} onOpenChange={setAdding}>
-          <PopoverTrigger
-            disabled={candidates.length === 0}
-            className="mt-1 flex h-7 items-center gap-1 rounded-md border px-2 text-muted-foreground text-xs hover:bg-muted hover:text-foreground disabled:opacity-50"
-          >
-            <Plus className="h-3.5 w-3.5" />
-            {t('Add member')}
-          </PopoverTrigger>
-          <PopoverPopup
-            side="bottom"
-            align="start"
-            className="w-56 [&_[data-slot=popover-viewport]]:p-1"
-          >
-            {candidates.map((bot: BotProfile) => (
-              <button
-                key={bot.id}
-                type="button"
-                onClick={() => {
-                  setAdding(false);
-                  void update({ members: [...chat.members, bot.id] });
-                }}
-                className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm hover:bg-muted"
-              >
-                <BotAvatar bot={bot} size="sm" />
-                <span className="min-w-0 truncate">{bot.name}</span>
-              </button>
-            ))}
-          </PopoverPopup>
-        </Popover>
-      </PanelSection>
-
-      <PanelSection title={t('Reply queue')}>
-        <KeyValue
-          label={t('Current')}
-          value={
-            runtime?.current
-              ? `${name(runtime.current)}（${t('relay {{n}}/{{max}}', { n: runtime.hops, max: chat.routing.maxHops })}）`
-              : runtime?.routing
-                ? t('Choosing who replies…')
-                : '—'
-          }
-        />
-        <KeyValue
-          label={t('Waiting')}
-          value={runtime?.queue.length ? runtime.queue.map((id) => name(id)).join('、') : '—'}
-        />
-        <KeyValue
-          label={t('Per-member limit')}
-          value={t('{{n}} replies', { n: chat.routing.maxTurnsPerBot })}
-        />
-      </PanelSection>
-
-      <PanelSection title={t('Workspace')}>
-        <div className="rounded-lg border bg-card px-2.5 py-2">
-          <WorkspaceMenu chat={chat} className="w-full max-w-none" />
-          <p className="mt-1.5 text-muted-foreground text-xs">
-            {workspaceProject ? `${workspaceProject.path} · ` : ''}
-            {t('Shared by all members')}
-          </p>
-        </div>
-      </PanelSection>
-
-      <PanelSection title={t('Routing limits')}>
-        <div className="mb-2 flex items-center justify-between gap-3">
-          <span className="text-muted-foreground text-xs">{t('Without @')}</span>
-          <Select
-            items={modeItems}
-            value={chat.routing.mode}
-            onValueChange={(mode) => {
-              if (mode !== chat.routing.mode)
-                void update({ routing: { mode: mode as BotRoutingMode } });
-            }}
-          >
-            <SelectTrigger size="sm" className="w-40">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectPopup>
-              {modeItems.map((item) => (
-                <SelectItem key={item.value} value={item.value}>
-                  {item.label}
-                </SelectItem>
-              ))}
-            </SelectPopup>
-          </Select>
-        </div>
-        <div className="grid grid-cols-2 gap-2">
-          <label className="space-y-1">
-            <span className="text-muted-foreground text-xs">{t('@ relay limit')}</span>
-            <Input
-              type="number"
-              min={1}
-              max={20}
-              value={hops}
-              onChange={(event) => setHops(event.target.value)}
-            />
-          </label>
-          <label className="space-y-1">
-            <span className="text-muted-foreground text-xs">{t('Replies per member')}</span>
-            <Input
-              type="number"
-              min={1}
-              max={10}
-              value={turns}
-              onChange={(event) => setTurns(event.target.value)}
-            />
-          </label>
-        </div>
-        {routingDirty && (
-          <Button
-            size="xs"
+    <Tabs defaultValue="info" className="flex min-h-0 flex-1 flex-col">
+      <TabsList variant="underline" className="shrink-0 px-2 pt-2">
+        <TabsTab value="info">{t('Group info')}</TabsTab>
+        <TabsTab value="board">{t('Task board')}</TabsTab>
+        <TabsTab value="delegations">{t('Delegations')}</TabsTab>
+        <TabsTab value="routines">{t('Routines')}</TabsTab>
+      </TabsList>
+      <div className="min-h-0 flex-1 overflow-y-auto p-4">
+        <TabsPanel value="board">
+          <TaskBoard chat={chat} />
+        </TabsPanel>
+        <TabsPanel value="delegations">
+          <GroupDelegations chat={chat} onOpenConversation={onOpenConversation} />
+        </TabsPanel>
+        <TabsPanel value="routines">
+          <RoutineList chatId={chat.id} />
+        </TabsPanel>
+        <TabsPanel value="info">
+          <Input
             className="mt-2"
-            onClick={() =>
-              void update({
-                routing: {
-                  maxHops: Math.round(Number(hops)) || chat.routing.maxHops,
-                  maxTurnsPerBot: Math.round(Number(turns)) || chat.routing.maxTurnsPerBot,
-                },
-              })
-            }
-          >
-            {t('Save')}
-          </Button>
-        )}
-      </PanelSection>
+            value={title}
+            placeholder={t('Group name')}
+            onChange={(event) => setTitle(event.target.value)}
+            onBlur={() => title.trim() !== chat.title && void update({ title: title.trim() })}
+            onKeyDown={(event) => event.key === 'Enter' && event.currentTarget.blur()}
+          />
 
-      <PanelSection title={t('Group memory')}>
-        <MemorySpaceList spaceId={`chat:${chat.id}`} emptyText={t('No group memories yet')} />
-      </PanelSection>
-    </div>
+          <PanelSection title={t('Members')}>
+            {members.map(({ id, bot }) => (
+              <div key={id} className="group flex items-center gap-2 rounded-lg py-1.5">
+                <button
+                  type="button"
+                  onClick={() => void openDirect(id)}
+                  className="flex min-w-0 flex-1 items-center gap-2 text-left"
+                >
+                  <BotAvatar bot={bot} size="sm" busy={runtime?.current === id} />
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-1.5 text-sm">
+                      <span className="truncate">{bot?.name ?? t('Deleted member')}</span>
+                      {chat.bossBotId === id && (
+                        <span className="shrink-0 rounded bg-muted px-1.5 text-[10px] text-muted-foreground">
+                          {t('Owner')}
+                        </span>
+                      )}
+                    </div>
+                    <div className="truncate text-muted-foreground text-xs">
+                      {bot?.scope || bot?.title}
+                    </div>
+                  </div>
+                </button>
+                <Menu>
+                  <MenuTrigger className="rounded p-1 text-muted-foreground opacity-0 hover:bg-muted group-hover:opacity-100 data-popup-open:opacity-100">
+                    <MoreHorizontal className="h-3.5 w-3.5" />
+                  </MenuTrigger>
+                  <MenuPopup align="end">
+                    <MenuItem
+                      disabled={chat.bossBotId === id}
+                      onClick={() => void update({ bossBotId: id })}
+                    >
+                      <Crown />
+                      {t('Make owner')}
+                    </MenuItem>
+                    <MenuItem
+                      disabled={chat.bossBotId === id || chat.members.length <= 2}
+                      onClick={() =>
+                        void update({ members: chat.members.filter((member) => member !== id) })
+                      }
+                    >
+                      <UserMinus />
+                      {t('Remove from group')}
+                    </MenuItem>
+                  </MenuPopup>
+                </Menu>
+              </div>
+            ))}
+            <Popover open={adding} onOpenChange={setAdding}>
+              <PopoverTrigger
+                disabled={candidates.length === 0}
+                className="mt-1 flex h-7 items-center gap-1 rounded-md border px-2 text-muted-foreground text-xs hover:bg-muted hover:text-foreground disabled:opacity-50"
+              >
+                <Plus className="h-3.5 w-3.5" />
+                {t('Add member')}
+              </PopoverTrigger>
+              <PopoverPopup
+                side="bottom"
+                align="start"
+                className="w-56 [&_[data-slot=popover-viewport]]:p-1"
+              >
+                {candidates.map((bot: BotProfile) => (
+                  <button
+                    key={bot.id}
+                    type="button"
+                    onClick={() => {
+                      setAdding(false);
+                      void update({ members: [...chat.members, bot.id] });
+                    }}
+                    className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm hover:bg-muted"
+                  >
+                    <BotAvatar bot={bot} size="sm" />
+                    <span className="min-w-0 truncate">{bot.name}</span>
+                  </button>
+                ))}
+              </PopoverPopup>
+            </Popover>
+          </PanelSection>
+
+          <PanelSection title={t('Reply queue')}>
+            <KeyValue
+              label={t('Current')}
+              value={
+                runtime?.current
+                  ? `${name(runtime.current)}（${t('relay {{n}}/{{max}}', { n: runtime.hops, max: chat.routing.maxHops })}）`
+                  : runtime?.routing
+                    ? t('Choosing who replies…')
+                    : '—'
+              }
+            />
+            <KeyValue
+              label={t('Waiting')}
+              value={runtime?.queue.length ? runtime.queue.map((id) => name(id)).join('、') : '—'}
+            />
+            <KeyValue
+              label={t('Per-member limit')}
+              value={t('{{n}} replies', { n: chat.routing.maxTurnsPerBot })}
+            />
+          </PanelSection>
+
+          <PanelSection title={t('Workspace')}>
+            <div className="rounded-lg border bg-card px-2.5 py-2">
+              <WorkspaceMenu chat={chat} className="w-full max-w-none" />
+              <p className="mt-1.5 text-muted-foreground text-xs">
+                {workspaceProject ? `${workspaceProject.path} · ` : ''}
+                {t('Shared by all members')}
+              </p>
+            </div>
+          </PanelSection>
+
+          <PanelSection title={t('Routing limits')}>
+            <div className="mb-2 flex items-center justify-between gap-3">
+              <span className="text-muted-foreground text-xs">{t('Without @')}</span>
+              <Select
+                items={modeItems}
+                value={chat.routing.mode}
+                onValueChange={(mode) => {
+                  if (mode !== chat.routing.mode)
+                    void update({ routing: { mode: mode as BotRoutingMode } });
+                }}
+              >
+                <SelectTrigger size="sm" className="w-40">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectPopup>
+                  {modeItems.map((item) => (
+                    <SelectItem key={item.value} value={item.value}>
+                      {item.label}
+                    </SelectItem>
+                  ))}
+                </SelectPopup>
+              </Select>
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              <label className="space-y-1">
+                <span className="text-muted-foreground text-xs">{t('@ relay limit')}</span>
+                <Input
+                  type="number"
+                  min={1}
+                  max={20}
+                  value={hops}
+                  onChange={(event) => setHops(event.target.value)}
+                />
+              </label>
+              <label className="space-y-1">
+                <span className="text-muted-foreground text-xs">{t('Replies per member')}</span>
+                <Input
+                  type="number"
+                  min={1}
+                  max={10}
+                  value={turns}
+                  onChange={(event) => setTurns(event.target.value)}
+                />
+              </label>
+            </div>
+            {routingDirty && (
+              <Button
+                size="xs"
+                className="mt-2"
+                onClick={() =>
+                  void update({
+                    routing: {
+                      maxHops: Math.round(Number(hops)) || chat.routing.maxHops,
+                      maxTurnsPerBot: Math.round(Number(turns)) || chat.routing.maxTurnsPerBot,
+                    },
+                  })
+                }
+              >
+                {t('Save')}
+              </Button>
+            )}
+          </PanelSection>
+
+          <PanelSection title={t('Group memory')}>
+            <MemorySpaceList spaceId={`chat:${chat.id}`} emptyText={t('No group memories yet')} />
+          </PanelSection>
+        </TabsPanel>
+      </div>
+    </Tabs>
   );
 }

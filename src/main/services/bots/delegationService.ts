@@ -24,6 +24,15 @@ interface Deps {
   store: DelegationStore;
   emit: (event: BotEvent) => void;
   timeoutMs?: number;
+  /** 群任务看板联动：taskId 校验与每次落盘后的状态同步 */
+  tasks?: {
+    gate(
+      chatId: string | null,
+      ref: string,
+      parentBotId: string
+    ): { ok: true; taskId: string } | { ok: false; error: string };
+    sync(record: Delegation): void;
+  };
   deliverGroupResult?: (
     record: Delegation,
     text: string,
@@ -34,6 +43,8 @@ export interface DelegateInput {
   to: string;
   task: string;
   context?: string;
+  /** 看板任务（#N 或 id）；委派创建 / 终态同步任务状态 */
+  taskId?: string;
 }
 export type DelegateResult =
   | { ok: true; delegationId: string; warning?: string }
@@ -143,6 +154,15 @@ export class DelegationService {
       chat?.kind === 'group' ? chat.members : undefined
     );
     if (error) return { ok: false, error };
+    let taskId: string | undefined;
+    if (input.taskId !== undefined) {
+      const gate = this.deps.tasks?.gate(chatId, input.taskId, parent.id) ?? {
+        ok: false as const,
+        error: 'Tasks are only available in group chats.',
+      };
+      if (!gate.ok) return gate;
+      taskId = gate.taskId;
+    }
     const id = randomUUID();
     const batchId = options.standalone ? undefined : this.deps.host.turnKey(parentConversationId);
     const child = this.deps.authority.createBotConversation(conversation.projectId, {
@@ -172,6 +192,7 @@ export class DelegationService {
         mcpServerIds: effective.mcpServerIds,
       },
       ...(batchId ? { batchId } : {}),
+      ...(taskId ? { taskId } : {}),
     };
     this.save(record);
     const timer = setTimeout(
@@ -241,10 +262,20 @@ export class DelegationService {
     const record = this.deps.store.get(id);
     if (!record || active(record))
       return { ok: false, error: 'Only finished delegations can be retried.' };
+    // 任务仍空闲（已退回待办）时沿用关联；已完成 / 取消 / 被别人接手则不再绑定
+    const taskId =
+      record.taskId && this.deps.tasks?.gate(record.chatId, record.taskId, record.parentBotId).ok
+        ? record.taskId
+        : undefined;
     // 重试是用户在轮次之外的操作，不并入原批次，也不并入父会话当前轮次
     return this.delegate(
       record.parentConversationId,
-      { to: record.targetBotId, task: record.task, context: record.context },
+      {
+        to: record.targetBotId,
+        task: record.task,
+        context: record.context,
+        ...(taskId ? { taskId } : {}),
+      },
       { standalone: true }
     );
   }
@@ -401,6 +432,7 @@ export class DelegationService {
 
   private save(record: Delegation): void {
     this.deps.store.save(record);
+    this.deps.tasks?.sync(record);
     this.deps.emit({ kind: 'delegation', ...(record.chatId ? { chatId: record.chatId } : {}) });
   }
 }

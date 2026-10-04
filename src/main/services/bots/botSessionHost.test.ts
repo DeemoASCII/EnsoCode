@@ -349,6 +349,7 @@ describe('BotSessionHost.deliver', () => {
     expect(runtime.spawns[0].resumeFile).toBeUndefined();
     expect(runtime.spawns[0].systemPrompt).toContain('Be kind.');
     expect(runtime.spawns[0].instructionText).toContain('Bot mode');
+    expect(runtime.spawns[0]).not.toHaveProperty('groupTasks');
     expect(runtime.prompts).toEqual([{ id: result.conversationId, text: 'hi' }]);
 
     await host.deliver(chat.id, alice.id, 'more');
@@ -560,4 +561,24 @@ describe('BotSessionHost cleanup', () => {
     expect(existsSync(bots.homeDir(alice.id))).toBe(false);
     expect(chats.get(group!.id)?.members).toEqual([alice.id, bob.id]);
   });
+});
+
+it('群聊成员会话挂群任务看板，私聊不挂', async () => {
+  const alice = bot('Alice');
+  const bob = bot('Bob');
+  const code = join(root, 'code');
+  mkdirSync(code);
+  const project = registry.createProject({ requestId: 'p', path: code });
+  if (!project.accepted) throw new Error('project');
+  const group = chats.create({
+    kind: 'group',
+    title: 'g',
+    members: [alice.id, bob.id],
+    bossBotId: alice.id,
+    workspace: { kind: 'project', projectId: project.value.projectId },
+  })!;
+  const result = await host.deliver(group.id, alice.id, 'hi');
+  if (!result.ok) throw new Error(result.error);
+  expect(runtime.spawns[0]).toMatchObject({ groupTasks: true });
+  expect(runtime.spawns[0].instructionText).toContain('group_tasks');
 });

@@ -697,6 +697,8 @@ export function spawnSession(
       instruction: { path: string; content: string };
       skillIds: string[];
       mcpServerIds: string[];
+      /** 群聊成员会话：worker 挂 group_tasks */
+      groupTasks?: boolean;
     };
   }
 ): { ok: boolean; error?: string } {
@@ -821,6 +823,7 @@ export function spawnSession(
     ...(options?.rolePrompt ? { rolePrompt: options.rolePrompt } : {}),
     ...(systemPrompt.content ? { systemPrompt: systemPrompt.content } : {}),
     ...(options?.bot ? { botMode: true } : {}),
+    ...(options?.bot?.groupTasks ? { botGroupTasks: true } : {}),
   });
   if (sent.ok) {
     rememberParentToolProfile(identity.sessionId, {

@@ -41,7 +41,7 @@ import {
   runKgJob,
 } from './memory/kg';
 import { getReembedJob, type ReembedJob, runReembedJob } from './memory/reembed';
-import { distillSpaceId, type MemorySpaceContext } from './memory/space';
+import { distillSpaces, type MemorySpaceContext } from './memory/space';
 import type { Embedder, Memory } from './memory/types';
 
 // electron 只出现在这层接线：services/memory/* 保持纯 Node 以便测试注入路径
@@ -328,12 +328,18 @@ async function runOneDistill(job: DistillJob, transcript: string): Promise<void>
   const complete = await distillConfig.complete?.();
   if (!complete || !db) return;
   // 与 memory_capture 的缺省归属一致：bot 会话进 bot space，项目会话进项目 space
-  const { projectId, botId } = job.payload;
+  const { projectId, botId, chatId } = job.payload;
+  const spaces = distillSpaces({
+    projectId,
+    ...(botId ? { botId } : {}),
+    ...(chatId ? { chatId } : {}),
+  });
   await runDistillJob(db, job, {
     transcript,
     complete,
     embedder: await memoryEmbedder(),
-    spaceId: distillSpaceId({ projectId, ...(botId ? { botId } : {}) }),
+    spaceId: spaces.self,
+    ...(spaces.chat ? { chatSpaceId: spaces.chat } : {}),
     onCreated: onMemoryCreated,
   });
   // 一条都没写入时（全部低重要度 / 撞去重）也要通知：任务状态和丢弃原因变了

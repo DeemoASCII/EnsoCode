@@ -4,6 +4,15 @@ import { MemoryInvoker } from './memory';
 
 it('normalizes optional nulls and boolean text before full typed schema validation', () => {
   expect(normalizeDelegationParams({ id: null, cancel: 'false' })).toEqual({ cancel: false });
+  expect(normalizeDelegationParams({ to: 'Bob', task: 't', taskId: 3 })).toEqual({
+    to: 'Bob',
+    task: 't',
+    taskId: '3',
+  });
+  expect(normalizeDelegationParams({ to: 'Bob', task: 't', taskId: null })).toEqual({
+    to: 'Bob',
+    task: 't',
+  });
   const tools = createDelegationTools(
     new MemoryInvoker({ sessionId: 's', generation: 'g' }, () => {})
   );

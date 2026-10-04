@@ -381,3 +381,43 @@ it('publishes only a delegation summary in groups without duplicating a bot mess
   expect(f.deps.chats.readEntries(chat.id)).toHaveLength(1);
   restarted.dispose();
 });
+it('links a board task: gate rejects before any record, sync sees every save, retry keeps the link only while the task is free', async () => {
+  const f = fixture();
+  f.service.dispose();
+  const TASK = '55555555-5555-4555-8555-555555555555';
+  let free = true;
+  const tasks = {
+    gate: vi.fn((_chatId: string | null, ref: string) =>
+      (ref === '#1' || ref === TASK) && free
+        ? ({ ok: true, taskId: TASK } as const)
+        : ({ ok: false, error: 'Task #1 is already done.' } as const)
+    ),
+    sync: vi.fn(),
+  };
+  const service = new DelegationService({ ...f.deps, tasks });
+  expect(service.delegate(f.parent, { to: 'Bob', task: 'x', taskId: '#2' })).toEqual({
+    ok: false,
+    error: 'Task #1 is already done.',
+  });
+  expect(f.store.list()).toEqual([]);
+  const sent = service.delegate(f.parent, { to: 'Bob', task: 'x', taskId: '#1' });
+  if (!sent.ok) throw new Error(sent.error);
+  expect(f.store.get(sent.delegationId)?.taskId).toBe(TASK);
+  expect(tasks.sync).toHaveBeenCalledWith(
+    expect.objectContaining({ id: sent.delegationId, taskId: TASK })
+  );
+  service.cancel(sent.delegationId);
+  expect(tasks.sync).toHaveBeenLastCalledWith(
+    expect.objectContaining({ id: sent.delegationId, state: 'canceled' })
+  );
+  free = true;
+  const retried = service.retry(sent.delegationId);
+  if (!retried.ok) throw new Error(retried.error);
+  expect(f.store.get(retried.delegationId)?.taskId).toBe(TASK);
+  service.cancel(retried.delegationId);
+  free = false;
+  const again = service.retry(retried.delegationId);
+  if (!again.ok) throw new Error(again.error);
+  expect(f.store.get(again.delegationId)).not.toHaveProperty('taskId');
+  service.dispose();
+});
