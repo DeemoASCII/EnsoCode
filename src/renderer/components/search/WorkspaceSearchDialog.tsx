@@ -89,6 +89,7 @@ const SETTINGS_CATEGORY_LABELS: Record<SettingsCategory, string> = {
   voice: 'Voice input',
   experimental: 'Experimental',
   bots: 'Bot mode',
+  botTemplates: 'Bot templates',
 };
 
 function Highlighted({ text, query }: { text: string; query: string }) {

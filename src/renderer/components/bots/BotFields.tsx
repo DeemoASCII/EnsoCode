@@ -1,3 +1,4 @@
+import type { TeamRefList } from '@shared/bots/team';
 import type { ApprovalMode, ThinkingLevel } from '@shared/types/agent';
 import { BUILTIN_AGENT_TYPES } from '@shared/types/assets';
 import { type BotEngine, type BotProfile, checkBotName } from '@shared/types/bot';
@@ -227,6 +228,66 @@ export function Segmented<T extends string>({
           {option.label}
         </button>
       ))}
+    </div>
+  );
+}
+
+/** 团队内委派名单：「全部成员」或勾选的成员 key */
+export function TeamRefField({
+  label,
+  value,
+  options,
+  nameOf,
+  onChange,
+}: {
+  label: string;
+  value: TeamRefList;
+  options: string[];
+  nameOf: (key: string) => string;
+  onChange: (next: TeamRefList) => void;
+}) {
+  const { t } = useI18n();
+  const chip = (active: boolean) =>
+    cn(
+      'rounded-full border px-2 py-0.5 text-xs transition-colors',
+      active ? 'border-info bg-info/10 text-foreground' : 'text-muted-foreground hover:bg-muted'
+    );
+  return (
+    <div>
+      <FieldLabel>{label}</FieldLabel>
+      <div className="flex flex-wrap gap-1.5">
+        <button
+          type="button"
+          className={chip(value === 'any')}
+          onClick={() => onChange(value === 'any' ? [] : 'any')}
+        >
+          {t('All members')}
+        </button>
+        {options.map((key) => {
+          const active = value === 'any' || value.includes(key);
+          return (
+            <button
+              key={key}
+              type="button"
+              className={chip(value !== 'any' && active)}
+              onClick={() =>
+                onChange(
+                  value === 'any'
+                    ? [key]
+                    : active
+                      ? value.filter((k) => k !== key)
+                      : [...value, key]
+                )
+              }
+            >
+              {nameOf(key)}
+            </button>
+          );
+        })}
+      </div>
+      {value !== 'any' && value.length === 0 && (
+        <p className="mt-1 text-muted-foreground text-xs">{t('None selected')}</p>
+      )}
     </div>
   );
 }

@@ -1,7 +1,20 @@
-import { buildTeamFile } from '@shared/bots/team';
+import { buildTeamFile, type TeamFile } from '@shared/bots/team';
+import {
+  addCustomTemplate,
+  parseTeamTemplate,
+  teamTemplateFromSpec,
+} from '@shared/bots/templateLibrary';
 import type { BotChat, BotProfile, BotRoutingMode } from '@shared/types/bot';
 import type { BotChatUpdateInput } from '@shared/types/botIpc';
-import { BellOff, Crown, Download, MoreHorizontal, Plus, UserMinus } from 'lucide-react';
+import {
+  BellOff,
+  BookmarkPlus,
+  Crown,
+  Download,
+  MoreHorizontal,
+  Plus,
+  UserMinus,
+} from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -18,6 +31,7 @@ import { Tabs, TabsList, TabsPanel, TabsTab } from '@/components/ui/tabs';
 import { addToast } from '@/components/ui/toast';
 import { useI18n } from '@/i18n';
 import { useBotsStore } from '@/stores/bots';
+import { updateTemplateLibrary } from '@/stores/bots/templateLibrary';
 import { useSettingsStore } from '@/stores/settings';
 import { BotAvatar } from './BotAvatar';
 import { chatErrorText } from './botText';
@@ -47,15 +61,20 @@ export function KeyValue({ label, value }: { label: string; value: React.ReactNo
   );
 }
 
-/** 导出团队文件：人设逐个从 Main 取，其余剥离由 buildTeamFile 完成 */
-async function exportTeam(chat: BotChat, bots: readonly BotProfile[]): Promise<boolean> {
+/** 团队文件：人设逐个从 Main 取，其余剥离由 buildTeamFile 完成 */
+async function teamFileOf(chat: BotChat, bots: readonly BotProfile[]): Promise<TeamFile | null> {
   const personas: Record<string, string> = {};
   for (const botId of chat.members) {
     const result = await window.electronAPI.bots.get(botId);
-    if (!result.ok) return false;
+    if (!result.ok) return null;
     personas[botId] = result.persona;
   }
-  const file = buildTeamFile(chat, bots, personas, new Date().toISOString());
+  return buildTeamFile(chat, bots, personas, new Date().toISOString());
+}
+
+async function exportTeam(chat: BotChat, bots: readonly BotProfile[]): Promise<boolean> {
+  const file = await teamFileOf(chat, bots);
+  if (!file) return false;
   const url = URL.createObjectURL(
     new Blob([JSON.stringify(file, null, 2)], { type: 'application/json' })
   );
@@ -65,6 +84,16 @@ async function exportTeam(chat: BotChat, bots: readonly BotProfile[]): Promise<b
   link.click();
   URL.revokeObjectURL(url);
   return true;
+}
+
+async function saveTeamTemplate(chat: BotChat, bots: readonly BotProfile[]): Promise<boolean> {
+  const file = await teamFileOf(chat, bots);
+  const data = file && parseTeamTemplate(teamTemplateFromSpec(file.team));
+  if (!data) return false;
+  return updateTemplateLibrary((library) => ({
+    ...library,
+    teams: addCustomTemplate(library.teams, data, crypto.randomUUID()),
+  }));
 }
 
 export function GroupInfoPanel({
@@ -372,6 +401,23 @@ export function GroupInfoPanel({
             >
               <Download />
               {t('Export team')}
+            </Button>
+            <Button
+              size="xs"
+              variant="outline"
+              className="ml-1.5"
+              onClick={() =>
+                void saveTeamTemplate(chat, bots).then((ok) =>
+                  addToast(
+                    ok
+                      ? { type: 'success', title: t('Saved as team template') }
+                      : { type: 'error', title: t('Could not save as team template') }
+                  )
+                )
+              }
+            >
+              <BookmarkPlus />
+              {t('Save as team template')}
             </Button>
             <p className="mt-1.5 text-muted-foreground text-xs">
               {t(

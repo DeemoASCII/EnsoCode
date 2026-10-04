@@ -781,6 +781,9 @@ export const IPC_PRODUCT_COVERAGE = {
   BOT_FILE_SEARCH: excluded('Bot mode composer @file completion.'),
   BOT_REWIND: excluded('Bot mode direct chat rewind UI.'),
   BOT_RETRY: excluded('Bot mode direct chat retry UI.'),
+  BOT_TEMPLATES_GET: excluded('Bot mode member / team template library settings UI.'),
+  BOT_TEMPLATES_SAVE: excluded('Bot mode member / team template library settings UI.'),
+  BOT_TEMPLATES_CHANGED: excluded('Bot mode template library change notification transport.'),
   COMPUTER_CAPABILITIES: surfaces('coding-tools.computer'),
   COMPUTER_OPEN_PERMISSIONS: surfaces('coding-tools.computer'),
 } satisfies Record<keyof typeof IPC_CHANNELS, CoverageDisposition>;

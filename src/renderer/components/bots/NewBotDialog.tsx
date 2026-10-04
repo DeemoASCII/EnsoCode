@@ -1,3 +1,8 @@
+import {
+  type MemberTemplateData,
+  memberDraftOfTemplate,
+  type ResolvedTemplate,
+} from '@shared/bots/templateLibrary';
 import type { BotEngine } from '@shared/types/bot';
 import { ChevronRight, FileJson, Loader2, Plus } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
@@ -19,7 +24,7 @@ import { Z_INDEX } from '@/lib/z-index';
 import { useBotsStore } from '@/stores/bots';
 import { budgetDraft, limitsDraft } from '@/stores/bots/budget';
 import { parseCharacterCard } from '@/stores/bots/characterCard';
-import { BOT_TEMPLATES, type BotTemplate, templateDraft } from '@/stores/bots/templates';
+import { useMemberTemplates } from '@/stores/bots/templateLibrary';
 import { type AbilityForm, BotAbilityFields, DEFAULT_ABILITIES } from './BotAbilities';
 import { BotAvatar } from './BotAvatar';
 import { AVATAR_PALETTE, ColorPicker, EngineField, FieldLabel, nameError } from './BotFields';
@@ -35,7 +40,7 @@ interface Draft extends AbilityForm {
   engine: BotEngine | null;
 }
 
-type Source = { kind: 'template'; id: BotTemplate['id'] } | { kind: 'blank' } | { kind: 'import' };
+type Source = { kind: 'template'; id: string } | { kind: 'blank' } | { kind: 'import' };
 
 const blankDraft = (color: string): Draft => ({
   ...DEFAULT_ABILITIES,
@@ -60,8 +65,9 @@ export function NewBotDialog({
   /** 创建并打开私聊后回调（引导据此预填第一条消息） */
   onCreated?: (chatId: string) => void;
 }) {
-  const { t, locale } = useI18n();
+  const { t } = useI18n();
   const bots = useBotsStore((s) => s.bots);
+  const templates = useMemberTemplates();
   const fileRef = useRef<HTMLInputElement>(null);
   const [source, setSource] = useState<Source>({ kind: 'template', id: 'pm' });
   const [draft, setDraft] = useState<Draft>(() => blankDraft(AVATAR_PALETTE[0]));
@@ -70,8 +76,15 @@ export function NewBotDialog({
   const [busy, setBusy] = useState(false);
   const [abilitiesOpen, setAbilitiesOpen] = useState(false);
 
-  const applyTemplate = (template: BotTemplate) => {
-    const input = templateDraft(template, locale === 'zh' ? 'zh' : 'en');
+  const applyBlank = () => {
+    setSource({ kind: 'blank' });
+    setDraft(blankDraft(AVATAR_PALETTE[bots.length % AVATAR_PALETTE.length]));
+    setError(null);
+  };
+
+  const applyTemplate = (template: ResolvedTemplate<MemberTemplateData> | undefined) => {
+    if (!template) return applyBlank();
+    const input = memberDraftOfTemplate(template.data);
     setSource({ kind: 'template', id: template.id });
     setDraft({
       ...DEFAULT_ABILITIES,
@@ -94,7 +107,7 @@ export function NewBotDialog({
       setSource({ kind: 'blank' });
       setDraft({ ...blankDraft(AVATAR_PALETTE[bots.length % AVATAR_PALETTE.length]), ...seed });
       setError(null);
-    } else applyTemplate(BOT_TEMPLATES[0]);
+    } else applyTemplate(templates[0]);
     setTouched(false);
     setBusy(false);
     setAbilitiesOpen(false);
@@ -186,18 +199,15 @@ export function NewBotDialog({
             <Button
               size="sm"
               variant={source.kind === 'template' ? 'default' : 'outline'}
-              onClick={() => applyTemplate(BOT_TEMPLATES[0])}
+              disabled={templates.length === 0}
+              onClick={() => applyTemplate(templates[0])}
             >
               {t('From template')}
             </Button>
             <Button
               size="sm"
               variant={source.kind === 'blank' ? 'default' : 'outline'}
-              onClick={() => {
-                setSource({ kind: 'blank' });
-                setDraft(blankDraft(AVATAR_PALETTE[bots.length % AVATAR_PALETTE.length]));
-                setError(null);
-              }}
+              onClick={applyBlank}
             >
               {t('Blank')}
             </Button>
@@ -224,30 +234,26 @@ export function NewBotDialog({
 
           {source.kind === 'template' && (
             <div className="grid grid-cols-3 gap-2.5">
-              {BOT_TEMPLATES.map((template) => {
-                const text = template[locale === 'zh' ? 'zh' : 'en'];
-                return (
-                  <button
-                    key={template.id}
-                    type="button"
-                    onClick={() => applyTemplate(template)}
-                    className={cn(
-                      'flex flex-col items-start gap-1 rounded-xl border bg-card p-3 text-left transition-colors hover:bg-muted',
-                      source.id === template.id && 'ring-2 ring-info'
-                    )}
-                  >
-                    <BotAvatar bot={{ name: text.title, avatar: { color: template.color } }} />
-                    <span className="font-medium text-sm">{text.title}</span>
-                    <span className="text-muted-foreground text-xs">{text.summary}</span>
-                  </button>
-                );
-              })}
+              {templates.map((template) => (
+                <button
+                  key={template.id}
+                  type="button"
+                  onClick={() => applyTemplate(template)}
+                  className={cn(
+                    'flex flex-col items-start gap-1 rounded-xl border bg-card p-3 text-left transition-colors hover:bg-muted',
+                    source.id === template.id && 'ring-2 ring-info'
+                  )}
+                >
+                  <BotAvatar
+                    bot={{ name: template.data.title, avatar: { color: template.data.color } }}
+                  />
+                  <span className="font-medium text-sm">{template.data.title}</span>
+                  <span className="text-muted-foreground text-xs">{template.data.summary}</span>
+                </button>
+              ))}
               <button
                 type="button"
-                onClick={() => {
-                  setSource({ kind: 'blank' });
-                  setDraft(blankDraft(AVATAR_PALETTE[bots.length % AVATAR_PALETTE.length]));
-                }}
+                onClick={applyBlank}
                 className="flex items-center justify-center gap-1 rounded-xl border border-dashed p-3 text-muted-foreground text-sm hover:bg-muted"
               >
                 <Plus className="h-4 w-4" />

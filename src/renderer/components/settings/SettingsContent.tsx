@@ -9,6 +9,7 @@ import {
   Gauge,
   Keyboard,
   Layers,
+  LayoutTemplate,
   Mic,
   Palette,
   Plug,
@@ -28,6 +29,7 @@ import { useSettingsStore } from '@/stores/settings';
 import { AgentTypesSettings } from './AgentTypesSettings';
 import { AppearanceSettings } from './AppearanceSettings';
 import { BotSettings } from './BotSettings';
+import { BotTemplatesSettings } from './BotTemplatesSettings';
 import { BuiltinToolsSettings } from './BuiltinToolsSettings';
 import type { SettingsCategory } from './constants';
 import { DevicesSettings } from './DevicesSettings';
@@ -122,6 +124,7 @@ export function SettingsContent() {
     { id: 'resources', icon: Gauge, label: t('Resources') },
     { id: 'experimental', icon: FlaskConical, label: t('Experimental') },
     { id: 'bots', icon: BotMessageSquare, label: t('Bot mode'), sub: true },
+    { id: 'botTemplates', icon: LayoutTemplate, label: t('Bot templates'), sub: true },
   ];
   const categories = visibleCategories(allCategories, disabledBuiltinTools, botModeEnabled);
 
@@ -188,6 +191,7 @@ export function SettingsContent() {
           <ExperimentalSettings onOpenBots={() => setActiveCategory('bots')} />
         )}
         {activeCategory === 'bots' && <BotSettings />}
+        {activeCategory === 'botTemplates' && <BotTemplatesSettings />}
       </div>
     </div>
   );

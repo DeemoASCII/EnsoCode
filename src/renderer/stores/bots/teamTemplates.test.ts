@@ -1,8 +1,9 @@
 import { assignTeamNames, parseTeamSpec, teamMemberDrafts } from '@shared/bots/team';
+import { parseTeamTemplate } from '@shared/bots/templateLibrary';
 import { BUILTIN_AGENT_TYPES } from '@shared/types/assets';
 import { parseBotChat, parseBotProfile } from '@shared/types/bot';
 import { describe, expect, it } from 'vitest';
-import { TEAM_TEMPLATES, teamTemplateSpec } from './teamTemplates';
+import { TEAM_TEMPLATES, teamTemplateData, teamTemplateSpec } from './teamTemplates';
 import { BOT_TEMPLATES } from './templates';
 
 const reserved = BUILTIN_AGENT_TYPES.map((type) => type.name);
@@ -19,6 +20,11 @@ describe('TEAM_TEMPLATES', () => {
     for (const locale of ['zh', 'en'] as const) {
       describe(`${template.id}/${locale}`, () => {
         const spec = teamTemplateSpec(template, locale);
+
+        it('本地化后是合法的团队模板数据', () => {
+          const data = teamTemplateData(template, locale);
+          expect(parseTeamTemplate(data)).toEqual(data);
+        });
 
         it('通过团队、成员档案与群校验', () => {
           expect(parseTeamSpec(spec)).toEqual(spec);

@@ -12,6 +12,7 @@ const TOOL_GATED: Partial<Record<SettingsCategory, string>> = {
   memory: 'memory',
   workflows: 'workflow',
 };
+const BOT_PAGES: readonly SettingsCategory[] = ['bots', 'botTemplates'];
 
 export function isCategoryVisible(
   category: SettingsCategory,
@@ -19,7 +20,7 @@ export function isCategoryVisible(
   botModeEnabled = false
 ): boolean {
   // Bot 模式页跟随「实验」里的开关；开关所在的实验页始终可见
-  if (category === 'bots') return botModeEnabled;
+  if (BOT_PAGES.includes(category)) return botModeEnabled;
   const tool = TOOL_GATED[category];
   return !tool || !disabledBuiltinTools.includes(tool);
 }
@@ -43,5 +44,5 @@ export function resolveActiveCategory(
   botModeEnabled = false
 ): SettingsCategory {
   if (isCategoryVisible(active, disabledBuiltinTools, botModeEnabled)) return active;
-  return active === 'bots' ? 'experimental' : 'tools';
+  return BOT_PAGES.includes(active) ? 'experimental' : 'tools';
 }

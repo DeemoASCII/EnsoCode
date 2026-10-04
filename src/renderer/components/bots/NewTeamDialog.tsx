@@ -1,12 +1,11 @@
 import {
   selectTeamMembers,
-  type TeamFileError,
   type TeamMemberAssets,
   type TeamMemberSpec,
-  type TeamRefList,
   type TeamRename,
   type TeamSpec,
 } from '@shared/bots/team';
+import { teamSpecOfTemplate } from '@shared/bots/templateLibrary';
 import {
   ArrowLeft,
   ChevronDown,
@@ -39,16 +38,16 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { addToast } from '@/components/ui/toast';
-import { type TFunction, useI18n } from '@/i18n';
+import { useI18n } from '@/i18n';
 import { cn } from '@/lib/utils';
 import { Z_INDEX } from '@/lib/z-index';
 import { useBotsStore } from '@/stores/bots';
-import { TEAM_TEMPLATES, teamTemplateSpec } from '@/stores/bots/teamTemplates';
+import { useTeamTemplates } from '@/stores/bots/templateLibrary';
 import { useSettingsStore } from '@/stores/settings';
 import { AssetPickers, suggestErrorText } from './BotAbilities';
 import { BotAvatar } from './BotAvatar';
-import { ApprovalSelect, FieldLabel, nameError, Segmented } from './BotFields';
-import { botErrorText, chatErrorText, localProjects } from './botText';
+import { ApprovalSelect, FieldLabel, nameError, Segmented, TeamRefField } from './BotFields';
+import { botErrorText, chatErrorText, localProjects, teamFileErrorText } from './botText';
 
 type Assets = Record<string, { skillIds: string[]; mcpServerIds: string[] }>;
 const NO_ASSETS = { skillIds: [] as string[], mcpServerIds: [] as string[] };
@@ -57,21 +56,6 @@ interface Preview {
   team: TeamSpec;
   renamed: TeamRename[];
   picked: string[];
-}
-
-function teamFileErrorText(error: TeamFileError | string, t: TFunction): string {
-  switch (error) {
-    case 'too-large':
-      return t('This team file is too large.');
-    case 'invalid-json':
-      return t('This file is not valid JSON.');
-    case 'unsupported-version':
-      return t('This team file comes from an unsupported version.');
-    case 'invalid':
-      return t('This file is not a valid EnsoCode team file.');
-    default:
-      return error;
-  }
 }
 
 /** 从内置模板或团队文件创建：预览成员（可取消、改名）→ Main 原子创建成员与群 */
@@ -90,6 +74,7 @@ export function NewTeamDialog({
 }) {
   const { t, locale } = useI18n();
   const bots = useBotsStore((s) => s.bots);
+  const templates = useTeamTemplates();
   const projects = localProjects(useSettingsStore((s) => s.projects));
   const fileRef = useRef<HTMLInputElement>(null);
   const [preview, setPreview] = useState<Preview | null>(null);
@@ -110,8 +95,8 @@ export function NewTeamDialog({
     setError(null);
     setAssets({});
     setExpanded(null);
-    const template = TEAM_TEMPLATES.find((item) => item.id === seedTemplateId);
-    if (template) void load({ team: teamTemplateSpec(template, locale === 'zh' ? 'zh' : 'en') });
+    const template = templates.find((item) => item.id === seedTemplateId);
+    if (template) void load({ team: teamSpecOfTemplate(template.data) });
   }, [open]);
 
   const load = async (request: { team: TeamSpec } | { text: string }) => {
@@ -292,25 +277,25 @@ export function NewTeamDialog({
           {!preview ? (
             <>
               <div className="grid grid-cols-3 gap-2.5">
-                {TEAM_TEMPLATES.map((template) => (
+                {templates.map(({ id, data }) => (
                   <button
-                    key={template.id}
+                    key={id}
                     type="button"
                     disabled={busy}
-                    onClick={() => void load({ team: teamTemplateSpec(template, lang) })}
+                    onClick={() => void load({ team: teamSpecOfTemplate(data) })}
                     className="flex flex-col items-start gap-1.5 rounded-xl border bg-card p-3 text-left transition-colors hover:bg-muted disabled:opacity-50"
                   >
                     <div className="-space-x-1.5 flex">
-                      {template.members.map((member) => (
+                      {data.members.map((member) => (
                         <BotAvatar
                           key={member.key}
                           size="sm"
-                          bot={{ name: member[lang].name, avatar: { color: member.color } }}
+                          bot={{ name: member.name, avatar: { color: member.color } }}
                         />
                       ))}
                     </div>
-                    <span className="font-medium text-sm">{template[lang].title}</span>
-                    <span className="text-muted-foreground text-xs">{template[lang].summary}</span>
+                    <span className="font-medium text-sm">{data.title}</span>
+                    <span className="text-muted-foreground text-xs">{data.summary}</span>
                   </button>
                 ))}
               </div>
@@ -624,65 +609,5 @@ export function NewTeamDialog({
         </DialogFooter>
       </DialogContent>
     </Dialog>
-  );
-}
-
-/** 团队内委派名单：「全部成员」或勾选的成员 key */
-function TeamRefField({
-  label,
-  value,
-  options,
-  nameOf,
-  onChange,
-}: {
-  label: string;
-  value: TeamRefList;
-  options: string[];
-  nameOf: (key: string) => string;
-  onChange: (next: TeamRefList) => void;
-}) {
-  const { t } = useI18n();
-  const chip = (active: boolean) =>
-    cn(
-      'rounded-full border px-2 py-0.5 text-xs transition-colors',
-      active ? 'border-info bg-info/10 text-foreground' : 'text-muted-foreground hover:bg-muted'
-    );
-  return (
-    <div>
-      <FieldLabel>{label}</FieldLabel>
-      <div className="flex flex-wrap gap-1.5">
-        <button
-          type="button"
-          className={chip(value === 'any')}
-          onClick={() => onChange(value === 'any' ? [] : 'any')}
-        >
-          {t('All members')}
-        </button>
-        {options.map((key) => {
-          const active = value === 'any' || value.includes(key);
-          return (
-            <button
-              key={key}
-              type="button"
-              className={chip(value !== 'any' && active)}
-              onClick={() =>
-                onChange(
-                  value === 'any'
-                    ? [key]
-                    : active
-                      ? value.filter((k) => k !== key)
-                      : [...value, key]
-                )
-              }
-            >
-              {nameOf(key)}
-            </button>
-          );
-        })}
-      </div>
-      {value !== 'any' && value.length === 0 && (
-        <p className="mt-1 text-muted-foreground text-xs">{t('None selected')}</p>
-      )}
-    </div>
   );
 }

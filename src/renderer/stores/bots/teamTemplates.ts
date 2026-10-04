@@ -1,4 +1,5 @@
 import type { TeamMemberSpec, TeamRefList, TeamSpec } from '@shared/bots/team';
+import { type TeamTemplateData, teamSpecOfTemplate } from '@shared/bots/templateLibrary';
 import type { ApprovalMode } from '@shared/types/agent';
 
 interface MemberText {
@@ -27,8 +28,6 @@ export interface TeamTemplate {
   en: { title: string; summary: string };
   members: TeamTemplateMember[];
 }
-
-const ROUTING: TeamSpec['routing'] = { mode: 'smart', maxHops: 6, maxTurnsPerBot: 2 };
 
 /** 人设只按角色称呼队友（名字可能在创建时被改） */
 export const TEAM_TEMPLATES: readonly TeamTemplate[] = [
@@ -518,20 +517,18 @@ When sources or analysis contradict each other, raise it with the lead rather th
   },
 ];
 
-export function teamTemplateSpec(template: TeamTemplate, locale: 'zh' | 'en'): TeamSpec {
+export function teamTemplateData(template: TeamTemplate, locale: 'zh' | 'en'): TeamTemplateData {
   return {
-    title: template[locale].title,
+    ...template[locale],
     bossKey: template.bossKey,
     workspace: template.workspace,
-    routing: { ...ROUTING },
-    members: template.members.map((member) => ({
-      key: member.key,
-      ...member[locale],
-      avatar: { color: member.color },
-      tools: member.tools,
-      approvalMode: member.approvalMode,
-      delegation: { canDelegateTo: member.canDelegateTo, acceptFrom: member.acceptFrom },
-      memory: { enabled: true },
+    members: template.members.map(({ zh, en, ...member }) => ({
+      ...member,
+      ...(locale === 'zh' ? zh : en),
     })),
   };
+}
+
+export function teamTemplateSpec(template: TeamTemplate, locale: 'zh' | 'en'): TeamSpec {
+  return teamSpecOfTemplate(teamTemplateData(template, locale));
 }

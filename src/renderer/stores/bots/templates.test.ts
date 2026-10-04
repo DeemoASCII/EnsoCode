@@ -1,7 +1,8 @@
+import { parseMemberTemplate } from '@shared/bots/templateLibrary';
 import { BUILTIN_AGENT_TYPES } from '@shared/types/assets';
 import { checkBotName } from '@shared/types/bot';
 import { describe, expect, it } from 'vitest';
-import { BOT_TEMPLATES, templateDraft } from './templates';
+import { BOT_TEMPLATES, memberTemplateData, templateDraft } from './templates';
 
 describe('BOT_TEMPLATES', () => {
   const reserved = BUILTIN_AGENT_TYPES.map((type) => type.name);
@@ -29,5 +30,13 @@ describe('BOT_TEMPLATES', () => {
     const ops = templateDraft(BOT_TEMPLATES[2], 'zh');
     expect(pm.tools).toBe('readonly');
     expect(ops.approvalMode).toBe('supervised');
+  });
+
+  it('本地化后是合法的成员模板数据', () => {
+    for (const locale of ['zh', 'en'] as const)
+      for (const tpl of BOT_TEMPLATES) {
+        const data = memberTemplateData(tpl, locale);
+        expect(parseMemberTemplate(data)).toEqual(data);
+      }
   });
 });

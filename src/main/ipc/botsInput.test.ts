@@ -328,6 +328,15 @@ describe('parseGoalSuggestRequest', () => {
     });
   });
 
+  it('接受自定义模板 id 与最多 30 个模板', () => {
+    const custom = { ...template, id: 'custom:11111111-2222-4333-8444-555555555555' };
+    const many = Array.from({ length: 30 }, (_, i) => ({ ...template, id: `t${i}` }));
+    expect(parseGoalSuggestRequest({ goal: 'x', templates: [custom] })?.templates).toEqual([
+      custom,
+    ]);
+    expect(parseGoalSuggestRequest({ goal: 'x', templates: many })?.templates).toHaveLength(30);
+  });
+
   it('拒绝空目标、超长、多余字段、坏模板与非法语言', () => {
     for (const bad of [
       null,
@@ -338,11 +347,12 @@ describe('parseGoalSuggestRequest', () => {
       { goal: 'x', language: 'fr' },
       { goal: 'x', templates: 'software' },
       { goal: 'x', templates: [{ ...template, id: '../etc' }] },
+      { goal: 'x', templates: [{ ...template, id: 'custom:x' }] },
       { goal: 'x', templates: [{ ...template, extra: 1 }] },
       { goal: 'x', templates: [{ id: 'a', title: 'b' }] },
       {
         goal: 'x',
-        templates: Array.from({ length: 11 }, (_, i) => ({ ...template, id: `t${i}` })),
+        templates: Array.from({ length: 31 }, (_, i) => ({ ...template, id: `t${i}` })),
       },
     ])
       expect(parseGoalSuggestRequest(bad), JSON.stringify(bad)).toBeNull();

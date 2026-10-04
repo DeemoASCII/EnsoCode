@@ -1,10 +1,14 @@
-import type { GoalSuggestedMember, GoalSuggestion } from '@shared/bots/goalSuggest';
+import {
+  GOAL_TEMPLATES_MAX,
+  type GoalSuggestedMember,
+  type GoalSuggestion,
+} from '@shared/bots/goalSuggest';
 import { ArrowLeft, Loader2, Sparkles, Target } from 'lucide-react';
 import { useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { useI18n } from '@/i18n';
-import { TEAM_TEMPLATES } from '@/stores/bots/teamTemplates';
+import { useTeamTemplates } from '@/stores/bots/templateLibrary';
 import { suggestErrorText } from './BotAbilities';
 import { BotAvatar } from './BotAvatar';
 import { AVATAR_PALETTE } from './BotFields';
@@ -19,6 +23,7 @@ export interface GoalPick {
 export function GoalOnboarding({ onPick }: { onPick: (pick: GoalPick) => void }) {
   const { t, locale } = useI18n();
   const lang = locale === 'zh' ? 'zh' : 'en';
+  const templates = useTeamTemplates();
   const [goal, setGoal] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -33,11 +38,9 @@ export function GoalOnboarding({ onPick }: { onPick: (pick: GoalPick) => void })
       const result = await window.electronAPI.bots.suggestGoal({
         goal: goal.trim(),
         language: lang,
-        templates: TEAM_TEMPLATES.map((template) => ({
-          id: template.id,
-          title: template[lang].title,
-          summary: template[lang].summary,
-        })),
+        templates: templates
+          .slice(0, GOAL_TEMPLATES_MAX)
+          .map(({ id, data }) => ({ id, title: data.title, summary: data.summary })),
       });
       if (!result.ok) {
         setError(suggestErrorText(result, t));
@@ -76,7 +79,7 @@ export function GoalOnboarding({ onPick }: { onPick: (pick: GoalPick) => void })
 
   const template =
     suggestion.kind === 'team'
-      ? TEAM_TEMPLATES.find((item) => item.id === suggestion.templateId)
+      ? templates.find((item) => item.id === suggestion.templateId)?.data
       : undefined;
 
   return (
@@ -111,12 +114,12 @@ export function GoalOnboarding({ onPick }: { onPick: (pick: GoalPick) => void })
                   <BotAvatar
                     key={member.key}
                     size="sm"
-                    bot={{ name: member[lang].name, avatar: { color: member.color } }}
+                    bot={{ name: member.name, avatar: { color: member.color } }}
                   />
                 ))}
               </div>
-              <p className="font-medium text-sm">{template[lang].title}</p>
-              <p className="text-muted-foreground text-xs">{template[lang].summary}</p>
+              <p className="font-medium text-sm">{template.title}</p>
+              <p className="text-muted-foreground text-xs">{template.summary}</p>
             </div>
           )
         )}

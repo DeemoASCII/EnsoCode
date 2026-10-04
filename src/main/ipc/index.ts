@@ -4,6 +4,7 @@ import { registerAppBadgeHandlers } from './appBadge';
 import { registerAssetHandlers } from './assets';
 import { registerMemberAgentTypes } from './botAgentTypes';
 import { registerBotHandlers } from './bots';
+import { registerBotTemplateHandlers } from './botTemplates';
 import { registerBrowserHandlers } from './browser';
 import { registerBtwHandlers } from './btw';
 import { registerCapabilityHandlers } from './capabilities';
@@ -61,6 +62,7 @@ export function registerIpcHandlers(): void {
   registerMemoryHandlers();
   registerBtwHandlers();
   registerBotHandlers();
+  registerBotTemplateHandlers();
   registerMemberAgentTypes();
   registerPairBotHandlers();
   registerAppBadgeHandlers();

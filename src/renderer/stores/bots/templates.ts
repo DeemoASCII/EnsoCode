@@ -1,3 +1,4 @@
+import { type MemberTemplateData, memberDraftOfTemplate } from '@shared/bots/templateLibrary';
 import type { ApprovalMode } from '@shared/types/agent';
 import type { BotProfile } from '@shared/types/bot';
 import type { BotDraftInput } from '@shared/types/botIpc';
@@ -137,15 +138,15 @@ export function templateText(template: BotTemplate, locale: 'zh' | 'en'): Templa
   return template[locale];
 }
 
-export function templateDraft(template: BotTemplate, locale: 'zh' | 'en'): BotDraftInput {
-  const text = template[locale];
+export function memberTemplateData(template: BotTemplate, locale: 'zh' | 'en'): MemberTemplateData {
   return {
-    name: text.name,
-    title: text.title,
-    scope: text.scope,
-    persona: text.persona,
-    avatar: { color: template.color },
+    ...template[locale],
+    color: template.color,
     tools: template.tools,
     approvalMode: template.approvalMode,
   };
+}
+
+export function templateDraft(template: BotTemplate, locale: 'zh' | 'en'): BotDraftInput {
+  return memberDraftOfTemplate(memberTemplateData(template, locale));
 }

@@ -2,6 +2,7 @@ import type { AbilitySuggestion } from '../bots/abilitySuggest';
 import type { GoalSuggestion, GoalSuggestTemplate } from '../bots/goalSuggest';
 import type { PersonaSuggestion } from '../bots/personaSuggest';
 import type { TeamFileError, TeamMemberAssets, TeamRename, TeamSpec } from '../bots/team';
+import type { BotTemplateLibrary } from '../bots/templateLibrary';
 import type {
   ApprovalRequestInfo,
   AskRequestInfo,
@@ -372,6 +373,8 @@ export type BotTeamPreviewRequest = { team: TeamSpec } | { text: string };
 export type BotTeamPreviewResult =
   | { ok: true; team: TeamSpec; renamed: TeamRename[] }
   | (BotIpcError & { error: TeamFileError | 'disabled' | 'unavailable' });
+
+export type BotTemplatesResult = { ok: true; library: BotTemplateLibrary } | BotIpcError;
 
 export interface BotTeamCreateRequest {
   team: TeamSpec;

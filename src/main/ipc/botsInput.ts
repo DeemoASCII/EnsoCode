@@ -1,6 +1,11 @@
 import { CHAT_REF_MAX_PER_MESSAGE } from '@shared/bots/composerRefs';
-import type { GoalSuggestInput, GoalSuggestTemplate } from '@shared/bots/goalSuggest';
+import {
+  GOAL_TEMPLATES_MAX,
+  type GoalSuggestInput,
+  type GoalSuggestTemplate,
+} from '@shared/bots/goalSuggest';
 import type { PersonaSuggestInput } from '@shared/bots/personaSuggest';
+import { isTemplateId } from '@shared/bots/templateLibrary';
 import {
   APPROVAL_MODES,
   type ApprovalMode,
@@ -525,16 +530,11 @@ export function parsePersonaSuggestRequest(value: unknown): PersonaSuggestInput 
   return { name, title, scope, persona, language };
 }
 
-const TEMPLATE_ID_RE = /^[a-z0-9-]{1,40}$/;
-
 function parseGoalTemplate(value: unknown): GoalSuggestTemplate | null {
   const input = record(value);
   if (!input || !onlyKeys(input, ['id', 'title', 'summary'])) return null;
   const { id, title, summary } = input;
-  return typeof id === 'string' &&
-    TEMPLATE_ID_RE.test(id) &&
-    text(title, MAX.short) &&
-    text(summary, 500)
+  return typeof id === 'string' && isTemplateId(id) && text(title, MAX.short) && text(summary, 500)
     ? { id, title, summary }
     : null;
 }
@@ -547,7 +547,7 @@ export function parseGoalSuggestRequest(value: unknown): GoalSuggestInput | null
   const language = input.language ?? 'en';
   if (language !== 'zh' && language !== 'en') return null;
   const rawTemplates = input.templates ?? [];
-  if (!Array.isArray(rawTemplates) || rawTemplates.length > 10) return null;
+  if (!Array.isArray(rawTemplates) || rawTemplates.length > GOAL_TEMPLATES_MAX) return null;
   const templates: GoalSuggestTemplate[] = [];
   for (const raw of rawTemplates) {
     const template = parseGoalTemplate(raw);

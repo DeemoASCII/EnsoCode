@@ -1,6 +1,22 @@
+import type { TeamFileError } from '@shared/bots/team';
 import type { BotChat, BotProfile } from '@shared/types/bot';
 import type { Project } from '@shared/types/project';
 import type { TFunction } from '@/i18n';
+
+export function teamFileErrorText(error: TeamFileError | string, t: TFunction): string {
+  switch (error) {
+    case 'too-large':
+      return t('This team file is too large.');
+    case 'invalid-json':
+      return t('This file is not valid JSON.');
+    case 'unsupported-version':
+      return t('This team file comes from an unsupported version.');
+    case 'invalid':
+      return t('This file is not a valid EnsoCode team file.');
+    default:
+      return error;
+  }
+}
 
 /** 成员写入失败 reason → 文案 */
 export function botErrorText(reason: string | undefined, error: string, t: TFunction): string {

@@ -1,3 +1,4 @@
+import type { BotTemplateLibrary } from '@shared/bots/templateLibrary';
 import type {
   BtwAbortRequest,
   BtwDisposeRequest,
@@ -172,6 +173,7 @@ import type {
   BotTeamCreateResult,
   BotTeamPreviewRequest,
   BotTeamPreviewResult,
+  BotTemplatesResult,
   BotTimelineResult,
   BotWriteIpcResult,
 } from '@shared/types/botIpc';
@@ -1285,6 +1287,16 @@ const electronAPI = {
     }): Promise<BotActionResult> => ipcRenderer.invoke(IPC_CHANNELS.BOT_REWIND, request),
     retry: (chatId: string): Promise<BotActionResult> =>
       ipcRenderer.invoke(IPC_CHANNELS.BOT_RETRY, { chatId }),
+    templates: {
+      get: (): Promise<BotTemplatesResult> => ipcRenderer.invoke(IPC_CHANNELS.BOT_TEMPLATES_GET),
+      save: (library: BotTemplateLibrary): Promise<BotTemplatesResult> =>
+        ipcRenderer.invoke(IPC_CHANNELS.BOT_TEMPLATES_SAVE, library),
+      onChanged: (callback: (library: BotTemplateLibrary) => void): (() => void) => {
+        const listener = (_: unknown, library: BotTemplateLibrary) => callback(library);
+        ipcRenderer.on(IPC_CHANNELS.BOT_TEMPLATES_CHANGED, listener);
+        return () => ipcRenderer.removeListener(IPC_CHANNELS.BOT_TEMPLATES_CHANGED, listener);
+      },
+    },
     usageSummary: (days: UsageRangeDays): Promise<BotUsageSummaryResult> =>
       ipcRenderer.invoke(IPC_CHANNELS.BOT_USAGE_SUMMARY, days),
     usage: (): Promise<BotUsageOverviewResult> => ipcRenderer.invoke(IPC_CHANNELS.BOT_USAGE),

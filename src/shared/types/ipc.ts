@@ -437,6 +437,10 @@ export const IPC_CHANNELS = {
   /** 私聊回退 / 重试：只收 chatId（+ 持久化 user entryId），会话由 Main 按聊天推导 */
   BOT_REWIND: 'bots:rewind',
   BOT_RETRY: 'bots:retry',
+  /** 成员 / 团队模板库（userData/bot-templates.json）；写入后广播 CHANGED */
+  BOT_TEMPLATES_GET: 'bots:templates-get',
+  BOT_TEMPLATES_SAVE: 'bots:templates-save',
+  BOT_TEMPLATES_CHANGED: 'bots:templates-changed',
 } as const;
 
 export type IpcChannel = (typeof IPC_CHANNELS)[keyof typeof IPC_CHANNELS];

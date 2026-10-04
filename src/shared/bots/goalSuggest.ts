@@ -25,6 +25,7 @@ export type GoalSuggestion =
   | { kind: 'member'; member: GoalSuggestedMember; reason: string; firstMessage: string }
   | { kind: 'team'; templateId: string; reason: string; firstMessage: string };
 
+export const GOAL_TEMPLATES_MAX = 30;
 const OUT_MAX = { title: 60, scope: 300, persona: 4_000, reason: 300, message: 4_000 } as const;
 const GOAL_MAX = 2_000;
 
@@ -59,7 +60,7 @@ export function goalSuggestPrompt(input: GoalSuggestInput): {
     ...(teams
       ? [
           '<templates>',
-          ...input.templates.map((t) => `${line(t.id, 40)}: ${line(t.title)} — ${line(t.summary)}`),
+          ...input.templates.map((t) => `${line(t.id, 60)}: ${line(t.title)} — ${line(t.summary)}`),
           '</templates>',
         ]
       : []),
