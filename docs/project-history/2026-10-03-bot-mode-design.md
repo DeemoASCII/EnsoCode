@@ -146,6 +146,9 @@ interface Delegation {
   depth: number; createdAt; finishedAt?;
   batchId?: string;                         // 发起时父会话所在轮次的键（host turnKey），同父会话同 batchId 为一批
   taskId?: string;                          // 关联的群任务看板任务（见「群任务看板」）
+  retryOf?: string;                         // 由哪条委派重试而来；被指向的记录即「已重试」
+  timeoutMinutes?: number;                  // 本次时限（发起方 deadlineMinutes 与目标上限取小）
+  keep?: true;                              // 父回合被停止 / 中断后仍继续
 }
 ```
 
@@ -216,7 +219,7 @@ interface Delegation {
 
 bot 会话额外挂两个工具：
 
-- `delegate({to, task, context?, wait?})`：校验 `canDelegateTo/acceptFrom`；群聊里只能委派给本群成员；不能委派给委派链上游的成员（结果本来就自动回传，真机里被委派方曾反向委派「汇报完成」绕圈）；深度 ≤ 2，单个父会话并发 ≤ 3。通过后为目标成员新建一个**委派会话**（根会话，`bot.chatId = null`，`parentDelegationId` 有值，不出现在聊天列表），立刻返回 `delegationId`。
+- `delegate({to, task, context?, taskId?, deadlineMinutes?, keep?})`：校验 `canDelegateTo/acceptFrom`；群聊里只能委派给本群成员；不能委派给委派链上游的成员（结果本来就自动回传，真机里被委派方曾反向委派「汇报完成」绕圈）；深度 ≤ 2，单个父会话并发 ≤ 3。通过后为目标成员新建一个**委派会话**（根会话，`bot.chatId = null`，`parentDelegationId` 有值，不出现在聊天列表），立刻返回 `delegationId`。参数归一化（`"30"`→30、`"true"`→true、null 删除）在 schema 校验之前。
 - `check_delegation({id?, cancel?})`：查看状态或取消。
 
 **权限**按目标成员自身能力执行：工具集（tools）、技能（skillIds）、MCP（mcpServerIds）都用目标成员自己的配置，审批档取父子两者中更严的一档；能不能委派只由 `canDelegateTo/acceptFrom` 控制。工作区沿用父会话的工作区（被委派的人在委托方的目录里干活）。之所以不取交集：委派的意义就是把自己做不了的事交给有能力的成员，真机里只读的项目经理委派全栈工程师改文件，交集后子会话只剩只读，委派形同虚设；风险由委派授权名单和更严的审批档兜住。这条只管委派会话，readonly 成员自己的 `subagent` 子代理仍保持只读。
@@ -227,7 +230,11 @@ bot 会话额外挂两个工具：
 
 **重启**：在 worker 恢复之前，把所有 queued 和 running 的委派标为 `failed/interrupted`，不自动重放（可能已经写盘），并通知父会话（因此重启后不存在部分完成的批次，已全部终态但未投递的批次按原 batchId 补投一次）。用户可以在 UI 里点「重试」，重试会生成一条新记录。
 
-**超时**：默认 4 小时，可以按成员配置。
+**重试**：只允许 `failed`（含 timeout / interrupted / error）与 `canceled`；新记录带 `retryOf = 原 id`，已被某条记录 `retryOf` 指向的不能再重试（链式重试只能重试最新那条）；重试走 `delegate`，同样受单父会话并发 ≤ 3 约束，自成一批（standalone），时限沿用原 `timeoutMinutes` 并按目标当前上限再收紧。renderer「已重试」只读 `retryOf`；收件箱的中断提示另外仍隐藏「之后成员自己重新委派了同目标同任务」的记录。
+
+**超时**：`BotProfile.delegationTimeoutMinutes?`（1–1440 整数，缺省 240）是该成员**作为被委派方**的上限；`delegate` 可传 `deadlineMinutes` 要求更短，超过上限按上限执行并在返回里带 warning。实际时限写进记录 `timeoutMinutes`，卡片显示「超过 N 分钟未完成」。计时从创建记录起（含排队）。
+
+**父回合中断级联**：宿主在进行中的回合被用户停止或中断时给 `BotTurnFinished` 打 `stopped`——群聊 `stopTurn`、私聊停止（worker 以 `stopReason=aborted` 结束）、`abortConversation`、会话退役、settle 兜底的 `interrupted`、`worker-exited`；预算 / 单回合上限停止与普通出错**不算**。`DelegationService` 收到 `stopped` 后按（parentConversationId, batchId = 该轮 turnKey）取消这一轮发起、未标 `keep` 的进行中委派（不写批次等待提示），群看板关联任务随 `canceled` 退回待办，`keep` 的继续跑、任务保持进行中。批次一致性：取消后若批次已无进行中的记录，直接把整批标记已投递（群里照常落 `delegation` 条目），**不再注入结果唤醒父会话**——用户停下就是要停；仍有 `keep` 在跑则整批（含被取消的）等它结束后照常合并回传。被取消的子会话自己的回合也以 `canceled` 结束并带 `stopped`，从而逐级取消孙委派。重试产生的委派没有 batchId，不受任何回合级联。
 
 Code 模式现有的 `subagent/workflow` 对 bot 会话照常可用，用于临时开的一次性助手，和委派不是一个概念，互不影响。
 
@@ -336,7 +343,10 @@ Main 在 `spawnSession` 里根据 `ConversationAuthority.bot` 组装提示词，
 - **归属**：按 `ConversationAuthority.bot.botId` 归集——私聊、群聊、例行任务（投进私聊 / 群聊会话）都记在该成员名下；委派子会话 binding 记的是目标成员，归目标。Code 会话、Code 里拉 bot 当 coworker 的 child 不计入，Code 的按模型 / 按项目统计不变。纯函数在 `shared/usage/botUsage.ts`（同一 jsonl entry id 只计一次）；`services/bots/botUsage.ts` 逐个 bot 会话 `sessionFile` 走用量页的解析缓存（`loadUsageSession`），单价复用用量页同一张表（`getUsagePricing`：catalog + 本地补丁 + 用户覆盖）。tokens = input + output + cacheRead + cacheWrite，与用量页一致。
 - **展示**：`BOT_USAGE_SUMMARY(days)` 给用量页「按成员」排行（周期沿用页面选择，仅 botModeEnabled 时显示）；`BOT_USAGE()` 给每个成员今日 / 近 7 天 / 近 30 天 token 与估算成本及今日是否超额，资料面板「资料」页顶部展示，并带今日预算进度。
 - **预算**：`BotProfile.budget?: { dailyCostUsd?; dailyTokens? }`，正数才算上限，按本地时区自然日（`startOfLocalDay`）重置；缺省 / 旧数据 = 不限。新建成员与资料「能力」页可填（留空 = 不限，`budget:null` 清除）。未定价模型的成本为 null，不触发成本上限，只能靠 token 上限。
-- **执行点**：统一在 `BotSessionHost`。`deliverConversation`（私聊、群聊接力、委派任务、委派结果回投、例行任务都经过）在去重之后、steer / 排队 / 启动之前检查；排队项真正启动前（pump）再查一次。超额返回 `budget-exceeded`，不发给 worker（renderer 不做乐观回显，提示「该成员今日预算已用完」）。运行中：每条带 `usage` 且已有 `stopReason` 的 assistant `message-upsert` 到达后检查，超额则以 `budget-exceeded` 结算并停掉该会话当前回合（与 `stopTurn` 同一路径，清掉它的排队项）。
+- **执行点**：统一在 `BotSessionHost`。`deliverConversation`（私聊、群聊接力、委派任务、委派结果回投、例行任务都经过）在去重之后、steer / 排队 / 启动之前检查；排队项真正启动前（pump）再查一次。超额返回 `budget-exceeded`，不发给 worker（renderer 不做乐观回显，提示「该成员今日预算已用完」）。运行中：每条 assistant 消息结束（`stopReason` + `usage`，且 live 消息的 `timing.completedMs` 已打上——pi 的流式中间态也带 `stopReason`）后检查，超额则以 `budget-exceeded` 结算并停掉该会话当前回合（与 `stopTurn` 同一路径，清掉它的排队项）。
+- **内存账本**：`BotUsageService` 按成员维护今日账本，成员首次判定时读一次它的 bot 会话 jsonl（未设预算不读），之后由宿主在每条 assistant 消息结束时 `record` 增量累计；键为 `conversationId:timestamp`，与 jsonl 记录同键，读盘期间到达的消息先暂存再合并，重复 upsert 覆盖不重复计；跨本地零点只丢弃旧记录、不重读。定价表按自然日缓存。预算端口拆成异步 `prepare`（备账本）+ 同步 `verdict(botId, reservedTokens)`，宿主在 `prepare` 之后同一同步段里判定并占 slot，两个同时到达的回合不会都按「零预留」放行。
+- **回合预留**：成员每个进行中回合（slot 或 running）预留 `min(32k, maxTokensPerTurn)` 减去本回合已用；新回合判定 = 今日已用 + 该成员其他进行中回合的未用预留，运行中检查同样只算其他回合的预留（不算自己）。回合结束（slot 释放）预留自然消失，不需要单独释放点。真机：成员日上限 = 已用 + 30k 时同一轮并行委派两件事，第二件在闸口即 `budget-exceeded`，第一件跑到上限附近被停，合计只超最后一条消息。
+- **单回合上限**：`BotProfile.maxTokensPerTurn?`（正整数，缺省不限）。宿主按 turnKey 记本回合每条 assistant 消息（按 index 覆盖）的 token：消息结束取上报用量；流式中取已报的 input + cache，加上 `max(已报 output, 已出文本 / 思考 / 工具参数字符数 ÷ 4)`。超过即以 `turn-token-limit` 停掉该回合（同预算停止路径，不打 `stopped`、不级联取消委派）；群里写「X 本回合用量超过单回合上限，已停止」，委派卡片显示超出单回合上限。局限：OpenAI 兼容类厂商流式中不报 input、有的推理输出不外露，这类在消息结束时才计入完整用量（真机 GLM 在第一条消息结束即停；Claude 流式中途停在约 6k 字符）。
 - **各入口表现**：群聊写 system「X 今日预算已用完」并跳过该成员继续队列（投递被拒与回合被停都一样；例行任务在群里同样写这条）；例行任务 `lastResult = 'budget'`；委派以 `failed / error` 结束，`error = 'budget-exceeded'`，卡片显示预算用完。拒绝或停止时推 `BOT_EVENT {kind:'budget'}`（不转发到手机），renderer 刷新概览，收件箱按「成员 + 自然日」出现一条可忽略的预算提示（忽略记录在 localStorage）。
 - **不做**：成员会话里 subagent 子代理的用量（pi child jsonl 不带父会话标识，无法可靠归属）；私聊没有时间线，不写 system 条目，只有发送提示与收件箱；预算只看今日，不做周 / 月上限。
 
