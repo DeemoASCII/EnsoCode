@@ -30,13 +30,6 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
-import {
-  Select,
-  SelectItem,
-  SelectPopup,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select';
 import { addToast } from '@/components/ui/toast';
 import { useI18n } from '@/i18n';
 import { cn } from '@/lib/utils';
@@ -47,6 +40,7 @@ import { useSettingsStore } from '@/stores/settings';
 import { AssetPickers, suggestErrorText } from './BotAbilities';
 import { BotAvatar } from './BotAvatar';
 import { ApprovalSelect, FieldLabel, nameError, Segmented, TeamRefField } from './BotFields';
+import { BotProjectPicker } from './BotProjectPicker';
 import { botErrorText, chatErrorText, localProjects, teamFileErrorText } from './botText';
 
 type Assets = Record<string, { skillIds: string[]; mcpServerIds: string[] }>;
@@ -529,7 +523,6 @@ export function NewTeamDialog({
                   </button>
                   <button
                     type="button"
-                    disabled={projects.length === 0}
                     onClick={() => setWorkspace('project')}
                     className={cn(
                       'rounded-xl border bg-card p-3 text-left disabled:opacity-50',
@@ -542,29 +535,8 @@ export function NewTeamDialog({
                     </div>
                   </button>
                 </div>
-                {workspace === 'project' && projects.length > 0 && (
-                  <Select
-                    items={projects.map((project) => ({
-                      value: project.id,
-                      label: project.alias || project.name,
-                    }))}
-                    value={projectId}
-                    onValueChange={(value) => setProjectId(value as string)}
-                  >
-                    <SelectTrigger className="mt-2 w-full">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectPopup zIndex={Z_INDEX.DROPDOWN_IN_MODAL}>
-                      {projects.map((project) => (
-                        <SelectItem key={project.id} value={project.id}>
-                          <div>
-                            <div>{project.alias || project.name}</div>
-                            <div className="text-muted-foreground text-xs">{project.path}</div>
-                          </div>
-                        </SelectItem>
-                      ))}
-                    </SelectPopup>
-                  </Select>
+                {workspace === 'project' && (
+                  <BotProjectPicker projectId={projectId} onChange={setProjectId} />
                 )}
                 <div className="mt-2 flex gap-2 rounded-lg border border-info/40 bg-info/8 px-3 py-2 text-xs">
                   <Info className="mt-0.5 h-3.5 w-3.5 shrink-0 text-info" />

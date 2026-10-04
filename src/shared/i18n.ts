@@ -2194,6 +2194,7 @@ export const zhTranslations: Record<string, string> = {
   'New member': '新建成员',
   'No members yet': '还没有成员',
   'Nothing archived': '没有已归档的内容',
+  'Search Code projects or recent folders...': '搜索 Code 项目或最近打开的目录...',
   'Chat threads': '聊天',
   'Delete group chat?': '删除群聊？',
   'The group timeline and its standalone workspace are deleted. Member sessions stay readable in their history.':
