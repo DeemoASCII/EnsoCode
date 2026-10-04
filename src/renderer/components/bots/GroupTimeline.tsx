@@ -19,6 +19,8 @@ import {
   useState,
 } from 'react';
 import { Markdown } from '@/components/chat/Markdown';
+import { CHAT_COL } from '@/components/chat/MessageTimeline';
+import { USER_BUBBLE } from '@/components/chat/TimelineRow';
 import { useI18n } from '@/i18n';
 import { toolLabel } from '@/lib/toolLabels';
 import { cn } from '@/lib/utils';
@@ -265,97 +267,99 @@ export function GroupTimeline({
         onScroll={onScroll}
         className="min-h-0 flex-1 select-text overflow-y-auto"
       >
-        <div className="mx-auto flex w-full max-w-3xl flex-col gap-3 px-6 py-4">
-          {timeline?.loading && (
-            <div className="flex justify-center py-1 text-muted-foreground">
-              <Loader2 className="h-4 w-4 animate-spin" />
-            </div>
-          )}
-          {timeline && !timeline.hasOlder && entries.length > 0 && (
-            <div className="text-center text-[11px] text-muted-foreground">
-              {t('Beginning of the chat')}
-            </div>
-          )}
-          {!timeline && (
-            <div className="flex justify-center py-6 text-muted-foreground">
-              <Loader2 className="h-4 w-4 animate-spin" />
-            </div>
-          )}
-          {timeline && entries.length === 0 && (
-            <p className="py-10 text-center text-muted-foreground text-sm">
-              {t('Say something. Mention a member with @, or the group owner replies.')}
-            </p>
-          )}
-          {placed.head.map(card)}
-          {rows.map((row) =>
-            row.kind === 'day' ? (
-              <div key={row.key} className="py-1 text-center text-[11px] text-muted-foreground">
-                {new Date(row.at).toLocaleDateString()}
+        <div className="@container">
+          <div className={cn(CHAT_COL, 'flex flex-col gap-3 py-4')}>
+            {timeline?.loading && (
+              <div className="flex justify-center py-1 text-muted-foreground">
+                <Loader2 className="h-4 w-4 animate-spin" />
               </div>
-            ) : (
-              <Fragment key={row.key}>
-                <div
-                  data-seq={row.entry.seq}
-                  className={cn(
-                    '-mx-2 flex flex-col rounded-lg px-2 transition-colors duration-500',
-                    flashSeq === row.entry.seq && 'bg-brand/10'
-                  )}
-                >
-                  <EntryRow
-                    chatId={chat.id}
-                    entry={row.entry}
-                    continued={row.continued}
-                    bots={bots}
-                    records={records}
-                    onOpenConversation={openConversation}
+            )}
+            {timeline && !timeline.hasOlder && entries.length > 0 && (
+              <div className="text-center text-[11px] text-muted-foreground">
+                {t('Beginning of the chat')}
+              </div>
+            )}
+            {!timeline && (
+              <div className="flex justify-center py-6 text-muted-foreground">
+                <Loader2 className="h-4 w-4 animate-spin" />
+              </div>
+            )}
+            {timeline && entries.length === 0 && (
+              <p className="py-10 text-center text-muted-foreground text-sm">
+                {t('Say something. Mention a member with @, or the group owner replies.')}
+              </p>
+            )}
+            {placed.head.map(card)}
+            {rows.map((row) =>
+              row.kind === 'day' ? (
+                <div key={row.key} className="py-1 text-center text-[11px] text-muted-foreground">
+                  {new Date(row.at).toLocaleDateString()}
+                </div>
+              ) : (
+                <Fragment key={row.key}>
+                  <div
+                    data-seq={row.entry.seq}
+                    className={cn(
+                      '-mx-2 flex flex-col rounded-lg px-2 transition-colors duration-500',
+                      flashSeq === row.entry.seq && 'bg-brand/10'
+                    )}
+                  >
+                    <EntryRow
+                      chatId={chat.id}
+                      entry={row.entry}
+                      continued={row.continued}
+                      bots={bots}
+                      records={records}
+                      onOpenConversation={openConversation}
+                    />
+                  </div>
+                  {placed.after.get(row.entry.id)?.map(card)}
+                </Fragment>
+              )
+            )}
+            {timeline?.loadingNewer && (
+              <div className="flex justify-center py-1 text-muted-foreground">
+                <Loader2 className="h-4 w-4 animate-spin" />
+              </div>
+            )}
+            {!history && !replying && runtime?.routing && (
+              <div className="flex items-center gap-2 text-muted-foreground text-xs">
+                <TypingDots />
+                {t('Choosing who replies…')}
+              </div>
+            )}
+            {!history && replying && (
+              <button
+                type="button"
+                disabled={!replyingId}
+                title={t('View live')}
+                onClick={() => replyingId && onOpenLive(replyingId, replying.id)}
+                className="-mx-2 flex gap-2.5 rounded-lg px-2 py-1 text-left hover:bg-muted/60 disabled:pointer-events-none"
+              >
+                <BotAvatar bot={replying} size="sm" busy />
+                <div className="min-w-0">
+                  <div className="text-muted-foreground text-xs">
+                    <span className="mr-1.5 font-semibold text-foreground">{replying.name}</span>
+                    {t('Replying')}
+                  </div>
+                  <BotLiveStatus
+                    conversationId={replyingId}
+                    leading={<TypingDots />}
+                    trailing={
+                      <>
+                        <SilenceNote conversationId={replyingId} />
+                        {replyingId && (
+                          <span className="shrink-0 underline-offset-2 hover:underline">
+                            {t('View live')}
+                          </span>
+                        )}
+                      </>
+                    }
                   />
                 </div>
-                {placed.after.get(row.entry.id)?.map(card)}
-              </Fragment>
-            )
-          )}
-          {timeline?.loadingNewer && (
-            <div className="flex justify-center py-1 text-muted-foreground">
-              <Loader2 className="h-4 w-4 animate-spin" />
-            </div>
-          )}
-          {!history && !replying && runtime?.routing && (
-            <div className="flex items-center gap-2 text-muted-foreground text-xs">
-              <TypingDots />
-              {t('Choosing who replies…')}
-            </div>
-          )}
-          {!history && replying && (
-            <button
-              type="button"
-              disabled={!replyingId}
-              title={t('View live')}
-              onClick={() => replyingId && onOpenLive(replyingId, replying.id)}
-              className="-mx-2 flex gap-2.5 rounded-lg px-2 py-1 text-left hover:bg-muted/60 disabled:pointer-events-none"
-            >
-              <BotAvatar bot={replying} size="sm" busy />
-              <div className="min-w-0">
-                <div className="text-muted-foreground text-xs">
-                  <span className="mr-1.5 font-semibold text-foreground">{replying.name}</span>
-                  {t('Replying')}
-                </div>
-                <BotLiveStatus
-                  conversationId={replyingId}
-                  leading={<TypingDots />}
-                  trailing={
-                    <>
-                      <SilenceNote conversationId={replyingId} />
-                      {replyingId && (
-                        <span className="shrink-0 underline-offset-2 hover:underline">
-                          {t('View live')}
-                        </span>
-                      )}
-                    </>
-                  }
-                />
-              </div>
-            </button>
-          )}
+              </button>
+            )}
+          </div>
         </div>
       </div>
       {history && (
@@ -413,9 +417,9 @@ const EntryRow = memo(function EntryRow({
       );
     case 'human':
       return (
-        <div className="flex max-w-[80%] flex-col items-end self-end">
+        <div className="flex w-full flex-col items-end">
           {entry.text && (
-            <div className="whitespace-pre-wrap break-words rounded-xl rounded-tr-sm bg-primary px-3 py-2 text-primary-foreground text-sm">
+            <div className={cn(USER_BUBBLE, 'whitespace-pre-wrap break-words')}>
               <MentionText text={entry.text} bots={bots} />
             </div>
           )}
@@ -438,9 +442,9 @@ const EntryRow = memo(function EntryRow({
     case 'bot': {
       const bot = bots.get(entry.botId);
       return (
-        <div className={cn('flex max-w-[85%] gap-2.5', continued && '-mt-1.5')}>
+        <div className={cn('flex w-full gap-2.5', continued && '-mt-1.5')}>
           {continued ? <span className="w-6 shrink-0" /> : <BotAvatar bot={bot} size="sm" />}
-          <div className="min-w-0">
+          <div className="min-w-0 flex-1">
             {!continued && (
               <div className="mb-0.5 text-muted-foreground text-xs">
                 <span className="mr-1.5 font-semibold text-foreground">
@@ -467,7 +471,7 @@ const EntryRow = memo(function EntryRow({
                 )}
               </div>
             )}
-            <div className="rounded-xl rounded-tl-sm bg-muted px-3 py-2 text-sm">
+            <div className="text-sm">
               <Markdown text={entry.text} />
             </div>
             <ArtifactCards target={{ chatId, entryId: entry.id }} />

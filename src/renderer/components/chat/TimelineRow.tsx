@@ -478,7 +478,7 @@ function MentionRefChips({
   );
 }
 
-const USER_BUBBLE =
+export const USER_BUBBLE =
   'max-w-[80%] rounded-2xl rounded-br-md border border-brand/15 bg-brand/8 px-4 py-2.5 text-sm dark:border-brand/25 dark:bg-brand/14';
 
 /** 用户气泡：识别合成标记,渲染成系统事件行 / 角色块 / 来源徽章而非原始 XML */
