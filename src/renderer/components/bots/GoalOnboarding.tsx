@@ -8,6 +8,7 @@ import { useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { useI18n } from '@/i18n';
+import { useBotsStore } from '@/stores/bots';
 import { useTeamTemplates } from '@/stores/bots/templateLibrary';
 import { suggestErrorText } from './BotAbilities';
 import { BotAvatar } from './BotAvatar';
@@ -15,15 +16,17 @@ import { AVATAR_PALETTE } from './BotFields';
 
 export interface GoalPick {
   firstMessage: string;
+  botId?: string;
   member?: GoalSuggestedMember;
   templateId?: string;
 }
 
-/** 目标式引导：写一句目标 → Bot 助理模型推荐单个成员或一个团队 → 确认后交给创建对话框 */
-export function GoalOnboarding({ onPick }: { onPick: (pick: GoalPick) => void }) {
+/** 目标式引导：优先已有成员，确认后打开私聊或创建对话框；首条消息只回填草稿 */
+export function GoalOnboarding({ onPick }: { onPick: (pick: GoalPick) => void | Promise<void> }) {
   const { t, locale } = useI18n();
   const lang = locale === 'zh' ? 'zh' : 'en';
   const templates = useTeamTemplates();
+  const bots = useBotsStore((s) => s.bots);
   const [goal, setGoal] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -38,6 +41,9 @@ export function GoalOnboarding({ onPick }: { onPick: (pick: GoalPick) => void })
       const result = await window.electronAPI.bots.suggestGoal({
         goal: goal.trim(),
         language: lang,
+        ...(bots.length
+          ? { members: bots.map(({ id, name, title, scope }) => ({ id, name, title, scope })) }
+          : {}),
         templates: templates
           .slice(0, GOAL_TEMPLATES_MAX)
           .map(({ id, data }) => ({ id, title: data.title, summary: data.summary })),
@@ -48,6 +54,19 @@ export function GoalOnboarding({ onPick }: { onPick: (pick: GoalPick) => void })
       }
       setSuggestion(result.suggestion);
       setFirstMessage(result.suggestion.firstMessage);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const confirm = async (pick: GoalPick) => {
+    if (busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await onPick(pick);
+    } catch {
+      setError(t('Could not open chat. Try again.'));
     } finally {
       setBusy(false);
     }
@@ -81,29 +100,31 @@ export function GoalOnboarding({ onPick }: { onPick: (pick: GoalPick) => void })
     suggestion.kind === 'team'
       ? templates.find((item) => item.id === suggestion.templateId)?.data
       : undefined;
+  const member =
+    suggestion.kind === 'existing'
+      ? bots.find((bot) => bot.id === suggestion.botId)
+      : suggestion.kind === 'member'
+        ? { ...suggestion.member, avatar: { color: AVATAR_PALETTE[0] } }
+        : undefined;
 
   return (
     <div className="w-full max-w-lg space-y-3 text-left">
       <div className="rounded-xl border bg-card p-3">
         <p className="mb-2 flex items-center gap-1.5 text-muted-foreground text-xs">
           <Target className="h-3.5 w-3.5" />
-          {suggestion.kind === 'member' ? t('Recommended: one member') : t('Recommended: a team')}
+          {suggestion.kind === 'team' ? t('Recommended: a team') : t('Recommended: one member')}
         </p>
-        {suggestion.kind === 'member' ? (
+        {member ? (
           <div className="flex items-start gap-2.5">
-            <BotAvatar
-              bot={{ name: suggestion.member.name, avatar: { color: AVATAR_PALETTE[0] } }}
-            />
+            <BotAvatar bot={member} />
             <div className="min-w-0">
               <p className="font-medium text-sm">
-                {suggestion.member.name}
+                {member.name}
                 <span className="ml-2 font-normal text-muted-foreground text-xs">
-                  {suggestion.member.title}
+                  {member.title}
                 </span>
               </p>
-              {suggestion.member.scope && (
-                <p className="text-muted-foreground text-xs">{suggestion.member.scope}</p>
-              )}
+              {member.scope && <p className="text-muted-foreground text-xs">{member.scope}</p>}
             </div>
           </div>
         ) : (
@@ -137,23 +158,51 @@ export function GoalOnboarding({ onPick }: { onPick: (pick: GoalPick) => void })
           onChange={(event) => setFirstMessage(event.target.value)}
         />
       </div>
+      {error && <p className="text-destructive text-xs">{error}</p>}
       <div className="flex items-center justify-between">
-        <Button size="sm" variant="ghost" onClick={() => setSuggestion(null)}>
+        <Button
+          size="sm"
+          variant="ghost"
+          disabled={busy}
+          onClick={() => {
+            setSuggestion(null);
+            setError(null);
+          }}
+        >
           <ArrowLeft />
           {t('Back')}
         </Button>
-        <Button
-          size="sm"
-          onClick={() =>
-            onPick(
-              suggestion.kind === 'member'
-                ? { firstMessage, member: suggestion.member }
-                : { firstMessage, templateId: suggestion.templateId }
-            )
-          }
-        >
-          {suggestion.kind === 'member' ? t('Create this member') : t('Create this team')}
-        </Button>
+        <div className="flex gap-2">
+          {suggestion.kind === 'existing' && (
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={busy}
+              onClick={() => void confirm({ firstMessage })}
+            >
+              {t('Create new instead')}
+            </Button>
+          )}
+          <Button
+            size="sm"
+            disabled={busy || (suggestion.kind === 'existing' && !member)}
+            onClick={() =>
+              void confirm(
+                suggestion.kind === 'existing'
+                  ? { firstMessage, botId: suggestion.botId }
+                  : suggestion.kind === 'member'
+                    ? { firstMessage, member: suggestion.member }
+                    : { firstMessage, templateId: suggestion.templateId }
+              )
+            }
+          >
+            {suggestion.kind === 'existing'
+              ? t('Use this member')
+              : suggestion.kind === 'member'
+                ? t('Create this member')
+                : t('Create this team')}
+          </Button>
+        </div>
       </div>
     </div>
   );

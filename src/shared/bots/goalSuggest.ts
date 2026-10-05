@@ -12,6 +12,14 @@ export interface GoalSuggestInput {
   goal: string;
   language: 'zh' | 'en';
   templates: GoalSuggestTemplate[];
+  members?: GoalSuggestMember[];
+}
+
+export interface GoalSuggestMember {
+  id: string;
+  name: string;
+  title: string;
+  scope: string;
 }
 
 export interface GoalSuggestedMember {
@@ -22,6 +30,7 @@ export interface GoalSuggestedMember {
 }
 
 export type GoalSuggestion =
+  | { kind: 'existing'; botId: string; reason: string; firstMessage: string }
   | { kind: 'member'; member: GoalSuggestedMember; reason: string; firstMessage: string }
   | { kind: 'team'; templateId: string; reason: string; firstMessage: string };
 
@@ -37,13 +46,24 @@ export function goalSuggestPrompt(input: GoalSuggestInput): {
   userText: string;
 } {
   const teams = input.templates.length > 0;
+  const members = input.members ?? [];
   const systemPrompt = [
     'You help a user set up AI teammates in a chat app. Each member is an AI agent with a persona that can use tools; a team is several members in one group chat.',
     teams
       ? 'Given the user goal, recommend exactly one option: ONE member when a single role can handle it, or ONE of the listed team templates only when the goal clearly needs several roles working together.'
       : 'Given the user goal, recommend ONE member that fits it.',
+    ...(members.length
+      ? [
+          "First check the listed existing members. If a member's responsibilities clearly match the goal, you MUST recommend that existing member. Only recommend creating a new member or team when no existing member fits. Never invent a botId or change an existing member's profile.",
+        ]
+      : []),
     'Reply with one JSON object only:',
     '{"kind": "member", "member": {"name": "...", "title": "...", "scope": "...", "persona": "..."}, "reason": "...", "firstMessage": "..."}',
+    ...(members.length
+      ? [
+          'or {"kind": "existing", "botId": "<one listed member id>", "reason": "...", "firstMessage": "..."}',
+        ]
+      : []),
     ...(teams
       ? [
           'or {"kind": "team", "templateId": "<one listed id>", "reason": "...", "firstMessage": "..."}',
@@ -57,6 +77,15 @@ export function goalSuggestPrompt(input: GoalSuggestInput): {
   ].join('\n');
   const userText = [
     `<goal>${line(input.goal, GOAL_MAX)}</goal>`,
+    ...(members.length
+      ? [
+          '<members>',
+          ...members.map(
+            (m) => `${line(m.id, 60)}: ${line(m.name)} — ${line(m.title)} — ${line(m.scope, 2_000)}`
+          ),
+          '</members>',
+        ]
+      : []),
     ...(teams
       ? [
           '<templates>',
@@ -79,7 +108,7 @@ function memberName(value: unknown): string {
 
 export function parseGoalSuggestion(
   text: string,
-  input: Pick<GoalSuggestInput, 'goal' | 'templates'>
+  input: Pick<GoalSuggestInput, 'goal' | 'templates' | 'members'>
 ): GoalSuggestion | null {
   const start = text.indexOf('{');
   const end = text.lastIndexOf('}');
@@ -94,6 +123,10 @@ export function parseGoalSuggestion(
   const v = value as Record<string, unknown>;
   const reason = str(v.reason, OUT_MAX.reason);
   const firstMessage = str(v.firstMessage, OUT_MAX.message) || input.goal.trim();
+  if (v.kind === 'existing') {
+    const botId = input.members?.find((m) => m.id === v.botId)?.id;
+    return botId ? { kind: 'existing', botId, reason, firstMessage } : null;
+  }
   if (v.kind === 'team') {
     const templateId = input.templates.find((t) => t.id === v.templateId)?.id;
     return templateId ? { kind: 'team', templateId, reason, firstMessage } : null;

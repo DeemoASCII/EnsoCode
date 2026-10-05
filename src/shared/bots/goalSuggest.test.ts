@@ -11,6 +11,30 @@ const input = {
 };
 
 describe('goalSuggestPrompt', () => {
+  it('includes only existing member metadata and requires reuse when responsibilities match', () => {
+    const members = [
+      {
+        id: 'bot-1',
+        name: 'Ada',
+        title: 'Researcher',
+        scope: 'Track <competitors>',
+        persona: 'secret persona',
+        apiKey: 'secret key',
+      },
+    ];
+    const { systemPrompt, userText } = goalSuggestPrompt({ ...input, members });
+    expect(userText).toContain('bot-1: Ada — Researcher — Track &lt;competitors&gt;');
+    expect(userText).not.toContain('secret');
+    expect(systemPrompt).toContain('"kind": "existing"');
+    expect(systemPrompt).toContain('MUST recommend');
+  });
+  it('keeps the original JSON choices when there are no existing members', () => {
+    const original = goalSuggestPrompt(input);
+    expect(goalSuggestPrompt({ ...input, members: [] })).toEqual(original);
+    expect(original.systemPrompt).not.toContain('"existing"');
+    expect(original.systemPrompt).toContain('"kind": "member"');
+    expect(original.systemPrompt).toContain('"kind": "team"');
+  });
   it('写入目标与模板清单，转义标签，按语言要求输出', () => {
     const { systemPrompt, userText } = goalSuggestPrompt(input);
     expect(userText).toContain('&lt;竞品&gt;');
@@ -26,6 +50,32 @@ describe('goalSuggestPrompt', () => {
 });
 
 describe('parseGoalSuggestion', () => {
+  it('accepts only an existing id from the supplied members, ignoring invented profile fields', () => {
+    const withMembers = {
+      ...input,
+      members: [{ id: 'bot-1', name: 'Ada', title: 'Researcher', scope: 'Track competitors' }],
+    };
+    expect(
+      parseGoalSuggestion(
+        '{"kind":"existing","botId":"bot-1","reason":" Match ","firstMessage":" Start ","member":{"name":"Fake"}}',
+        withMembers
+      )
+    ).toEqual({
+      kind: 'existing',
+      botId: 'bot-1',
+      reason: 'Match',
+      firstMessage: 'Start',
+    });
+    for (const botId of ['invented', '', 1, null]) {
+      expect(
+        parseGoalSuggestion(JSON.stringify({ kind: 'existing', botId }), withMembers)
+      ).toBeNull();
+    }
+    expect(parseGoalSuggestion('{"kind":"existing","botId":"bot-1"}', input)).toBeNull();
+    expect(
+      parseGoalSuggestion('{"kind":"existing","botId":"bot-1"}', withMembers)?.firstMessage
+    ).toBe(input.goal);
+  });
   it('解析单成员推荐（允许外层废话与代码围栏），裁剪空白', () => {
     expect(
       parseGoalSuggestion(

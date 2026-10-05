@@ -328,6 +328,31 @@ describe('parseAbilitySuggestRequest', () => {
 });
 
 describe('parseGoalSuggestRequest', () => {
+  it('accepts only bounded existing member metadata, never persona or secrets', () => {
+    const member = {
+      id: '11111111-2222-4333-8444-555555555555',
+      name: 'Ada',
+      title: 'Researcher',
+      scope: 'Track competitors',
+    };
+    expect(parseGoalSuggestRequest({ goal: 'Research', members: [member] })).toEqual({
+      goal: 'Research',
+      language: 'en',
+      templates: [],
+      members: [member],
+    });
+    for (const members of [
+      'bad',
+      [null],
+      [{ ...member, id: '../x' }],
+      [{ ...member, name: 1 }],
+      [{ ...member, scope: null }],
+      [{ ...member, persona: 'secret' }],
+      [{ ...member, apiKey: 'secret' }],
+    ]) {
+      expect(parseGoalSuggestRequest({ goal: 'Research', members })).toBeNull();
+    }
+  });
   const template = { id: 'software', title: '软件开发小队', summary: '前后端测试' };
   it('目标必填，模板清单缺省为空，语言缺省 en', () => {
     expect(parseGoalSuggestRequest({ goal: '写周报' })).toEqual({

@@ -97,15 +97,25 @@ export function suggestPersona(
   ) as Promise<BotPersonaSuggestResult>;
 }
 
-export function suggestGoal(
+export async function suggestGoal(
   input: GoalSuggestInput,
   complete: AbilityCompleter,
   timeoutMs = GOAL_SUGGEST_TIMEOUT_MS
 ): Promise<BotGoalSuggestResult> {
-  return runSuggest(
+  const result = await runSuggest(
     goalSuggestPrompt(input),
     (text) => parseGoalSuggestion(text, input),
     complete,
     timeoutMs
-  ) as Promise<BotGoalSuggestResult>;
+  );
+  if (!result.ok && result.error === 'invalid-reply' && input.members?.length) {
+    const fallback = { ...input, members: [] };
+    return runSuggest(
+      goalSuggestPrompt(fallback),
+      (text) => parseGoalSuggestion(text, fallback),
+      complete,
+      timeoutMs
+    ) as Promise<BotGoalSuggestResult>;
+  }
+  return result as BotGoalSuggestResult;
 }

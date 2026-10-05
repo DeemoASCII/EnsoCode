@@ -94,6 +94,65 @@ describe('suggestPersona', () => {
 });
 
 describe('suggestGoal', () => {
+  it('bounds the fallback to one attempt and never accepts an invented id', async () => {
+    const complete = vi.fn().mockResolvedValue('{"kind":"existing","botId":"invented"}');
+    expect(
+      await suggestGoal(
+        {
+          goal: 'Research',
+          language: 'en',
+          templates: [],
+          members: [{ id: 'bot-1', name: 'Ada', title: 'Researcher', scope: '' }],
+        },
+        complete
+      )
+    ).toEqual({ ok: false, error: 'invalid-reply' });
+    expect(complete).toHaveBeenCalledTimes(2);
+  });
+  it('retries without existing members when the model invents a bot id', async () => {
+    const complete = vi
+      .fn()
+      .mockResolvedValueOnce('{"kind":"existing","botId":"invented"}')
+      .mockResolvedValueOnce(
+        '{"kind":"member","member":{"name":"Ada","title":"Researcher"},"firstMessage":"Start"}'
+      );
+    const result = await suggestGoal(
+      {
+        goal: 'Research',
+        language: 'en',
+        templates: [],
+        members: [{ id: 'bot-1', name: 'Ada', title: 'Researcher', scope: '' }],
+      },
+      complete
+    );
+    expect(result).toMatchObject({
+      ok: true,
+      suggestion: { kind: 'member', firstMessage: 'Start' },
+    });
+    expect(complete).toHaveBeenCalledTimes(2);
+    expect(complete.mock.calls[0][0].userText).toContain('bot-1');
+    expect(complete.mock.calls[1][0].systemPrompt).not.toContain('"existing"');
+  });
+  it('returns an existing member without another model call', async () => {
+    const complete = vi
+      .fn()
+      .mockResolvedValue('{"kind":"existing","botId":"bot-1","firstMessage":"Start"}');
+    expect(
+      await suggestGoal(
+        {
+          goal: 'Research',
+          language: 'en',
+          templates: [],
+          members: [{ id: 'bot-1', name: 'Ada', title: 'Researcher', scope: '' }],
+        },
+        complete
+      )
+    ).toEqual({
+      ok: true,
+      suggestion: { kind: 'existing', botId: 'bot-1', reason: '', firstMessage: 'Start' },
+    });
+    expect(complete).toHaveBeenCalledTimes(1);
+  });
   const goal = {
     goal: '做个小程序',
     language: 'zh' as const,

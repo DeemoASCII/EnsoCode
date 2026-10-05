@@ -1,5 +1,5 @@
 import type { AbilitySuggestion } from '../bots/abilitySuggest';
-import type { GoalSuggestion, GoalSuggestTemplate } from '../bots/goalSuggest';
+import type { GoalSuggestion, GoalSuggestMember, GoalSuggestTemplate } from '../bots/goalSuggest';
 import type { PersonaSuggestion } from '../bots/personaSuggest';
 import type { BotMediaItem } from '../bots/sendImage';
 import type { TeamFileError, TeamMemberAssets, TeamRename, TeamSpec } from '../bots/team';
@@ -228,11 +228,12 @@ export type BotPersonaSuggestResult =
   | { ok: true; suggestion: PersonaSuggestion }
   | (BotIpcError & { detail?: string });
 
-/** 目标式引导：templates 只传 id/标题/简介；error 同 BotAbilitySuggestResult */
+/** 目标式引导：模板和已有成员只传候选元数据，不含人设或密钥；error 同 BotAbilitySuggestResult */
 export interface BotGoalSuggestRequest {
   goal: string;
   language?: 'zh' | 'en';
   templates?: GoalSuggestTemplate[];
+  members?: GoalSuggestMember[];
 }
 export type BotGoalSuggestResult =
   | { ok: true; suggestion: GoalSuggestion }

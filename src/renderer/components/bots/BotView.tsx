@@ -67,12 +67,21 @@ export function BotView({ sidebarWidth, collapsed, onToggleCollapse, onResize }:
     if (loaded && view?.kind === 'chat' && !chat) setView(null);
   }, [loaded, view, chat, setView]);
 
-  const startPick = (next: GoalPick) => {
+  const startPick = async (next: GoalPick) => {
+    if (next.botId) {
+      const state = useBotsStore.getState();
+      if (!state.bots.some((bot) => bot.id === next.botId)) throw new Error('Member not found');
+      const chatId = await state.openDirect(next.botId);
+      if (!chatId) throw new Error('Could not open chat');
+      seedBotDraft(chatId, next.firstMessage.trim());
+      setGoalOpen(false);
+      return;
+    }
     setGoalOpen(false);
     setPick(next);
     firstMessageRef.current = next.firstMessage.trim();
-    if (next.member) setNewMember(true);
-    else setNewTeam(true);
+    if (next.templateId) setNewTeam(true);
+    else setNewMember(true);
   };
   const seedFirstMessage = (chatId: string) => {
     if (firstMessageRef.current) seedBotDraft(chatId, firstMessageRef.current);

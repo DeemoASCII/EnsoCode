@@ -2,6 +2,7 @@ import { CHAT_REF_MAX_PER_MESSAGE } from '@shared/bots/composerRefs';
 import {
   GOAL_TEMPLATES_MAX,
   type GoalSuggestInput,
+  type GoalSuggestMember,
   type GoalSuggestTemplate,
 } from '@shared/bots/goalSuggest';
 import type { PersonaSuggestInput } from '@shared/bots/personaSuggest';
@@ -546,10 +547,10 @@ function parseGoalTemplate(value: unknown): GoalSuggestTemplate | null {
     : null;
 }
 
-/** 目标式引导：模板只带 id/标题/简介供模型挑选，模型回的 templateId 再按此清单校验 */
+/** 目标式引导：候选只带元数据，模型回的 templateId / botId 再按清单校验 */
 export function parseGoalSuggestRequest(value: unknown): GoalSuggestInput | null {
   const input = record(value);
-  if (!input || !onlyKeys(input, ['goal', 'language', 'templates'])) return null;
+  if (!input || !onlyKeys(input, ['goal', 'language', 'templates', 'members'])) return null;
   if (!text(input.goal, 2_000) || !input.goal.trim()) return null;
   const language = input.language ?? 'en';
   if (language !== 'zh' && language !== 'en') return null;
@@ -561,7 +562,29 @@ export function parseGoalSuggestRequest(value: unknown): GoalSuggestInput | null
     if (!template) return null;
     templates.push(template);
   }
-  return { goal: input.goal, language, templates };
+  const members: GoalSuggestMember[] = [];
+  if (input.members !== undefined) {
+    if (!Array.isArray(input.members) || input.members.length > MAX.ids) return null;
+    for (const raw of input.members) {
+      const member = record(raw);
+      if (!member || !onlyKeys(member, ['id', 'name', 'title', 'scope'])) return null;
+      const { id, name, title, scope } = member;
+      if (
+        !isBotId(id) ||
+        !text(name, MAX.short) ||
+        !text(title, MAX.short) ||
+        !text(scope, MAX.scope)
+      )
+        return null;
+      members.push({ id, name, title, scope });
+    }
+  }
+  return {
+    goal: input.goal,
+    language,
+    templates,
+    ...(input.members !== undefined ? { members } : {}),
+  };
 }
 
 export function parseAbilitySuggestRequest(value: unknown): AbilitySuggestRequest | null {
