@@ -79,6 +79,22 @@ export function InjectedMessageCard({ message }: { message: BotInjectedMessage }
           <p className="mt-1 whitespace-pre-wrap break-words">{message.instruction}</p>
         </details>
       )}
+      {message.kind !== 'group' && !!message.group?.length && (
+        <details className="mt-1.5 text-xs text-muted-foreground">
+          <summary className="cursor-pointer">
+            {t('Group messages')} · {message.group.length}
+          </summary>
+          <div className="mt-1 whitespace-pre-wrap break-words">
+            {message.group.map((item, index) => (
+              // biome-ignore lint/suspicious/noArrayIndexKey: 注入批次不可变，同一成员可重复发相同内容。
+              <p key={`${index}:${item.from}`}>
+                <span className="font-medium">{item.from}：</span>
+                {item.text}
+              </p>
+            ))}
+          </div>
+        </details>
+      )}
     </div>
   );
 }

@@ -1,11 +1,17 @@
 import { stripBotNotesUpdate } from '@shared/bots/notes';
 
-export type BotInjectedMessage =
+type GroupMessages = { from: string; text: string }[];
+
+type LeadMessage =
   | { kind: 'routine'; title: string; prompt: string; dryRun?: true }
-  | { kind: 'group'; messages: { from: string; text: string }[]; instruction: string }
   | { kind: 'delegation-task'; from: string; task: string; context: string }
   | { kind: 'delegation-result'; from: string; status: string; text: string }
   | { kind: 'delegation-results'; results: { from: string; status: string; text: string }[] };
+
+/** group：群聊里委派结果 / 例行任务后面补上的、该成员还没看过的群消息 */
+export type BotInjectedMessage =
+  | { kind: 'group'; messages: GroupMessages; instruction: string }
+  | (LeadMessage & { group?: GroupMessages });
 
 const entities: Record<string, string> = {
   '&amp;': '&',
@@ -29,6 +35,18 @@ function attributes(text: string): Record<string, string> | null {
 /** 只识别 Main 的整段注入协议；不是通用 XML，正文始终作为文本渲染。 */
 export function parseBotInjectedMessage(text: string): BotInjectedMessage | null {
   const source = stripBotNotesUpdate(text).trim();
+  const whole = parseSource(source);
+  if (whole || source.startsWith('<group') || source.startsWith('（')) return whole;
+  for (const split of source.matchAll(/\n(?=<group-info>|<group-message |（省略了 \d+ 条)/g)) {
+    const lead = parseSource(source.slice(0, split.index).trim());
+    const tail = parseSource(source.slice(split.index).trim());
+    if (lead && lead.kind !== 'group' && tail?.kind === 'group')
+      return { ...lead, group: tail.messages };
+  }
+  return null;
+}
+
+function parseSource(source: string): BotInjectedMessage | null {
   const omittedPattern = /^（省略了 \d+ 条更早的消息）\s*/;
   if (
     source.startsWith('<group-info>') ||

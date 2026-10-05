@@ -122,3 +122,38 @@ describe('parseBotInjectedMessage', () => {
     expect(parseBotInjectedMessage(text)).toBeNull();
   });
 });
+
+describe('lead injection followed by group catch-up', () => {
+  it('keeps the delegation result card and attaches the unseen group messages', () => {
+    expect(
+      parseBotInjectedMessage(
+        [
+          '<delegation-result id="d" from="Jason" status="completed">v2 done</delegation-result>',
+          '<group-message from="用户" role="人类" seq="44">先做 5 吧</group-message>',
+          '<group-message from="Jason" seq="50">#5 &amp; done</group-message>',
+        ].join('\n')
+      )
+    ).toEqual({
+      kind: 'delegation-result',
+      from: 'Jason',
+      status: 'completed',
+      text: 'v2 done',
+      group: [
+        { from: '用户', text: '先做 5 吧' },
+        { from: 'Jason', text: '#5 & done' },
+      ],
+    });
+  });
+  it('routine with a group intro on a fresh session', () => {
+    expect(
+      parseBotInjectedMessage(
+        '<routine title="daily">check</routine>\n<group-info>\nintro\n</group-info>\n<group-message from="A" seq="1">hi</group-message>'
+      )
+    ).toEqual({
+      kind: 'routine',
+      title: 'daily',
+      prompt: 'check',
+      group: [{ from: 'A', text: 'hi' }],
+    });
+  });
+});

@@ -227,7 +227,7 @@ it('queues routine replies behind the group round and selects the requested memb
   expect(deliver.mock.calls[1]).toEqual([
     id,
     b,
-    '<routine title="check">check it</routine>',
+    expect.stringMatching(/^<routine title="check">check it<\/routine>\n[\s\S]*hello[\s\S]*done/),
     { deliveryId: 'r1', queueIfBusy: true },
   ]);
   expect(
@@ -819,4 +819,27 @@ it('reports one settled batch per relay round with every participant, skipping [
   await group.send(id, '@Alice stop me');
   await group.stop(id);
   expect(batches).toHaveLength(2);
+});
+
+it('a member reply run on its own (delegation result, routine) also catches up on the group', async () => {
+  await group.send(id, 'hello');
+  await done(a, '@Bob please build #5');
+  await done(b, '#5 is done');
+  await done(a, 'great');
+  await group.send(id, '@Bob anything else?');
+  await done(b, 'nothing');
+  expect(group.state(id)).toMatchObject({ current: null });
+  deliver.mockClear();
+  const cursor = chats.get(id)!.sessions[a].cursor;
+  const result = '<delegation-result id="d1" from="Bob" status="completed">ok</delegation-result>';
+  expect(await group.runAs(id, a, result, undefined, { deliveryId: 'd1' })).toMatchObject({
+    ok: true,
+  });
+  const text = deliver.mock.calls[0][2] as string;
+  expect(text.startsWith(result)).toBe(true);
+  expect(text).toContain('anything else?');
+  expect(text).toContain('nothing');
+  expect(text).not.toContain('#5 is done');
+  expect(chats.get(id)!.sessions[a].cursor).toBeGreaterThan(cursor);
+  expect(chats.get(id)!.sessions[a].cursor).toBe(chats.lastSeq(id));
 });

@@ -554,9 +554,8 @@ export class GroupChatService {
         round.state = { ...empty(), current: job.botId, turnsByBot: { [job.botId]: 1 } };
         round.options = { ...job.options, queueIfBusy: true };
         round.generation++;
-        const sent = await this.deps.host
-          .deliver(chatId, job.botId, job.text, round.options)
-          .catch((error) => ({ ok: false as const, error: String(error) }));
+        // 委派结果 / 例行任务不经路由，也要补上该成员没看过的群消息，否则会基于过时群况回复
+        const sent = await this.deliver(chat, job.botId, round.options, undefined, job.text);
         job.resolve(sent);
         round.options = relayOptions(round.options);
         if (sent.ok && !sent.duplicate) {
@@ -635,7 +634,13 @@ export class GroupChatService {
     });
   }
 
-  private async deliver(chat: BotChat, botId: string, options?: BotDeliverOptions, note?: string) {
+  private async deliver(
+    chat: BotChat,
+    botId: string,
+    options?: BotDeliverOptions,
+    note?: string,
+    lead?: string
+  ) {
     const cursor = chat.sessions[botId]?.cursor ?? 0;
     const entries = this.deps.chats.readAfter(chat.id, cursor);
     const delta = buildGroupDelta({
@@ -651,6 +656,8 @@ export class GroupChatService {
       ? await this.deps.refsAppendix(chat, botId, entries).catch(() => '')
       : '';
     const text = [
+      // lead 必须在最前：委派结果靠开头的 <delegation-result id> 判断是否已投递
+      lead,
       compacted ? this.stateBlock(chat, botId) : '',
       delta.text,
       appendix,
