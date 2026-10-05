@@ -86,12 +86,14 @@ export function ArtifactCards({ target }: { target: BotArtifactTarget }) {
 
 function useMediaLabel() {
   const { t } = useI18n();
-  return (source: BotMediaItem['source']) =>
+  return ({ source, name }: BotMediaItem) =>
     source === 'web'
       ? t('Web screenshot')
       : source === 'desktop'
         ? t('Desktop screenshot')
-        : t('Workspace image');
+        : name && /^(?:\/|[A-Za-z]:[\\/])/.test(name)
+          ? t('This computer')
+          : t('Workspace image');
 }
 
 function useMediaImage(
@@ -141,7 +143,7 @@ function MediaStrip({ target, media }: { target: BotArtifactTarget; media: BotMe
               key={item.mediaId}
               target={target}
               item={item}
-              label={label(item.source)}
+              label={label(item)}
               onOpen={() => setPreview(item)}
             />
           ) : (
@@ -152,7 +154,7 @@ function MediaStrip({ target, media }: { target: BotArtifactTarget; media: BotMe
             >
               <span className="flex items-center gap-1 font-medium">
                 <ImageOff className="h-3.5 w-3.5 shrink-0" />
-                <span className="truncate">{item.name ?? label(item.source)}</span>
+                <span className="truncate">{item.name ?? label(item)}</span>
               </span>
               <span>
                 {item.error === 'quota'
@@ -171,7 +173,7 @@ function MediaStrip({ target, media }: { target: BotArtifactTarget; media: BotMe
       <MediaPreviewDialog
         target={target}
         item={preview}
-        label={preview ? label(preview.source) : ''}
+        label={preview ? label(preview) : ''}
         onClose={() => setPreview(null)}
       />
     </div>

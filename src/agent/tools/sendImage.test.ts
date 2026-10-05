@@ -1,3 +1,6 @@
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { homedir, tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import type { DelegationOp } from './delegation';
 import type { MemoryInvoker } from './memory';
@@ -22,17 +25,22 @@ const user = {
   message: { role: 'user', content: [{ type: 'text', text: 'hi' }] },
 };
 
-function setup(branch: unknown[]) {
+function setup(branch: unknown[], cwd = CWD) {
   const invoke = vi.fn(async (_op: DelegationOp, params: unknown) => ({
     ok: true,
     mediaId: `${'f'.repeat(64)}.png`,
     source: (params as { path?: string }).path ? 'file' : 'web',
   }));
-  const tool = createSendImageTool({ invoke } as unknown as MemoryInvoker<DelegationOp>, CWD);
+  const confirm = vi.fn(async (_file: string, _signal?: AbortSignal, _id?: string) => {});
+  const tool = createSendImageTool(
+    { invoke } as unknown as MemoryInvoker<DelegationOp>,
+    cwd,
+    confirm
+  );
   const ctx = { sessionManager: { getBranch: () => branch } };
   const run = (params: unknown) =>
     tool.execute('call', params as any, undefined, undefined, ctx as any);
-  return { tool, invoke, run };
+  return { tool, invoke, confirm, run };
 }
 
 describe('normalizeSendImageParams', () => {
@@ -55,6 +63,16 @@ describe('normalizeSendImageParams', () => {
       screenshot: 'nope',
     });
     expect(normalizeSendImageParams('bad', CWD)).toBe('bad');
+  });
+
+  it('expands ~ and resolves relative paths that leave the workspace to absolute ones', () => {
+    expect(normalizeSendImageParams({ path: '~/Desktop/a.png' }, CWD)).toEqual({
+      path: join(homedir(), 'Desktop/a.png'),
+    });
+    expect(normalizeSendImageParams({ path: '../other/a.png' }, CWD)).toEqual({
+      path: '/work/other/a.png',
+    });
+    expect(normalizeSendImageParams({ path: './docs/../a.png' }, CWD)).toEqual({ path: 'a.png' });
   });
 });
 
@@ -107,5 +125,44 @@ describe('execute', () => {
     expect((await run({ screenshot: 1 })).isError).toBe(true);
     invoke.mockRejectedValueOnce(new Error('boom'));
     expect((await run({ screenshot: 1 })).isError).toBe(true);
+  });
+
+  it('asks for approval before sending a file outside the workspace', async () => {
+    const { invoke, confirm, run } = setup([user]);
+    await run({ path: '/tmp/shot.png' });
+    expect(confirm).toHaveBeenCalledWith('/tmp/shot.png', undefined, 'call');
+    expect(invoke).toHaveBeenCalledWith('send_image', { path: '/tmp/shot.png' }, undefined);
+    confirm.mockClear();
+    await run({ path: 'a.png' });
+    await run({ screenshot: 1 });
+    expect(confirm).not.toHaveBeenCalled();
+  });
+
+  it('does not send when approval is denied', async () => {
+    const { invoke, confirm, run } = setup([user]);
+    confirm.mockRejectedValueOnce(new Error('User denied this operation'));
+    const result = await run({ path: '/tmp/shot.png' });
+    expect(result.isError).toBe(true);
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
+  it('treats a workspace symlink pointing outside as an outside file', async () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), 'send-image-')));
+    try {
+      const cwd = join(root, 'ws');
+      mkdirSync(cwd);
+      writeFileSync(join(root, 'secret.png'), 'x');
+      symlinkSync(join(root, 'secret.png'), join(cwd, 'link.png'));
+      const { invoke, confirm, run } = setup([user], cwd);
+      await run({ path: 'link.png' });
+      expect(confirm).toHaveBeenCalledWith(join(root, 'secret.png'), undefined, 'call');
+      expect(invoke).toHaveBeenCalledWith(
+        'send_image',
+        { path: join(root, 'secret.png') },
+        undefined
+      );
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });

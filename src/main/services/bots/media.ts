@@ -94,6 +94,17 @@ export function resolveWorkspaceImage(root: string, rel: string): string | null 
   return resolveArtifactFile(root, rel);
 }
 
+/** 工作区外的图片：只收绝对路径（worker 已按审批档位确认），解析后须是普通文件 */
+function resolveOutsideImage(file: string): string | null {
+  if (file.length > PATH_MAX || !path.isAbsolute(file)) return null;
+  try {
+    const target = realpathSync(file);
+    return regularFile(target) ? target : null;
+  } catch {
+    return null;
+  }
+}
+
 function mediaUsage(dir: string): number {
   let total = 0;
   try {
@@ -200,13 +211,17 @@ export function sendImage(
     if (typeof rel !== 'string' || !rel.trim()) return fail('path must be a non-empty string.');
     const root = deps.workspaceRoot();
     if (!root) return fail('Workspace images are not available in this chat.');
-    const file = resolveWorkspaceImage(root, rel.trim());
+    const target = rel.trim();
+    const outside = path.isAbsolute(target);
+    const file = outside ? resolveOutsideImage(target) : resolveWorkspaceImage(root, target);
     if (!file)
       return fail(
-        'Image not found inside the workspace. Use a workspace-relative path; paths outside the workspace (including via symlinks) are not allowed.'
+        outside
+          ? 'Image file not found.'
+          : 'Image not found inside the workspace. Use a workspace-relative path, or an absolute path for files outside the workspace.'
       );
     source = 'file';
-    name = path.relative(realRoot(root), file) || path.basename(file);
+    name = outside ? file : path.relative(realRoot(root), file) || path.basename(file);
     if (statSync(file).size > MEDIA_READ_MAX)
       return { ok: false, error: 'too-large', source, name, ...(caption ? { caption } : {}) };
     data = readFileSync(file);

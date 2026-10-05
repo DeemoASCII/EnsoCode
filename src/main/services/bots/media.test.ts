@@ -3,6 +3,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readdirSync,
+  realpathSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -247,11 +248,27 @@ describe('sendImage', () => {
       { screenshot: '1' },
       { path: 'a.png', caption: 3 },
       { path: '../a.png' },
+      { path: '~/a.png' },
     ])
       expect(sendImage(deps(), 'conv-a', binding, params).ok, JSON.stringify(params)).toBe(false);
     expect(
       sendImage(deps({ workspaceRoot: () => null }), 'conv-a', binding, { path: 'a.png' }).ok
     ).toBe(false);
+  });
+
+  it('sends an approved absolute path outside the workspace, named by its full path', () => {
+    const outside = join(realpathSync(root), 'tmp', 'shot.png');
+    mkdirSync(join(root, 'tmp'));
+    writeFileSync(outside, png('outside'));
+    const result = sendImage(deps(), 'conv-a', binding, { path: outside });
+    expect(result).toMatchObject({ ok: true, source: 'file', name: outside });
+    expect(
+      sendImage(deps({ workspaceRoot: () => null }), 'conv-a', binding, { path: outside }).ok
+    ).toBe(false);
+    for (const path of [join(root, 'tmp'), join(root, 'missing.png')])
+      expect(sendImage(deps(), 'conv-a', binding, { path }).ok, path).toBe(false);
+    writeFileSync(join(root, 'notes.txt'), 'plain');
+    expect(sendImage(deps(), 'conv-a', binding, { path: join(root, 'notes.txt') }).ok).toBe(false);
   });
 
   it('reports too-large and quota as displayable failures', () => {

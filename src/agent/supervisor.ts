@@ -211,7 +211,7 @@ import { createGroupHistoryTool } from './tools/groupHistory';
 import { createGroupTasksTool } from './tools/groupTasks';
 import { createMemoryTools, MemoryInvoker } from './tools/memory';
 import { createRoutineProposeTool } from './tools/routinePropose';
-import { createSendImageTool } from './tools/sendImage';
+import { confirmOutsideImage, createSendImageTool } from './tools/sendImage';
 import { createWebTools } from './tools/web';
 import { createVirtualChooser, resolveClassifierModel } from './virtualClassifier';
 import { registerVirtualModel } from './virtualModels';
@@ -2278,7 +2278,10 @@ export class SessionSupervisor {
         ? [createGroupTasksTool(delegation), createGroupHistoryTool(delegation)]
         : []),
       ...(delegation && botRoutines
-        ? [createRoutineProposeTool(delegation), createSendImageTool(delegation, cwd)]
+        ? [
+            createRoutineProposeTool(delegation),
+            createSendImageTool(delegation, cwd, confirmOutsideImage(gate)),
+          ]
         : []),
       ...(toolEnabled('web') ? createWebTools() : []),
       ...(toolEnabled('todo') ? [createTodoTool((todos) => todoReminder.update(todos))] : []),
