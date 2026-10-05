@@ -763,7 +763,7 @@ export function App() {
             olderRequestRef.current = key;
             send({ type: 'bot-timeline', chatId: chat.id, beforeSeq });
           }}
-          onSend={(text) => sendBot(chat.id, text)}
+          onSend={(text, images) => sendBot(chat.id, text, images)}
           onStop={() => send({ type: 'bot-stop', chatId: chat.id })}
           onOpenProcess={setProcessId}
           onApproval={(sessionId, requestId, decision) =>

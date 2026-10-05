@@ -1,4 +1,5 @@
 import type {
+  AttachedImage,
   PairBotActivity,
   PairBotChatState,
   PairBotChatSummary,
@@ -6,8 +7,8 @@ import type {
   PairDelegationState,
   PairGroupEntry,
 } from '@enso/pair';
-import { ArrowUp, ChevronRight, Loader2, PanelLeft, Square } from 'lucide-react';
-import { type ReactNode, useLayoutEffect, useRef, useState } from 'react';
+import { ArrowUp, ChevronRight, ImagePlus, Loader2, PanelLeft, Square, X } from 'lucide-react';
+import { type ReactNode, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { ApprovalBar } from '@/components/chat/ApprovalBar';
 import { AskBar } from '@/components/chat/AskBar';
 import { Markdown } from '@/components/chat/Markdown';
@@ -23,6 +24,7 @@ import {
   mentionOptions,
 } from './botState';
 import type { ConnState, SessionView } from './client';
+import { compressImages } from './image';
 import { readOnlyBanner } from './readOnly';
 
 export interface MemberPending {
@@ -51,7 +53,7 @@ interface Props {
   readOnlyRejected?: boolean;
   onOpenDrawer(): void;
   onLoadOlder(): void;
-  onSend(text: string): void;
+  onSend(text: string, images: AttachedImage[]): void;
   onStop(): void;
   onOpenProcess(conversationId: string): void;
   onApproval(
@@ -69,6 +71,9 @@ const DELEGATION_TEXT: Record<PairDelegationState, string> = {
   failed: '失败',
   canceled: '已取消',
 };
+
+/** 一条群消息最多带几张图（整帧要压进中继 1MB 上限） */
+const MAX_IMAGES = 4;
 
 const timeOf = (at: number): string =>
   new Date(at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
@@ -104,8 +109,12 @@ export function GroupChatScreen(props: Props) {
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const anchorRef = useRef<{ height: number; top: number } | null>(null);
   const stickRef = useRef(true);
+  const fileRef = useRef<HTMLInputElement>(null);
   const [text, setText] = useState('');
   const [caret, setCaret] = useState(0);
+  const [picked, setPicked] = useState<{ file: File; url: string }[]>([]);
+  const [sending, setSending] = useState(false);
+  const [imageError, setImageError] = useState<string | null>(null);
   const entries = timeline?.entries ?? [];
   const members = chat.members
     .map((id) => bots.get(id))
@@ -149,9 +158,47 @@ export function GroupChatScreen(props: Props) {
     });
   };
 
-  const submit = () => {
-    if (!text.trim()) return;
-    props.onSend(text);
+  const pickedRef = useRef(picked);
+  pickedRef.current = picked;
+  useEffect(
+    () => () => {
+      for (const item of pickedRef.current) URL.revokeObjectURL(item.url);
+    },
+    []
+  );
+
+  const pickFiles = (files: FileList | null) => {
+    const next = [...(files ?? [])]
+      .filter((file) => file.type.startsWith('image/'))
+      .slice(0, MAX_IMAGES - picked.length)
+      .map((file) => ({ file, url: URL.createObjectURL(file) }));
+    setPicked((current) => [...current, ...next]);
+    setImageError(null);
+  };
+
+  const unpick = (url: string) => {
+    URL.revokeObjectURL(url);
+    setPicked((current) => current.filter((item) => item.url !== url));
+  };
+
+  const submit = async () => {
+    if ((!text.trim() && picked.length === 0) || sending) return;
+    let images: AttachedImage[] = [];
+    if (picked.length) {
+      setSending(true);
+      try {
+        images = await compressImages(picked.map((item) => item.file));
+      } catch (error) {
+        setImageError(error instanceof Error ? error.message : '图片处理失败');
+        return;
+      } finally {
+        setSending(false);
+      }
+    }
+    props.onSend(text, images);
+    for (const item of picked) URL.revokeObjectURL(item.url);
+    setPicked([]);
+    setImageError(null);
     setText('');
     setCaret(0);
     stickRef.current = true;
@@ -360,7 +407,48 @@ export function GroupChatScreen(props: Props) {
               })}
             </div>
           )}
+          {imageError && <p className="mb-1 text-destructive text-xs">{imageError}</p>}
+          {picked.length > 0 && (
+            <div className="mb-1.5 flex gap-1.5">
+              {picked.map((item) => (
+                <div
+                  key={item.url}
+                  className="relative h-14 w-14 overflow-hidden rounded-lg border"
+                >
+                  <img src={item.url} alt="" className="h-full w-full object-cover" />
+                  <button
+                    type="button"
+                    aria-label="移除图片"
+                    onClick={() => unpick(item.url)}
+                    className="absolute top-0.5 right-0.5 flex h-4 w-4 items-center justify-center rounded-full bg-black/60 text-white"
+                  >
+                    <X className="h-3 w-3" />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
           <div className="flex items-end gap-2 rounded-2xl border bg-background px-3 py-2">
+            <input
+              ref={fileRef}
+              type="file"
+              accept="image/*"
+              multiple
+              hidden
+              onChange={(event) => {
+                pickFiles(event.target.files);
+                event.target.value = '';
+              }}
+            />
+            <button
+              type="button"
+              aria-label="添加图片"
+              disabled={picked.length >= MAX_IMAGES}
+              onClick={() => fileRef.current?.click()}
+              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-muted-foreground disabled:opacity-40"
+            >
+              <ImagePlus className="h-4.5 w-4.5" />
+            </button>
             <textarea
               ref={inputRef}
               rows={1}
@@ -386,8 +474,12 @@ export function GroupChatScreen(props: Props) {
             <button
               type="button"
               aria-label="发送"
-              disabled={!text.trim() || (!props.outbox && props.connState !== 'online')}
-              onClick={submit}
+              disabled={
+                (!text.trim() && picked.length === 0) ||
+                sending ||
+                (!props.outbox && props.connState !== 'online')
+              }
+              onClick={() => void submit()}
               className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-brand text-brand-foreground disabled:opacity-40"
             >
               <ArrowUp className="h-4 w-4" />
