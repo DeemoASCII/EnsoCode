@@ -52,12 +52,13 @@ import { SessionConfigSheet } from './SessionConfigSheet';
 import { SessionDrawer } from './SessionDrawer';
 import {
   clearDeviceData,
+  type LastView,
   loadActiveDeviceId,
   loadDevices,
-  loadLastSession,
+  loadLastView,
   saveActiveDeviceId,
   saveDevices,
-  saveLastSession,
+  saveLastView,
 } from './storage';
 import { setPhoneAgentActions } from './stubs/electron-api';
 import { setQueueActions } from './stubs/sessions-store';
@@ -125,10 +126,8 @@ export function App() {
   const [projectGroups, setProjectGroups] = useState<ProjectGroupEntry[]>([]);
   const [providers, setProviders] = useState<ProviderEntry[]>([]);
   const [urlSession] = useState(takeSessionFromUrl);
-  const [activeId, setActiveId] = useState<string | null>(() => {
-    const initial = pickActive(loadDevices(), loadActiveDeviceId());
-    return urlSession ?? (initial ? loadLastSession(initial.pairId) : null);
-  });
+  const [initialView] = useState(() => loadLastView(device?.pairId ?? null, urlSession));
+  const [activeId, setActiveId] = useState<string | null>(initialView.activeId);
   const [view, setView] = useState<SessionView | null>(null);
   /** 订阅会话同步中（subscribe 已发、snapshot 未回）：此时时间线可能是陈旧的 */
   const [syncing, setSyncing] = useState(false);
@@ -158,15 +157,16 @@ export function App() {
   const [botEnabled, setBotEnabled] = useState(false);
   const [bots, setBots] = useState<PairBotMember[]>([]);
   const [botChats, setBotChats] = useState<PairBotChatSummary[]>([]);
+  const [botChatsReady, setBotChatsReady] = useState(false);
   const [botInbox, setBotInbox] = useState<PairBotInboxItem[]>([]);
   /** 成员实时运行态；offset = 本机时钟 − host 时钟 */
   const [botActivity, setBotActivity] = useState<{ items: PairBotActivity[]; offset: number }>({
     items: [],
     offset: 0,
   });
-  const [botSegment, setBotSegment] = useState(false);
+  const [botSegment, setBotSegment] = useState(initialView.botChatId !== null);
   /** 打开中的 Bot 聊天；非 null 时主屏显示 Bot 视图，Code 的 activeId 原样保留 */
-  const [botChatId, setBotChatId] = useState<string | null>(null);
+  const [botChatId, setBotChatId] = useState<string | null>(initialView.botChatId);
   /** 群聊「查看过程」的成员会话（只读） */
   const [processId, setProcessId] = useState<string | null>(null);
   const [timelines, setTimelines] = useState<Record<string, GroupTimelineState>>({});
@@ -268,6 +268,8 @@ export function App() {
     }
     void takeStashedSessionId().then((id) => {
       if (!id) return;
+      setBotChatId(null);
+      setProcessId(null);
       setActiveId(id);
       setDrawerOpen(false);
     });
@@ -342,7 +344,10 @@ export function App() {
         setProcessId(null);
         setBotSegment(false);
       },
-      onBotChats: setBotChats,
+      onBotChats: (chats) => {
+        setBotChats(chats);
+        setBotChatsReady(true);
+      },
       onBotInbox: setBotInbox,
       onBotActivity: (items, offset) => {
         for (const item of items) sessionBotsRef.current.set(item.conversationId, item.botId);
@@ -480,8 +485,8 @@ export function App() {
 
   const pairId = device?.pairId;
   useEffect(() => {
-    if (pairId) saveLastSession(pairId, activeId);
-  }, [activeId, pairId]);
+    if (pairId) saveLastView(pairId, { activeId, botChatId });
+  }, [activeId, botChatId, pairId]);
 
   useEffect(() => {
     if (!pairId) return;
@@ -621,8 +626,8 @@ export function App() {
   // 首次连上且没有选中会话时，落到最近一条
   const firstId = catalog.find((c) => !c.parentId)?.id;
   useEffect(() => {
-    if (!activeId && firstId) setActiveId(firstId);
-  }, [activeId, firstId]);
+    if (!botChatId && !activeId && firstId) setActiveId(firstId);
+  }, [activeId, botChatId, firstId]);
 
   const entry = useMemo(() => catalog.find((c) => c.id === activeId), [catalog, activeId]);
   // coworker tab 组：当前会话是子会话则归组到其父，否则以自身为父；无 coworker 时不显示
@@ -647,7 +652,7 @@ export function App() {
     state === 'online' ? formatOnlineConnectionLabel(transport, rttMs) : STATE_LABEL[state];
 
   /** 切到另一台时清空上一台的目录/视图，等新桌面下发 */
-  const resetHostState = (nextActiveId: string | null) => {
+  const resetHostState = (nextView: LastView) => {
     setCatalog([]);
     setPinnedOrder([]);
     setProjects([]);
@@ -660,14 +665,16 @@ export function App() {
     setBotEnabled(false);
     setBots([]);
     setBotChats([]);
-    setBotChatId(null);
+    setBotChatsReady(false);
+    setBotChatId(nextView.botChatId);
+    setBotSegment(nextView.botChatId !== null);
     setProcessId(null);
     setTimelines({});
     setChatStates({});
     setBotActivity({ items: [], offset: 0 });
     setMemberViews({});
     setBotNotice(null);
-    setActiveId(nextActiveId);
+    setActiveId(nextView.activeId);
   };
 
   const switchDevice = (pairId: string) => {
@@ -676,7 +683,7 @@ export function App() {
     setActiveDeviceId(pairId);
     // 旧连接状态不属于新桌面：乐观置回连接中，避免闪现 unauthorized/host-offline 旧屏
     setState('connecting');
-    resetHostState(loadLastSession(pairId));
+    resetHostState(loadLastView(pairId));
     setDrawerOpen(false);
   };
 
@@ -686,7 +693,7 @@ export function App() {
     saveDevices(next);
     saveActiveDeviceId(d.pairId);
     setActiveDeviceId(d.pairId);
-    resetHostState(loadLastSession(d.pairId));
+    resetHostState(loadLastView(d.pairId));
     setAdding(false);
   };
 
@@ -705,7 +712,7 @@ export function App() {
       saveActiveDeviceId(fallback?.pairId ?? null);
       setActiveDeviceId(fallback?.pairId ?? null);
       if (fallback) setState('connecting');
-      resetHostState(fallback ? loadLastSession(fallback.pairId) : null);
+      resetHostState(loadLastView(fallback?.pairId ?? null));
       if (!fallback) setDrawerOpen(false);
     }
   };
@@ -921,6 +928,12 @@ export function App() {
         <BotArtifactsContext.Provider value={{ port: artifactsPort, online: state === 'online' }}>
           {renderBotScreen(botChat)}
         </BotArtifactsContext.Provider>
+      ) : botChatId ? (
+        <div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center">
+          <p>{botChatsReady ? '该 Bot 聊天已不存在或不可用' : '正在恢复 Bot 聊天…'}</p>
+          <p className="text-muted-foreground text-sm">{connectionLabel}</p>
+          <Button onClick={openDrawer}>选择聊天</Button>
+        </div>
       ) : (
         <ChatScreen
           sessionId={activeId}

@@ -1,6 +1,7 @@
 import type { PairedDevice } from '@enso/pair';
 import { phoneOutboxStorage } from './botOutbox';
 import { migrateStore, type StoredDevice } from './deviceList';
+import { parseSessionId } from './launchSession';
 import { phoneCache } from './sessionCache';
 
 /**
@@ -18,6 +19,7 @@ const LEGACY_LAST_SESSION_KEY = 'enso-phone-last-session';
 
 const cursorKey = (pairId: string) => `enso-phone-cursors:${pairId}`;
 const lastSessionKey = (pairId: string) => `enso-phone-last-session:${pairId}`;
+const lastBotChatKey = (pairId: string) => `enso-phone-last-bot-chat:${pairId}`;
 
 export function loadDevices(): StoredDevice[] {
   const legacyRaw = localStorage.getItem(LEGACY_KEY);
@@ -61,6 +63,7 @@ export function clearDeviceData(pairId: string): void {
   void phoneOutboxStorage.remove?.(pairId).catch(() => {});
   localStorage.removeItem(cursorKey(pairId));
   localStorage.removeItem(lastSessionKey(pairId));
+  localStorage.removeItem(lastBotChatKey(pairId));
 }
 
 /** 每台桌面各自记住最近打开的会话 */
@@ -72,6 +75,27 @@ export function loadLastSession(pairId: string): string | null {
 export function saveLastSession(pairId: string, sessionId: string | null): void {
   if (sessionId) localStorage.setItem(lastSessionKey(pairId), sessionId);
   else localStorage.removeItem(lastSessionKey(pairId));
+}
+
+export interface LastView {
+  activeId: string | null;
+  botChatId: string | null;
+}
+
+export function loadLastView(pairId: string | null, launchSession: string | null = null): LastView {
+  return {
+    activeId: launchSession ?? (pairId ? loadLastSession(pairId) : null),
+    botChatId:
+      !launchSession && pairId
+        ? parseSessionId(localStorage.getItem(lastBotChatKey(pairId)))
+        : null,
+  };
+}
+
+export function saveLastView(pairId: string, view: LastView): void {
+  saveLastSession(pairId, view.activeId);
+  if (view.botChatId) localStorage.setItem(lastBotChatKey(pairId), view.botChatId);
+  else localStorage.removeItem(lastBotChatKey(pairId));
 }
 
 /** 兼容旧调用：PairScreen 配对成功后由 App 统一走 upsert，不再单存 */
