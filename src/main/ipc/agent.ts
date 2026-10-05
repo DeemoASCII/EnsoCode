@@ -149,10 +149,12 @@ import { sendToAllWindows } from '../windows/createAppWindow';
 import { isMainWebContents } from '../windows/MainWindow';
 import {
   botModeEnabled,
+  botScreenshots,
   getBotServices,
   groupHistoryTool,
   groupTasksTool,
   routineProposeTool,
+  sendImageTool,
 } from './bots';
 import { agentSessionIndex, capabilityGateway, handleCapabilityInvoke } from './capabilities';
 import { readSettings, readSshTimeoutSeconds } from './settings';
@@ -575,6 +577,21 @@ function browserKeyFor(sessionId: string): string {
 }
 
 const sharesBrowser = (sessionId: string) => browserKeyFor(sessionId) !== sessionId;
+
+/** Bot 会话的截图留最近 3 张给 send_image（子会话截的图归到父会话）；非 Bot 会话不缓存 */
+function cacheBotScreenshots(
+  identity: SessionIdentity | ChildSessionIdentity,
+  shots: readonly unknown[],
+  source: 'web' | 'desktop'
+): void {
+  const sessionId = rootSessionId(identity);
+  if (!sourceAuthority?.conversation(sessionId)?.bot) return;
+  for (const shot of shots) {
+    const data = shot && typeof shot === 'object' ? (shot as { data?: unknown }).data : undefined;
+    if (typeof data === 'string' && data)
+      botScreenshots.push(sessionId, { data: Buffer.from(data, 'base64'), source });
+  }
+}
 
 function wirePairAgentBridge(): void {
   setPairAgentBridge({
@@ -1105,7 +1122,10 @@ export function registerAgentHandlers(): void {
     if (workerEvent.type === 'browser-invoke') {
       const { identity, requestId, op, params } = workerEvent;
       void browserHost.invoke(browserKeyFor(identity.sessionId), op, params).then(
-        (result) => sendBrowserResultToSession(identity, requestId, { ok: true, result }),
+        (result) => {
+          if (op === 'screenshot') cacheBotScreenshots(identity, [result], 'web');
+          sendBrowserResultToSession(identity, requestId, { ok: true, result });
+        },
         (error: unknown) =>
           sendBrowserResultToSession(identity, requestId, {
             ok: false,
@@ -1174,6 +1194,8 @@ export function registerAgentHandlers(): void {
           result = groupHistoryTool(services, identity.sessionId, conversation.bot, input);
         } else if (op === 'routine_propose' && conversation?.bot) {
           result = routineProposeTool(services, identity.sessionId, conversation.bot, input);
+        } else if (op === 'send_image' && conversation?.bot) {
+          result = sendImageTool(services, identity.sessionId, conversation.bot, input);
         } else if (
           op === 'delegate' &&
           typeof input.to === 'string' &&
@@ -1259,7 +1281,10 @@ export function registerAgentHandlers(): void {
       void computerHost
         .invoke(identity.sessionId, op, params, controller.signal)
         .then(
-          (result) => sendComputerResultToSession(identity, requestId, { ok: true, result }),
+          (result) => {
+            cacheBotScreenshots(identity, result.screenshots, 'desktop');
+            sendComputerResultToSession(identity, requestId, { ok: true, result });
+          },
           (error: unknown) =>
             sendComputerResultToSession(identity, requestId, {
               ok: false,

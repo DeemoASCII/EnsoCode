@@ -31,6 +31,7 @@ import {
   readBotTimeline,
   sendBotMessage,
 } from './bots';
+import { phoneArtifactImage, phoneArtifacts } from './botsContent';
 import { agentSessionIndex } from './capabilities';
 
 /**
@@ -232,6 +233,25 @@ async function handle(_pairId: string, command: PairBotCommand, reply: PairReply
     case 'bot-stop': {
       const result = await services.groups.stop(command.chatId);
       if (result.ok) replyState(services, command.chatId, reply);
+      return;
+    }
+    case 'bot-artifacts': {
+      const found = await phoneArtifacts(services, command.target);
+      await reply({
+        type: 'bot-artifacts',
+        target: command.target,
+        artifacts: found?.artifacts ?? [],
+        media: found?.media ?? [],
+      });
+      return;
+    }
+    case 'bot-artifact-image': {
+      const { requestId, target, mediaId, rel } = command;
+      const result = await phoneArtifactImage(services, {
+        ...target,
+        ...(mediaId !== undefined ? { mediaId } : { rel }),
+      });
+      await reply({ type: 'bot-artifact-image', requestId, ...result });
       return;
     }
     case 'bot-send': {

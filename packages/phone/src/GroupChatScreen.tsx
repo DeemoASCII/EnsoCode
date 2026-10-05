@@ -13,6 +13,7 @@ import { AskBar } from '@/components/chat/AskBar';
 import { Markdown } from '@/components/chat/Markdown';
 import { cn } from '@/lib/utils';
 import { BotActivityRow } from './BotActivityRow';
+import { BotArtifacts } from './BotArtifacts';
 import { BotAvatar } from './BotAvatar';
 import {
   activeMention,
@@ -179,6 +180,7 @@ export function GroupChatScreen(props: Props) {
               <div className="mt-0.5 min-w-0 text-sm">
                 <Markdown text={entry.text} />
               </div>
+              <BotArtifacts target={{ chatId: props.chat.id, entryId: entry.id }} />
               <button
                 type="button"
                 onClick={() => props.onOpenProcess(entry.conversationId)}

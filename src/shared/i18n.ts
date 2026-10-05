@@ -2387,6 +2387,15 @@ export const zhTranslations: Record<string, string> = {
   'This file type is only shown in Finder': '该类型文件只能在访达中显示',
   'Could not open the file': '无法打开文件',
   'The file is too large to preview': '文件过大，无法预览',
+  'Web screenshot': '网页截图',
+  'Desktop screenshot': '桌面截图',
+  'Workspace image': '工作区',
+  'Not sent: still over 10 MiB after compression': '没发出去：压缩后仍超过 10MiB',
+  'Chat image storage is full (200 MiB); not saved': '群图片空间已满（200 MiB），没收下',
+  'Desktop screenshots may capture sensitive content from other windows.':
+    '桌面截图可能拍到别的窗口里的敏感内容。',
+  'Copied into this chat: later edits or deletion of the original do not change it. Deleted together with the chat.':
+    '已复制到聊天目录：原文件后来被改或删，这张不变；删聊天时一起删。',
   'Choosing who replies…': '正在选择回复人…',
   'Picked automatically because nobody was @-mentioned': '没人被 @，由智能选人选出',
   'Smart pick · build': '智能选人 · 执行',

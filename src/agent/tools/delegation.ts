@@ -7,7 +7,8 @@ export type DelegationOp =
   | 'check_delegation'
   | 'group_tasks'
   | 'group_history'
-  | 'routine_propose';
+  | 'routine_propose'
+  | 'send_image';
 
 export function normalizeDelegationParams(raw: unknown): unknown {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return raw;

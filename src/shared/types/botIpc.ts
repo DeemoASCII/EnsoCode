@@ -1,6 +1,7 @@
 import type { AbilitySuggestion } from '../bots/abilitySuggest';
 import type { GoalSuggestion, GoalSuggestTemplate } from '../bots/goalSuggest';
 import type { PersonaSuggestion } from '../bots/personaSuggest';
+import type { BotMediaItem } from '../bots/sendImage';
 import type { TeamFileError, TeamMemberAssets, TeamRename, TeamSpec } from '../bots/team';
 import type { BotTemplateLibrary } from '../bots/templateLibrary';
 import type {
@@ -364,7 +365,14 @@ export interface BotArtifact {
   kind: BotArtifactKind;
 }
 
-export type BotArtifactsResult = { ok: true; artifacts: BotArtifact[] } | BotIpcError;
+/** media：该轮 send_image 发出的图（含展示用的失败项），最多 4 张 */
+export type BotArtifactsResult =
+  | { ok: true; artifacts: BotArtifact[]; media: BotMediaItem[] }
+  | BotIpcError;
+
+/** 读文件产物用 rel；读 send_image 图用 mediaId（thumb = 缩略图） */
+export type BotArtifactReadRequest = BotArtifactTarget &
+  ({ rel: string } | { mediaId: string; variant?: 'thumb' | 'full' });
 
 export type BotArtifactReadResult =
   | { ok: true; kind: 'image'; dataUrl: string }

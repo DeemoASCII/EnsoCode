@@ -614,6 +614,55 @@ describe('Bot 模式上行命令', () => {
       expect(parsePhoneCommand(cmd).ok, JSON.stringify(cmd).slice(0, 120)).toBe(false);
     }
   });
+
+  it('产物与发图：按聊天 + 条目 / 会话消息标识重建，图片按 mediaId 或 rel 二选一', () => {
+    const mediaId = `${'a'.repeat(64)}.png`;
+    const entry = { chatId, entryId: 'e-1' };
+    const turn = { chatId, conversationId: 'c-1', messageIndex: 3 };
+    expect(parsePhoneCommand({ type: 'bot-artifacts', target: { ...entry, x: 1 }, y: 2 })).toEqual({
+      ok: true,
+      command: { type: 'bot-artifacts', target: entry },
+    });
+    expect(parsePhoneCommand({ type: 'bot-artifacts', target: turn })).toEqual({
+      ok: true,
+      command: { type: 'bot-artifacts', target: turn },
+    });
+    expect(
+      parsePhoneCommand({ type: 'bot-artifact-image', requestId: 'r1', target: entry, mediaId })
+    ).toEqual({
+      ok: true,
+      command: { type: 'bot-artifact-image', requestId: 'r1', target: entry, mediaId },
+    });
+    expect(
+      parsePhoneCommand({ type: 'bot-artifact-image', requestId: 'r2', target: turn, rel: 'a.png' })
+    ).toEqual({
+      ok: true,
+      command: { type: 'bot-artifact-image', requestId: 'r2', target: turn, rel: 'a.png' },
+    });
+    const bad = [
+      { type: 'bot-artifacts' },
+      { type: 'bot-artifacts', target: { chatId: 'not-uuid', entryId: 'e' } },
+      { type: 'bot-artifacts', target: { chatId, conversationId: 'c', messageIndex: -1 } },
+      { type: 'bot-artifacts', target: { chatId, conversationId: 'c', messageIndex: 1.5 } },
+      { type: 'bot-artifacts', target: { chatId, entryId: 'e'.repeat(300) } },
+      { type: 'bot-artifact-image', target: entry, mediaId },
+      { type: 'bot-artifact-image', requestId: 'r'.repeat(200), target: entry, mediaId },
+      { type: 'bot-artifact-image', requestId: 'r', target: entry },
+      { type: 'bot-artifact-image', requestId: 'r', target: entry, mediaId, rel: 'a.png' },
+      { type: 'bot-artifact-image', requestId: 'r', target: entry, mediaId: '../../x.png' },
+      {
+        type: 'bot-artifact-image',
+        requestId: 'r',
+        target: entry,
+        mediaId: `${'a'.repeat(64)}.svg`,
+      },
+      { type: 'bot-artifact-image', requestId: 'r', target: entry, rel: '' },
+      { type: 'bot-artifact-image', requestId: 'r', target: entry, rel: 'x'.repeat(5000) },
+    ];
+    for (const cmd of bad) {
+      expect(parsePhoneCommand(cmd).ok, JSON.stringify(cmd).slice(0, 120)).toBe(false);
+    }
+  });
 });
 
 describe('审批/提问收束事件跨会话转发', () => {

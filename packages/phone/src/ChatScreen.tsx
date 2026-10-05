@@ -29,6 +29,7 @@ import { TaskBar } from '@/components/chat/TaskBar';
 import { TodoBar } from '@/components/chat/TodoBar';
 import { cn } from '@/lib/utils';
 import { buildTimeline } from '@/stores/sessions/timeline';
+import { BotArtifacts } from './BotArtifacts';
 import type { ConnState, SessionView } from './client';
 import { compressImage } from './image';
 import { appendEchoMessages, type QueueSendEcho } from './queueSendEcho';
@@ -79,6 +80,8 @@ interface Props {
   onAsk(requestId: string, answer: string): void;
   /** Bot 成员会话：发送走 bot-send，无回退/重试/斜杠命令；readOnly = 群聊「查看过程」 */
   bot?: { readOnly?: boolean; onBack?(): void; notice?: string | null; outbox?: ReactNode };
+  /** Bot 私聊：每轮最终回复下方挂产物卡片与 send_image 图 */
+  artifacts?: { chatId: string; conversationId: string };
   /** 桌面把本设备设为只读：只能查看，隐藏输入/审批/回答等写操作 */
   deviceReadOnly?: boolean;
   /** 有写操作刚被桌面以只读拦下 */
@@ -112,14 +115,29 @@ export function ChatScreen(props: Props) {
   const running = view?.status === 'running';
   const bot = props.bot;
   const readOnly = Boolean(bot?.readOnly || props.deviceReadOnly);
+  const artifactChatId = props.artifacts?.chatId;
+  const artifactConversationId = props.artifacts?.conversationId;
   const host = useMemo(
     () => ({
       sessionId,
       canRewind: !bot && !props.deviceReadOnly,
       canRetry: !bot && !props.deviceReadOnly,
       canFork: false,
+      ...(artifactChatId && artifactConversationId
+        ? {
+            turnFooter: (messageIndex: number) => (
+              <BotArtifacts
+                target={{
+                  chatId: artifactChatId,
+                  conversationId: artifactConversationId,
+                  messageIndex,
+                }}
+              />
+            ),
+          }
+        : {}),
     }),
-    [sessionId, bot, props.deviceReadOnly]
+    [sessionId, bot, props.deviceReadOnly, artifactChatId, artifactConversationId]
   );
   const slashCommands = useMemo<SlashCommand[]>(() => {
     if (bot) return [];

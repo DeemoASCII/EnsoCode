@@ -139,7 +139,17 @@ export type PhoneToHost =
   | { type: 'bot-stop'; chatId: string }
   /** 收件箱：请求当前条目；忽略只对提示类条目有效（审批、提问、例程需要处理） */
   | { type: 'bot-inbox-request' }
-  | { type: 'bot-inbox-dismiss'; key: string };
+  | { type: 'bot-inbox-dismiss'; key: string }
+  /** 一条回复的产物卡片与 send_image 图片（带中继缩略图） */
+  | { type: 'bot-artifacts'; target: PairBotArtifactTarget }
+  /** 点开看大图：mediaId（send_image）或 rel（图片产物）二选一，host 压到 ≤700KB */
+  | {
+      type: 'bot-artifact-image';
+      requestId: string;
+      target: PairBotArtifactTarget;
+      mediaId?: string;
+      rel?: string;
+    };
 
 /** 手机命令白名单：main 只接受这些 type，其余（set-approval-mode、设置写入等）拒绝 */
 export const PHONE_COMMAND_TYPES = [
@@ -185,6 +195,8 @@ export const PHONE_COMMAND_TYPES = [
   'bot-stop',
   'bot-inbox-request',
   'bot-inbox-dismiss',
+  'bot-artifacts',
+  'bot-artifact-image',
 ] as const satisfies readonly PhoneToHost['type'][];
 
 export function isPhoneCommand(value: unknown): value is PhoneToHost {
@@ -360,6 +372,24 @@ export interface PairBotInboxItem {
   dismissible: boolean;
 }
 
+/** 产物挂在哪条消息：群 bot 条目按 entryId；私聊按会话 + 该轮助手消息下标 */
+export type PairBotArtifactTarget =
+  | { chatId: string; entryId: string }
+  | { chatId: string; conversationId: string; messageIndex: number };
+
+export interface PairBotArtifact {
+  rel: string;
+  name: string;
+  size: number;
+  kind: 'image' | 'markdown' | 'html' | 'pdf' | 'text' | 'other';
+}
+
+/** send_image 的图：web = 网页截图，desktop = 桌面截图，file = 工作区副本；失败项只展示原因 */
+export type PairBotMedia = (
+  | { ok: true; mediaId: string; thumb?: string }
+  | { ok: false; error: 'too-large' | 'quota' }
+) & { source: 'file' | 'web' | 'desktop'; name?: string; caption?: string };
+
 export interface PairBotChatState {
   current: string | null;
   queue: string[];
@@ -513,4 +543,12 @@ export type HostToPhone =
   /** Bot 收件箱：未结束且未忽略的条目（新的在前），变化时整表重推 */
   | { type: 'bot-inbox'; items: PairBotInboxItem[] }
   /** 成员实时运行态整表（变化时节流重推）；now 为 host 时钟，手机据此换算计时 */
-  | { type: 'bot-activity'; now: number; items: PairBotActivity[] };
+  | { type: 'bot-activity'; now: number; items: PairBotActivity[] }
+  /** bot-artifacts 的应答（target 原样回显，手机按它对号入座） */
+  | {
+      type: 'bot-artifacts';
+      target: PairBotArtifactTarget;
+      artifacts: PairBotArtifact[];
+      media: PairBotMedia[];
+    }
+  | { type: 'bot-artifact-image'; requestId: string; dataUrl?: string; error?: string };

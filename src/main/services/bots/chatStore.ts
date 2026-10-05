@@ -108,6 +108,11 @@ export class BotChatStore {
     return join(this.dir(id), 'workspace');
   }
 
+  /** send_image 的图片副本；删聊天时随目录一起删 */
+  mediaDir(id: string): string {
+    return join(this.dir(id), 'media');
+  }
+
   create(draft: BotChatDraft, id: string = randomUUID()): BotChat | undefined {
     const at = this.now();
     const chat = parseBotChat({

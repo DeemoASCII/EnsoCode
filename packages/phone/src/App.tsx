@@ -18,7 +18,9 @@ import { Smartphone } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { applyAppBadge, attentionBadgeCount } from './attentionBadge';
+import { BotArtifactsContext } from './BotArtifacts';
 import { BotDrawerPanel } from './BotDrawerPanel';
+import { BotArtifactsPort } from './botArtifactsPort';
 import { BotOutbox, type OutboxItem, phoneOutboxStorage } from './botOutbox';
 import { chatActivities, type GroupTimelineState, mergeGroupTimeline } from './botState';
 import { ChatScreen } from './ChatScreen';
@@ -174,6 +176,10 @@ export function App() {
   const [botNotice, setBotNotice] = useState<string | null>(null);
   /** Bot 发送离线队列（按配对分库）；断线也能发，连上后按原 deliveryId 重发 */
   const outboxRef = useRef<BotOutbox | null>(null);
+  const artifactsPort = useMemo(
+    () => new BotArtifactsPort((command) => clientRef.current?.send(command)),
+    []
+  );
   const [outbox, setOutbox] = useState<OutboxItem[]>([]);
   const clientRef = useRef<PairClient | null>(null);
   const activeIdRef = useRef<string | null>(activeId);
@@ -290,9 +296,14 @@ export function App() {
     };
     const client = new PairClient(device, {
       onState: (next) => {
-        if (next !== 'online') outboxRef.current?.interrupted();
+        if (next !== 'online') {
+          outboxRef.current?.interrupted();
+          artifactsPort.reset();
+        }
         setState(next);
       },
+      onBotArtifacts: (frame) => artifactsPort.receive(frame),
+      onBotArtifactImage: (frame) => artifactsPort.receiveImage(frame),
       onTransport: (next) => {
         setTransport(next);
         setRttMs(null);
@@ -800,6 +811,9 @@ export function App() {
             ? { readOnly: true, onBack: () => setProcessId(null) }
             : { notice: botNotice, outbox: outboxBar(chat.id) }
         }
+        artifacts={
+          !process && subscribedId ? { chatId: chat.id, conversationId: subscribedId } : undefined
+        }
         deviceReadOnly={deviceReadOnly}
         readOnlyRejected={readOnlyRejected}
         onSend={(text, images) => sendBot(chat.id, text, images)}
@@ -852,7 +866,9 @@ export function App() {
   return (
     <>
       {botChat ? (
-        renderBotScreen(botChat)
+        <BotArtifactsContext.Provider value={{ port: artifactsPort, online: state === 'online' }}>
+          {renderBotScreen(botChat)}
+        </BotArtifactsContext.Provider>
       ) : (
         <ChatScreen
           sessionId={activeId}

@@ -270,7 +270,9 @@ export type PairBotCommand = Extract<
       | 'bot-timeline'
       | 'bot-stop'
       | 'bot-inbox-request'
-      | 'bot-inbox-dismiss';
+      | 'bot-inbox-dismiss'
+      | 'bot-artifacts'
+      | 'bot-artifact-image';
   }
 >;
 export type PairReply = (message: HostToPhone) => Promise<boolean>;
@@ -1040,6 +1042,8 @@ async function handleFrame(
     case 'bot-stop':
     case 'bot-inbox-request':
     case 'bot-inbox-dismiss':
+    case 'bot-artifacts':
+    case 'bot-artifact-image':
       // 发送可能要等 spawn：不卡本连接的收帧队列
       void botPort
         ?.handle(conn.device.pairId, command, (message) => send(conn, message))

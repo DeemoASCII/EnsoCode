@@ -5,8 +5,10 @@ import {
   VOICE_CHUNK_MAX_CHARS,
   VOICE_CHUNK_MAX_INDEX,
 } from '@enso/pair';
+import { isMediaId } from '@shared/bots/sendImage';
 import { takeSnapshotTail } from '@shared/snapshotTail';
 import { isDeliveryId, THINKING_LEVELS } from '@shared/types/agent';
+import { parseArtifactTarget } from './bots/artifacts';
 
 /**
  * 手机上行命令的结构校验 + 下行事件过滤。
@@ -104,6 +106,26 @@ function parseBotCommand(v: Record<string, unknown>): CommandCheck {
           deliveryId: v.deliveryId,
         },
       };
+    }
+    case 'bot-artifacts': {
+      const target = parseArtifactTarget(v.target);
+      if (!target) return { ok: false, error: 'invalid target' };
+      return { ok: true, command: { type: 'bot-artifacts', target } };
+    }
+    case 'bot-artifact-image': {
+      const target = parseArtifactTarget(v.target);
+      if (!target) return { ok: false, error: 'invalid target' };
+      if (!isStr(v.requestId) || v.requestId.length > 100)
+        return { ok: false, error: 'invalid requestId' };
+      const { requestId } = v;
+      if (v.mediaId !== undefined && v.rel === undefined && isMediaId(v.mediaId))
+        return {
+          ok: true,
+          command: { type: 'bot-artifact-image', requestId, target, mediaId: v.mediaId },
+        };
+      if (v.rel !== undefined && v.mediaId === undefined && isStr(v.rel) && v.rel.length <= 4096)
+        return { ok: true, command: { type: 'bot-artifact-image', requestId, target, rel: v.rel } };
+      return { ok: false, error: 'invalid image' };
     }
     default:
       return { ok: false, error: `unknown command type: ${String(v.type)}` };

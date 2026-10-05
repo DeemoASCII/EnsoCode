@@ -132,6 +132,7 @@ import type {
   BotAbilitySuggestResult,
   BotActionResult,
   BotArtifactOpenAction,
+  BotArtifactReadRequest,
   BotArtifactReadResult,
   BotArtifactsResult,
   BotArtifactTarget,
@@ -1311,7 +1312,7 @@ const electronAPI = {
     artifacts: {
       list: (target: BotArtifactTarget): Promise<BotArtifactsResult> =>
         ipcRenderer.invoke(IPC_CHANNELS.BOT_ARTIFACTS_LIST, target),
-      read: (request: BotArtifactTarget & { rel: string }): Promise<BotArtifactReadResult> =>
+      read: (request: BotArtifactReadRequest): Promise<BotArtifactReadResult> =>
         ipcRenderer.invoke(IPC_CHANNELS.BOT_ARTIFACT_READ, request),
       open: (
         request: BotArtifactTarget & { rel: string; action: BotArtifactOpenAction }

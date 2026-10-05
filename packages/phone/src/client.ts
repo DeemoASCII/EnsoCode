@@ -126,6 +126,9 @@ export interface ClientEvents {
   onBotInbox?(items: PairBotInboxItem[]): void;
   /** 成员实时运行态整表；clockOffset = 本机时钟 − host 时钟 */
   onBotActivity?(items: PairBotActivity[], clockOffset: number): void;
+  /** 一条回复的产物卡片与 send_image 图（bot-artifacts 应答） */
+  onBotArtifacts?(frame: Extract<HostToPhone, { type: 'bot-artifacts' }>): void;
+  onBotArtifactImage?(frame: Extract<HostToPhone, { type: 'bot-artifact-image' }>): void;
 }
 
 export class PairClient {
@@ -577,6 +580,13 @@ export class PairClient {
       case 'bot-activity':
         if (Array.isArray(payload.items) && typeof payload.now === 'number')
           this.events.onBotActivity?.(payload.items, Date.now() - payload.now);
+        break;
+      case 'bot-artifacts':
+        if (typeof payload.target === 'object' && payload.target !== null)
+          this.events.onBotArtifacts?.(payload);
+        break;
+      case 'bot-artifact-image':
+        if (typeof payload.requestId === 'string') this.events.onBotArtifactImage?.(payload);
         break;
       case 'command-rejected':
         if (typeof payload.command === 'string')

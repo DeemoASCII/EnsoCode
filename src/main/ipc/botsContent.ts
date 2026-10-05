@@ -1,5 +1,6 @@
 import { readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
+import { type BotMediaItem, sendImageItems } from '@shared/bots/sendImage';
 import type { ProjectedMessage } from '@shared/types/agent';
 import type {
   BotActionResult,
@@ -7,6 +8,7 @@ import type {
   BotArtifactOpenAction,
   BotArtifactReadResult,
   BotArtifactsResult,
+  BotArtifactTarget,
   BotSearchResult,
 } from '@shared/types/botIpc';
 import { app, BrowserWindow, shell } from 'electron';
@@ -22,6 +24,8 @@ import {
 import type { BotSessionHost } from '../services/bots/botSessionHost';
 import { parseChatSearchQuery, searchBotChats } from '../services/bots/chatSearch';
 import type { BotChatStore } from '../services/bots/chatStore';
+import { mediaFile } from '../services/bots/media';
+import { fitDataUrl, mediaMime } from '../services/bots/mediaImage';
 import { readBotSessionMessages } from '../services/bots/sessionMessages';
 import { getSourceAuthorityRegistry } from './agent';
 
@@ -73,11 +77,19 @@ export async function searchChats(
   return { ok: true, ...result };
 }
 
+interface TurnContent {
+  /** SSH 项目没有本地工作区：只出 send_image 的图 */
+  root: string | null;
+  mediaDir: string;
+  artifacts: BotArtifact[];
+  media: BotMediaItem[];
+}
+
 /** 由聊天 + 条目 / 会话消息标识推导该轮消息与工作区根；会话必须属于该聊天 */
 async function artifactsOf(
   { chats }: ContentServices,
   request: unknown
-): Promise<{ root: string; artifacts: BotArtifact[] } | null> {
+): Promise<TurnContent | null> {
   const target = parseArtifactTarget(request);
   const chat = target ? chats.get(target.chatId) : undefined;
   if (!target || !chat) return null;
@@ -100,7 +112,7 @@ async function artifactsOf(
   const conversation = authority?.conversation(conversationId);
   if (conversation?.bot?.chatId !== chat.id) return null;
   const project = authority?.project(conversation.projectId);
-  if (!project || project.kind === 'ssh') return null;
+  if (!project) return null;
   let turn = fallback;
   try {
     const messages = await readMessages(conversation.sessionFile);
@@ -109,9 +121,23 @@ async function artifactsOf(
   } catch {
     // 会话文件缺失 / 损坏：群条目仍可按回复正文提到的路径出卡片
   }
+  const mediaDir = chats.mediaDir(chat.id);
+  // 只认 send_image 工具结果，且副本必须真在本聊天的 media 目录里
+  const media = sendImageItems(turn).filter(
+    (item) => !item.ok || mediaFile(mediaDir, item.mediaId) !== null
+  );
+  if (project.kind === 'ssh') return { root: null, mediaDir, artifacts: [], media };
+  // 同一个工作区文件已作为图片发出：不再重复出文件卡片
+  const sent = new Set(
+    media.flatMap((item) => (item.source === 'file' && item.name ? [item.name] : []))
+  );
   return {
     root: project.canonicalPath,
-    artifacts: resolveArtifacts(project.canonicalPath, artifactCandidates(turn)),
+    mediaDir,
+    artifacts: resolveArtifacts(project.canonicalPath, artifactCandidates(turn)).filter(
+      (artifact) => !sent.has(artifact.rel)
+    ),
+    media,
   };
 }
 
@@ -120,7 +146,7 @@ export async function listArtifacts(
   request: unknown
 ): Promise<BotArtifactsResult> {
   const found = await artifactsOf(services, request);
-  return found ? { ok: true, artifacts: found.artifacts } : INVALID;
+  return found ? { ok: true, artifacts: found.artifacts, media: found.media } : INVALID;
 }
 
 /** rel 必须出现在 Main 重新推导的该条产物清单里，再按工作区根二次校验 */
@@ -133,14 +159,41 @@ async function artifactFile(
   if (typeof rel !== 'string' || !rel) return null;
   const found = await artifactsOf(services, request);
   const artifact = found?.artifacts.find((item) => item.rel === rel);
-  const file = artifact && found ? resolveArtifactFile(found.root, artifact.rel) : null;
+  const file = artifact && found?.root ? resolveArtifactFile(found.root, artifact.rel) : null;
   return file && artifact ? { file, artifact } : null;
+}
+
+const THUMB_MAX_CHARS = 200_000;
+const THUMB_EDGE = 480;
+
+/** mediaId 必须出现在 Main 重新推导的该条图片清单里 */
+async function mediaOf(services: ContentServices, request: unknown): Promise<Buffer | null> {
+  const mediaId =
+    request && typeof request === 'object'
+      ? (request as Record<string, unknown>).mediaId
+      : undefined;
+  if (typeof mediaId !== 'string') return null;
+  const found = await artifactsOf(services, request);
+  if (!found?.media.some((item) => item.ok && item.mediaId === mediaId)) return null;
+  const file = mediaFile(found.mediaDir, mediaId);
+  return file ? readFileSync(file) : null;
 }
 
 export async function readArtifact(
   services: ContentServices,
   request: unknown
 ): Promise<BotArtifactReadResult> {
+  if (request && typeof request === 'object' && 'mediaId' in request) {
+    const { mediaId, variant } = request as Record<string, unknown>;
+    const data = await mediaOf(services, request);
+    if (!data || typeof mediaId !== 'string') return INVALID;
+    const mime = mediaMime(mediaId);
+    const dataUrl =
+      variant === 'thumb'
+        ? fitDataUrl(data, mime, THUMB_MAX_CHARS, THUMB_EDGE)
+        : `data:${mime};base64,${data.toString('base64')}`;
+    return dataUrl ? { ok: true, kind: 'image', dataUrl } : { ok: false, error: 'too-large' };
+  }
   const target = await artifactFile(services, request);
   if (!target) return INVALID;
   const { file, artifact } = target;
@@ -159,6 +212,57 @@ export async function readArtifact(
     return { ok: true, kind: artifact.kind, text: readFileSync(file, 'utf8') };
   }
   return { ok: false, error: 'unsupported' };
+}
+
+const PHONE_THUMB_MAX_CHARS = 60_000;
+const PHONE_THUMB_EDGE = 360;
+/** 手机大图：data URL ≤700KB，单帧不超中继上限 */
+const PHONE_IMAGE_MAX_CHARS = 700_000;
+const PHONE_IMAGE_EDGE = 2048;
+
+/** 手机：产物卡片 + send_image 图（附中继缩略图） */
+export async function phoneArtifacts(
+  services: ContentServices,
+  target: BotArtifactTarget
+): Promise<{ artifacts: BotArtifact[]; media: Array<BotMediaItem & { thumb?: string }> } | null> {
+  const found = await artifactsOf(services, target);
+  if (!found) return null;
+  const media = found.media.map((item) => {
+    if (!item.ok) return item;
+    const file = mediaFile(found.mediaDir, item.mediaId);
+    const thumb = file
+      ? fitDataUrl(
+          readFileSync(file),
+          mediaMime(item.mediaId),
+          PHONE_THUMB_MAX_CHARS,
+          PHONE_THUMB_EDGE
+        )
+      : null;
+    return thumb ? { ...item, thumb } : item;
+  });
+  return { artifacts: found.artifacts, media };
+}
+
+/** 手机点开大图：mediaId（send_image）或图片产物 rel，压到 ≤700KB */
+export async function phoneArtifactImage(
+  services: ContentServices,
+  request: BotArtifactTarget & { mediaId?: string; rel?: string }
+): Promise<{ dataUrl: string } | { error: string }> {
+  let data: Buffer | null = null;
+  let mime = 'image/png';
+  if (request.mediaId !== undefined) {
+    data = await mediaOf(services, request);
+    mime = mediaMime(request.mediaId);
+  } else {
+    const target = await artifactFile(services, request);
+    if (target?.artifact.kind === 'image' && statSync(target.file).size <= IMAGE_MAX) {
+      data = readFileSync(target.file);
+      mime = IMAGE_MIME[path.extname(target.file).slice(1).toLowerCase()] ?? mime;
+    }
+  }
+  if (!data) return { error: 'invalid' };
+  const dataUrl = fitDataUrl(data, mime, PHONE_IMAGE_MAX_CHARS, PHONE_IMAGE_EDGE);
+  return dataUrl ? { dataUrl } : { error: 'too-large' };
 }
 
 /** PDF 走独立窗口的内置查看器：无 preload、沙箱、禁止新窗口与跳转 */

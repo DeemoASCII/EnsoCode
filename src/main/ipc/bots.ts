@@ -94,6 +94,8 @@ import { GroupTaskStore } from '../services/bots/groupTaskStore';
 import { GroupTaskService } from '../services/bots/groupTasks';
 import { BotInboxService } from '../services/bots/inbox';
 import { BotInboxStore } from '../services/bots/inboxStore';
+import { ScreenshotCache, sendImage } from '../services/bots/media';
+import { compressImage } from '../services/bots/mediaImage';
 import { removeBotMemorySpace } from '../services/bots/memoryCleanup';
 import { proposeRoutine } from '../services/bots/routineProposal';
 import { RoutineRunner } from '../services/bots/routineRunner';
@@ -954,6 +956,34 @@ export function routineProposeTool(
 ): unknown {
   if (!services) return { ok: false, error: 'disabled' };
   return proposeRoutine({ ...services, emit: emitBotEvent }, conversationId, binding, params);
+}
+
+/** 成员会话最近的截图（browser / computer），send_image 从这里取 */
+export const botScreenshots = new ScreenshotCache();
+
+/** worker 的 send_image：chatId 取自会话权威绑定；工作区根取会话所属项目（SSH 不支持文件） */
+export function sendImageTool(
+  services: BotServices | null | undefined,
+  conversationId: string,
+  binding: { botId: string; chatId: string | null; delegationId?: string },
+  params: Record<string, unknown>
+): unknown {
+  if (!services) return { ok: false, error: 'disabled' };
+  const authority = getSourceAuthorityRegistry();
+  const conversation = authority?.conversation(conversationId);
+  const project = conversation ? authority?.project(conversation.projectId) : undefined;
+  return sendImage(
+    {
+      chat: (id) => services.chats.get(id),
+      mediaDir: (id) => services.chats.mediaDir(id),
+      workspaceRoot: () => (project && project.kind !== 'ssh' ? project.canonicalPath : null),
+      screenshots: botScreenshots,
+      compress: compressImage,
+    },
+    conversationId,
+    binding,
+    params
+  );
 }
 
 export function registerBotHandlers(): void {

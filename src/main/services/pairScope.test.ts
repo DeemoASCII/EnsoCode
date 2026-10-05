@@ -27,6 +27,8 @@ const READ_ONLY_ALLOWED = [
   'bot-chat-open',
   'bot-timeline',
   'bot-inbox-request',
+  'bot-artifacts',
+  'bot-artifact-image',
 ];
 
 describe('配对作用域', () => {

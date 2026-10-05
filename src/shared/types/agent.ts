@@ -1037,7 +1037,7 @@ export type AgentCommand =
       botMode?: boolean;
       /** Bot 群聊成员会话：挂 group_tasks / group_history 工具（私聊 / 委派子会话不挂） */
       botGroupTasks?: boolean;
-      /** Bot 私聊 / 群聊成员会话（非委派）：挂 routine_propose 工具 */
+      /** Bot 私聊 / 群聊成员会话（非委派）：挂 routine_propose / send_image 工具 */
       botRoutines?: boolean;
       /** Bot 写成员：同工作区按文件占用、全局命令短独占；祖先会话（委派链）互不阻塞 */
       botWriteLock?: { label: string; ancestors: string[] };
@@ -1649,7 +1649,13 @@ export type AgentWorkerEvent =
       identity: SessionIdentity;
       seq: number;
       requestId: string;
-      op: 'delegate' | 'check_delegation' | 'group_tasks' | 'group_history' | 'routine_propose';
+      op:
+        | 'delegate'
+        | 'check_delegation'
+        | 'group_tasks'
+        | 'group_history'
+        | 'routine_propose'
+        | 'send_image';
       params: unknown;
     }
   | {
@@ -3431,7 +3437,8 @@ export function parseAgentWorkerEvent(value: unknown): AgentWorkerEvent | null {
           value.op === 'check_delegation' ||
           value.op === 'group_tasks' ||
           value.op === 'group_history' ||
-          value.op === 'routine_propose')
+          value.op === 'routine_propose' ||
+          value.op === 'send_image')
         ? (value as unknown as AgentWorkerEvent)
         : null;
     case 'computer-invoke':
