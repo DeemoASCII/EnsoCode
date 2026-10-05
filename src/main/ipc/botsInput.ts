@@ -455,6 +455,13 @@ export function parseOpenWorkspaceInput(
   return null;
 }
 
+export function parseChatCloneInput(value: unknown): { chatId: string; title: string } | null {
+  const input = record(value);
+  if (!input || !onlyKeys(input, ['chatId', 'title']) || !isBotId(input.chatId)) return null;
+  const title = typeof input.title === 'string' ? input.title.trim() : '';
+  return title && text(title, MAX.short) ? { chatId: input.chatId, title } : null;
+}
+
 export function parseSessionHistoryInput(
   value: unknown
 ): { conversationId: string; beforeIndex?: number } | null {

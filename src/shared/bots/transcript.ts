@@ -195,9 +195,15 @@ export function buildGroupDelta(input: {
   members: readonly TranscriptMember[];
   chatTitle: string;
   limit?: number;
+  /** 读取下限（群「新对话」分隔线 seq）：之前的条目不进上下文 */
+  floor?: number;
 }): { text: string; cursor: number } {
   const { botId, chatTitle } = input;
   const cursor = Number.isSafeInteger(input.cursor) && input.cursor > 0 ? input.cursor : 0;
+  const after = Math.max(
+    cursor,
+    Number.isSafeInteger(input.floor) && (input.floor as number) > 0 ? (input.floor as number) : 0
+  );
   const limit =
     Number.isSafeInteger(input.limit) && (input.limit as number) > 0
       ? (input.limit as number)
@@ -208,9 +214,9 @@ export function buildGroupDelta(input: {
   );
   const find = (id: BotId) => members.find((m) => m.id === id);
   const fresh = (Array.isArray(input.entries) ? input.entries : [])
-    .filter((e) => e && typeof e === 'object' && Number.isSafeInteger(e.seq) && e.seq > cursor)
+    .filter((e) => e && typeof e === 'object' && Number.isSafeInteger(e.seq) && e.seq > after)
     .sort((a, b) => a.seq - b.seq);
-  const nextCursor = fresh.at(-1)?.seq ?? cursor;
+  const nextCursor = fresh.at(-1)?.seq ?? after;
   const visible = fresh.filter((e) => !(e.kind === 'bot' && e.botId === botId));
   if (visible.length === 0) return { text: '', cursor: nextCursor };
   const omitted = Math.max(0, visible.length - limit);

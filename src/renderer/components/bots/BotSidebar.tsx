@@ -7,6 +7,7 @@ import {
   ArrowDown,
   ArrowUp,
   CircleCheck,
+  Copy,
   Inbox,
   LayoutTemplate,
   Mail,
@@ -62,6 +63,7 @@ import { isUnread, unreadMark } from '@/stores/bots/unread';
 import { BotAvatar, GroupAvatar } from './BotAvatar';
 import { BotSearchButton } from './BotSearchDialog';
 import { chatErrorText, chatTitle } from './botText';
+import { CloneGroupDialog } from './CloneGroupDialog';
 
 const ICON_BUTTON_CLASS =
   'relative flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground';
@@ -105,6 +107,7 @@ export function BotSidebar({
   const [archiveOpen, setArchiveOpen] = useState(false);
   const [archiveQuery, setArchiveQuery] = useState('');
   const [deleting, setDeleting] = useState<BotChat | null>(null);
+  const [cloning, setCloning] = useState<BotChat | null>(null);
 
   const byId = useMemo(() => new Map(bots.map((bot) => [bot.id, bot])), [bots]);
   const names = useMemo(() => Object.fromEntries(bots.map((bot) => [bot.id, bot.name])), [bots]);
@@ -273,6 +276,7 @@ export function BotSidebar({
             onPin={() => void togglePin(chat)}
             onArchive={() => void updateChat(chat, { archived: true })}
             onDelete={() => setDeleting(chat)}
+            onClone={() => setCloning(chat)}
             manage={manage(chat, pinnedGroups)}
           >
             <ChatRow
@@ -339,6 +343,7 @@ export function BotSidebar({
                 chat={chat}
                 onPin={() => void togglePin(chat)}
                 onArchive={() => void updateChat(chat, { archived: true })}
+                onClone={chat.kind === 'group' ? () => setCloning(chat) : undefined}
                 manage={manage(chat, [])}
               >
                 <ChatRow
@@ -540,6 +545,7 @@ export function BotSidebar({
           });
         }}
       />
+      <CloneGroupDialog chat={cloning} onOpenChange={(open) => !open && setCloning(null)} />
     </aside>
   );
 }
@@ -752,6 +758,7 @@ function ChatContextMenu({
   onArchive,
   onDelete,
   onArchiveMember,
+  onClone,
   manage,
 }: {
   chat: BotChat | undefined;
@@ -760,6 +767,7 @@ function ChatContextMenu({
   onArchive?: () => void;
   onDelete?: () => void;
   onArchiveMember?: () => void;
+  onClone?: () => void;
   manage?: ChatManageActions;
 }) {
   const { t } = useI18n();
@@ -812,6 +820,12 @@ function ChatContextMenu({
           <ContextMenuItem onClick={manage.onMarkUnread}>
             <Mail />
             {t('Mark as unread')}
+          </ContextMenuItem>
+        )}
+        {onClone && (
+          <ContextMenuItem onClick={onClone}>
+            <Copy />
+            {t('Clone group chat')}
           </ContextMenuItem>
         )}
         {onArchive && (

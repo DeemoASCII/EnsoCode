@@ -952,3 +952,151 @@ describe('收件箱 IPC', () => {
     expect(await call(IPC_CHANNELS.BOT_INBOX_LIST)).toEqual({ ok: true, items: [] });
   });
 });
+
+describe('群聊新对话与克隆', () => {
+  async function team() {
+    const alice = await createBot('Alice');
+    const bob = await createBot('Bob');
+    const carol = await createBot('Carol');
+    const created = await call(IPC_CHANNELS.BOT_CHAT_CREATE, {
+      kind: 'group',
+      title: 'team',
+      members: [alice, bob, carol],
+      bossBotId: alice,
+      workspace: { kind: 'chat-home' },
+    });
+    return { alice, bob, carol, chatId: (created.chat as { id: string }).id };
+  }
+
+  it('新对话：停掉成员、取消委派、结束旧会话并写分隔线；之后的上下文与 group_history 从分隔线开始', async () => {
+    const { alice, bob, chatId } = await team();
+    const { getBotServices, groupHistoryTool } = await import('./bots');
+    const services = getBotServices()!;
+    const registry = mocks.registry as SourceAuthorityRegistry;
+    services.chats.appendEntry(chatId, {
+      kind: 'human',
+      text: '旧约定：周五发布',
+      mentions: [],
+      id: 'h-old',
+      at: 1,
+    });
+    const old = services.host.ensureSession(chatId, bob);
+    if (!old.ok) throw new Error(old.error);
+    const stopTurn = vi.spyOn(services.host, 'stopTurn');
+    const startOver = vi.spyOn(services.delegations, 'startOver');
+
+    expect(await call(IPC_CHANNELS.BOT_CHAT_NEW_SESSION, { chatId })).toEqual({
+      ok: true,
+      epochSeq: 2,
+    });
+    expect(stopTurn).toHaveBeenCalledWith(chatId, bob);
+    expect(startOver).toHaveBeenCalledWith(chatId);
+    expect(registry.conversation(old.conversationId)?.lifecycle).toBe('ended');
+    expect(services.chats.get(chatId)).toMatchObject({ epochSeq: 2, sessions: {} });
+    expect(services.chats.readEntries(chatId).at(-1)).toMatchObject({
+      seq: 2,
+      kind: 'system',
+      newConversation: true,
+    });
+    // 当前段为空：不再写分隔线
+    expect(await call(IPC_CHANNELS.BOT_CHAT_NEW_SESSION, { chatId })).toEqual({
+      ok: true,
+      epochSeq: 2,
+    });
+    expect(services.chats.lastSeq(chatId)).toBe(2);
+
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    mocks.promptSession.mockClear();
+    await call(IPC_CHANNELS.BOT_SEND, { chatId, text: '新任务：写周报', deliveryId: 'd-new' });
+    await vi.waitFor(() => expect(mocks.promptSession).toHaveBeenCalled());
+    warn.mockRestore();
+    const prompt = mocks.promptSession.mock.calls[0][1] as string;
+    expect(prompt).toContain('新任务：写周报');
+    expect(prompt).not.toContain('旧约定');
+    const session = services.chats.get(chatId)!.sessions[alice];
+    const history = groupHistoryTool(
+      services,
+      session.conversationId,
+      { botId: alice, chatId },
+      { limit: 20 }
+    );
+    expect(history).toMatchObject({ ok: true });
+    expect(JSON.stringify(history)).toContain('新任务');
+    expect(JSON.stringify(history)).not.toContain('旧约定');
+
+    expect(await call(IPC_CHANNELS.BOT_CHAT_NEW_SESSION, { chatId: 'nope' })).toMatchObject({
+      ok: false,
+    });
+  });
+
+  it('克隆：复制成员、群主与分派；独立目录的新建空目录，绑项目的沿用同一项目；不带记录与会话', async () => {
+    const { alice, bob, carol, chatId } = await team();
+    const { getBotServices } = await import('./bots');
+    const services = getBotServices()!;
+    const registry = mocks.registry as SourceAuthorityRegistry;
+    await call(IPC_CHANNELS.BOT_CHAT_UPDATE, {
+      chatId,
+      pinned: true,
+      routing: { mode: 'boss', maxHops: 3, maxTurnsPerBot: 1, muted: [carol] },
+    });
+    services.chats.appendEntry(chatId, { kind: 'system', text: 'x', id: 's1', at: 1 });
+    writeFileSync(join(services.chats.workspaceDir(chatId), 'a.txt'), 'x');
+    const session = services.host.ensureSession(chatId, bob);
+    if (!session.ok) throw new Error(session.error);
+    await call(IPC_CHANNELS.BOT_CHAT_NEW_SESSION, { chatId });
+    const source = services.chats.get(chatId)!;
+
+    const cloned = await call(IPC_CHANNELS.BOT_CHAT_CLONE, { chatId, title: 'team 的副本' });
+    expect(cloned).toMatchObject({
+      ok: true,
+      chat: {
+        kind: 'group',
+        title: 'team 的副本',
+        members: [alice, bob, carol],
+        bossBotId: alice,
+        routing: { mode: 'boss', maxHops: 3, maxTurnsPerBot: 1, muted: [carol] },
+        pinned: false,
+        sessions: {},
+        workspace: { kind: 'chat-home' },
+      },
+    });
+    const copy = cloned.chat as { id: string; epochSeq?: number; workspace: { projectId: string } };
+    expect(copy.id).not.toBe(chatId);
+    expect(copy.epochSeq).toBeUndefined();
+    expect(copy.workspace.projectId).not.toBe(
+      (source.workspace as { projectId: string }).projectId
+    );
+    expect(existsSync(join(services.chats.workspaceDir(copy.id), 'a.txt'))).toBe(false);
+    expect(services.chats.lastSeq(copy.id)).toBe(0);
+    expect(services.chats.get(chatId)?.sessions[bob]).toBeUndefined();
+
+    const code = join(mocks.root, 'code');
+    mkdirSync(code);
+    const project = registry.createProject({ requestId: 'p', path: code });
+    if (!project.accepted) throw new Error('project');
+    await call(IPC_CHANNELS.BOT_CHAT_UPDATE, {
+      chatId,
+      workspace: { kind: 'project', projectId: project.value.projectId },
+    });
+    expect(await call(IPC_CHANNELS.BOT_CHAT_CLONE, { chatId, title: 'p' })).toMatchObject({
+      ok: true,
+      chat: { workspace: { kind: 'project', projectId: project.value.projectId } },
+    });
+
+    const direct = await call(IPC_CHANNELS.BOT_CHAT_CREATE, {
+      kind: 'direct',
+      members: [alice],
+      workspace: { kind: 'member-home' },
+    });
+    for (const bad of [
+      { chatId: (direct.chat as { id: string }).id, title: 'x' },
+      { chatId: '77777777-7777-4777-8777-777777777777', title: 'x' },
+      { chatId, title: '' },
+    ])
+      expect(await call(IPC_CHANNELS.BOT_CHAT_CLONE, bad)).toMatchObject({ ok: false });
+
+    expect(await call(IPC_CHANNELS.BOT_CHAT_DELETE, { chatId })).toEqual({ ok: true });
+    expect(services.chats.get(copy.id)).toBeDefined();
+    expect(existsSync(services.chats.workspaceDir(copy.id))).toBe(true);
+  });
+});

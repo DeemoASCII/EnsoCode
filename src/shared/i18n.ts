@@ -2204,6 +2204,27 @@ export const zhTranslations: Record<string, string> = {
     '群聊记录及其独立工作区会被删除；成员的会话仍可在其历史中只读查看。',
   'Archive chat': '归档聊天',
   'Delete group chat': '删除群聊',
+  'Clone group chat': '克隆群聊',
+  Clone: '克隆',
+  '{{title}} copy': '{{title}} 的副本',
+  'Copies the setup of “{{title}}”. The original stays as is; replies in progress are not stopped.':
+    '从「{{title}}」复制配置。原群保持原样，正在跑的回复也不会停。',
+  'Will copy': '会复制',
+  'Not copied': '不复制',
+  Routing: '分派',
+  'Relay {{hops}} · {{turns}} replies each': '接力 {{hops}} · 每人 {{turns}} 条',
+  'Same project: {{name}}': '沿用同一项目：{{name}}',
+  'A new empty folder, separate from the original': '新建空目录，和原群互不影响',
+  'Chat history, group notes, routines, task board and group memory':
+    '聊天记录（新群是空的）、群笔记、例行任务、任务板、群记忆',
+  'Cloned. The chat history is empty.': '已克隆。聊天记录是空的。',
+  'Start a new conversation?': '开始新对话？',
+  'Members still replying are stopped, and delegations not marked keep are canceled. Earlier messages fold into one row; members start fresh after the divider.':
+    '确认后会停掉所有人正在进行的回复，没标「保留」的委派会取消，再插入分隔线。上面的消息还在，先收成一行；成员从分隔线之后重新开始。',
+  'Stop and start': '停掉并开始',
+  'This conversation has no messages yet.': '这一段还没有消息。',
+  'Earlier conversation · {{n}} messages': '上一段对话 · {{n}} 条',
+  'Collapse earlier conversation': '收起上一段对话',
   'Create members with their own persona, model and tools, then chat with them alone or in groups.':
     '创建拥有各自人设、模型和工具的成员，然后与他们私聊或拉群协作。',
   'Pick a member or a group chat on the left.': '在左侧选择成员或群聊。',

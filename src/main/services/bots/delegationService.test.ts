@@ -436,6 +436,52 @@ it('publishes only a delegation summary in groups without duplicating a bot mess
   expect(f.deps.chats.readEntries(chat.id)).toHaveLength(1);
   restarted.dispose();
 });
+it('group new conversation: cancels non-keep delegations; kept results only land on the timeline', async () => {
+  const f = fixture();
+  f.service.dispose();
+  const deliverGroupResult = vi.fn(async () => ({ ok: true as const }));
+  const service = new DelegationService({ ...f.deps, deliverGroupResult });
+  const members = f.deps.bots.list().map((bot) => bot.id);
+  const alice = f.deps.bots.list().find((bot) => bot.name === 'Alice')!;
+  const chat = f.deps.chats.create({
+    kind: 'group',
+    title: 'team',
+    members,
+    bossBotId: alice.id,
+    workspace: { kind: 'chat-home', projectId: 'home' },
+  })!;
+  const parent = f.host.ensureSession(chat.id, alice.id);
+  if (!parent.ok) throw new Error(parent.error);
+  const kept = service.delegate(parent.conversationId, { to: 'Bob', task: 'kept', keep: true });
+  const drop = service.delegate(parent.conversationId, { to: 'Bob', task: 'drop' });
+  const other = service.delegate(f.parent, { to: 'Bob', task: 'other chat' });
+  if (!kept.ok || !drop.ok || !other.ok) throw new Error('delegate');
+  await vi.advanceTimersByTimeAsync(0);
+
+  service.startOver(chat.id);
+  f.host.resetSessions(chat.id);
+  await vi.advanceTimersByTimeAsync(0);
+  expect(f.store.get(drop.delegationId)).toMatchObject({ state: 'canceled' });
+  expect(f.store.get(drop.delegationId)?.deliveredAt).toBeDefined();
+  expect(f.store.get(kept.delegationId)?.state).toBe('running');
+  expect(f.store.get(other.delegationId)?.state).toBe('running');
+
+  f.finish(f.store.get(kept.delegationId)!.childConversationId);
+  await vi.advanceTimersByTimeAsync(0);
+  expect(f.store.get(kept.delegationId)).toMatchObject({ state: 'completed' });
+  expect(f.store.get(kept.delegationId)?.deliveredAt).toBeDefined();
+  expect(deliverGroupResult).not.toHaveBeenCalled();
+  expect(
+    f.deps.chats
+      .readEntries(chat.id)
+      .filter((entry) => entry.kind === 'delegation')
+      .map((entry) => entry.kind === 'delegation' && [entry.delegationId, entry.state])
+  ).toEqual([
+    [drop.delegationId, 'canceled'],
+    [kept.delegationId, 'completed'],
+  ]);
+  service.dispose();
+});
 it('links a board task: gate rejects before any record, sync sees every save, retry keeps the link only while the task is free', async () => {
   const f = fixture();
   f.service.dispose();

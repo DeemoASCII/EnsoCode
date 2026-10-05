@@ -85,6 +85,8 @@ export interface BotChat {
   snoozedUntil?: number;
   /** 置顶内的手动顺序（小的在前）；只在 pinned 时有效 */
   pinOrder?: number;
+  /** 群最近一次「新对话」分隔线的 seq：成员上下文与后台读取从这里之后开始 */
+  epochSeq?: number;
   sessions: Record<BotId, BotChatSession>;
   createdAt: number;
   updatedAt: number;
@@ -273,6 +275,8 @@ export type GroupEntry =
       text: string;
       /** 成员提议 / 改动例行任务：时间线据此渲染批准 / 拒绝卡片 */
       routine?: { botId: BotId; id: string };
+      /** 群「新对话」分隔线 */
+      newConversation?: true;
     });
 
 export type GroupEntryInput = GroupEntry extends infer E
@@ -502,6 +506,7 @@ export function parseBotChat(value: unknown): BotChat | undefined {
   if (isTime(value.settledAt)) chat.settledAt = value.settledAt;
   if (isTime(value.snoozedUntil)) chat.snoozedUntil = value.snoozedUntil;
   if (chat.pinned && isSeq(value.pinOrder)) chat.pinOrder = value.pinOrder;
+  if (isSeq(value.epochSeq)) chat.epochSeq = value.epochSeq;
   return chat;
 }
 
@@ -567,7 +572,12 @@ export function parseGroupEntry(value: unknown): GroupEntry | undefined {
             text: value.text,
             routine: { botId: value.routine.botId, id: value.routine.id },
           }
-        : { ...base, kind: 'system', text: value.text };
+        : {
+            ...base,
+            kind: 'system',
+            text: value.text,
+            ...(value.newConversation === true ? { newConversation: true as const } : {}),
+          };
     default:
       return undefined;
   }

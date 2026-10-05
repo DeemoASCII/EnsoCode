@@ -45,6 +45,14 @@ interface IndexedEntry {
   length: number;
 }
 
+/** ids 只覆盖文件 rest 字节之后的行；rest=0 表示已完整 */
+interface EntryIndex {
+  ids: Map<string, IndexedEntry>;
+  rest: number;
+  /** 已收录的最小 seq；续扫时只收更小的 */
+  min: number;
+}
+
 function parseLine(line: Buffer): GroupEntry | undefined {
   if (line.length === 0) return undefined;
   try {
@@ -72,7 +80,7 @@ export class BotChatStore {
   private chats = new Map<string, BotChat>();
   private seqs = new Map<string, number>();
   /** id → 行位置；按需构建，append 时增量维护 */
-  private indexes = new Map<string, Map<string, IndexedEntry>>();
+  private indexes = new Map<string, EntryIndex>();
   /** seq（CHECKPOINT_EVERY 的倍数）→ 该行起始偏移；文件只追加，偏移长期有效 */
   private checkpoints = new Map<string, Map<number, number>>();
   private readonly chunkSize: number;
@@ -190,7 +198,7 @@ export class BotChatStore {
     this.seqs.set(chatId, entry.seq);
     this.indexes
       .get(chatId)
-      ?.set(entry.id, { seq: entry.seq, offset, length: Buffer.byteLength(json) });
+      ?.ids.set(entry.id, { seq: entry.seq, offset, length: Buffer.byteLength(json) });
     return entry;
   }
 
@@ -209,12 +217,7 @@ export class BotChatStore {
 
   /** 升序返回 seq > afterSeq 的全部条目（倒读到 afterSeq 为止） */
   readAfter(chatId: string, afterSeq: number): GroupEntry[] {
-    const entries: GroupEntry[] = [];
-    for (const entry of this.backward(chatId)) {
-      if (entry.seq <= afterSeq) break;
-      entries.push(entry);
-    }
-    return entries.reverse();
+    return [...this.backward(chatId, undefined, afterSeq)].reverse();
   }
 
   /** renderer 增量拉取：缺口超过 limit 时退回最新一页（由调用方按缺口合并） */
@@ -223,8 +226,12 @@ export class BotChatStore {
     return this.readAfter(chatId, afterSeq);
   }
 
-  /** 从新到旧逐条产出；提前 break 即停止读盘。给 beforeSeq 时可从已知检查点开始读 */
-  *backward(chatId: string, beforeSeq = Number.POSITIVE_INFINITY): Generator<GroupEntry> {
+  /** 从新到旧逐条产出，读到 seq ≤ afterSeq 即停；提前 break 即停止读盘。给 beforeSeq 时可从已知检查点开始读 */
+  *backward(
+    chatId: string,
+    beforeSeq = Number.POSITIVE_INFINITY,
+    afterSeq = 0
+  ): Generator<GroupEntry> {
     if (!isBotChatId(chatId)) return;
     let fd: number;
     try {
@@ -273,13 +280,14 @@ export class BotChatStore {
           const at = data.lastIndexOf(NEWLINE, end - 1);
           if (at < 0) break;
           const entry = emit(data.subarray(at + 1, end), position + at + 1);
+          if (entry && entry.seq <= afterSeq) return;
           if (entry) yield entry;
           end = at;
         }
         carry = Buffer.from(data.subarray(0, end));
       }
       const entry = emit(carry, 0);
-      if (entry) yield entry;
+      if (entry && entry.seq > afterSeq) yield entry;
     } finally {
       closeSync(fd);
     }
@@ -323,11 +331,14 @@ export class BotChatStore {
   }
 
   hasEntry(chatId: string, id: string): boolean {
-    return this.index(chatId).has(id);
+    return this.index(chatId).ids.has(id);
   }
 
+  /** 分隔线之前的条目首次查找时才补全索引 */
   findEntry(chatId: string, id: string): GroupEntry | undefined {
-    const hit = this.index(chatId).get(id);
+    const index = this.index(chatId);
+    if (!index.ids.has(id) && index.rest > 0) this.scanIndex(chatId, index, 0);
+    const hit = index.ids.get(id);
     if (!hit) return undefined;
     let fd: number;
     try {
@@ -345,50 +356,67 @@ export class BotChatStore {
     }
   }
 
-  /** 首次使用时顺序扫一遍建 id 索引（只取行首 seq/id，不整行解析） */
-  private index(chatId: string): Map<string, IndexedEntry> {
+  /** 首次使用时从文件尾倒扫到群「新对话」分隔线建 id 索引（只取行首 seq/id，不整行解析） */
+  private index(chatId: string): EntryIndex {
     const cached = this.indexes.get(chatId);
     if (cached) return cached;
-    const index = new Map<string, IndexedEntry>();
-    if (!isBotChatId(chatId)) return index;
+    const index: EntryIndex = {
+      ids: new Map(),
+      rest: Number.POSITIVE_INFINITY,
+      min: Number.POSITIVE_INFINITY,
+    };
+    if (!isBotChatId(chatId)) return { ...index, rest: 0 };
+    this.scanIndex(chatId, index, this.chats.get(chatId)?.epochSeq ?? 0);
+    this.indexes.set(chatId, index);
+    return index;
+  }
+
+  /** 从 index.rest 往文件头倒扫，收录 seq > floor 的行；遇到 ≤ floor 的行停下并记住续扫位置 */
+  private scanIndex(chatId: string, index: EntryIndex, floor: number): void {
+    if (index.rest <= 0) return;
     let fd: number;
     try {
       fd = openSync(this.file(chatId), 'r');
     } catch {
-      this.indexes.set(chatId, index);
-      return index;
+      index.rest = 0;
+      return;
     }
     try {
-      let last = 0;
-      let carry = Buffer.alloc(0);
-      let base = 0;
       const size = Math.max(this.chunkSize, 256 * 1024);
-      const add = (line: Buffer, offset: number) => {
+      let position = Math.min(index.rest, fstatSync(fd).size);
+      let carry = Buffer.alloc(0);
+      /** false = 到下限，停在这一行（含）之后 */
+      const add = (line: Buffer, offset: number): boolean => {
         const head = indexHead(line);
-        if (!head || head.seq <= last) return;
-        last = head.seq;
-        index.set(head.id, { seq: head.seq, offset, length: line.length });
-      };
-      for (;;) {
-        const chunk = Buffer.allocUnsafe(size);
-        const bytesRead = readSync(fd, chunk, 0, size, null);
-        const data = Buffer.concat([carry, chunk.subarray(0, bytesRead)]);
-        const lines = splitLines(data, base);
-        let step = lines.next();
-        for (; !step.done; step = lines.next()) add(step.value.line, step.value.offset);
-        const consumed = data.length - step.value.length;
-        if (bytesRead === 0) {
-          add(step.value, base + consumed);
-          break;
+        if (!head || head.seq >= index.min) return true;
+        if (head.seq <= floor) {
+          index.rest = offset + line.length;
+          return false;
         }
-        carry = Buffer.from(step.value);
-        base += consumed;
+        index.min = head.seq;
+        index.ids.set(head.id, { seq: head.seq, offset, length: line.length });
+        return true;
+      };
+      while (position > 0) {
+        const length = Math.min(size, position);
+        position -= length;
+        const chunk = Buffer.allocUnsafe(length);
+        readSync(fd, chunk, 0, length, position);
+        const data = carry.length > 0 ? Buffer.concat([chunk, carry]) : chunk;
+        let end = data.length;
+        while (end > 0) {
+          const at = data.lastIndexOf(NEWLINE, end - 1);
+          if (at < 0) break;
+          if (!add(data.subarray(at + 1, end), position + at + 1)) return;
+          end = at;
+        }
+        carry = Buffer.from(data.subarray(0, end));
       }
+      if (!add(carry, 0)) return;
+      index.rest = 0;
     } finally {
       closeSync(fd);
     }
-    this.indexes.set(chatId, index);
-    return index;
   }
 
   private file(chatId: string): string {

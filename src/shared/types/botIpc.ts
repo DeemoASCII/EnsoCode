@@ -296,7 +296,11 @@ export type BotChatStateResult =
       routing: boolean;
     }
   | BotIpcError;
-export type BotNewSessionResult = { ok: true; conversationId: string } | BotIpcError;
+/** 私聊返回新会话；群聊返回分隔线 seq（当前段为空时不变） */
+export type BotNewSessionResult =
+  | { ok: true; conversationId: string }
+  | { ok: true; epochSeq: number }
+  | BotIpcError;
 export type BotActionResult = { ok: true } | BotIpcError;
 
 export interface BotSendRequest {

@@ -3,6 +3,7 @@ import {
   parseAbilitySuggestRequest,
   parseBotDraftInput,
   parseBotUpdateInput,
+  parseChatCloneInput,
   parseChatCreateInput,
   parseChatUpdateInput,
   parseGoalSuggestRequest,
@@ -265,6 +266,19 @@ describe('send / timeline / workspace / history inputs', () => {
   });
 
   it('打开工作区与会话历史只收标识符', () => {
+    expect(parseChatCloneInput({ chatId: A, title: ' 副本 ' })).toEqual({
+      chatId: A,
+      title: '副本',
+    });
+    for (const bad of [
+      null,
+      { chatId: A },
+      { chatId: A, title: '   ' },
+      { chatId: A, title: 'x'.repeat(201) },
+      { chatId: 'nope', title: 'x' },
+      { chatId: A, title: 'x', members: [B] },
+    ])
+      expect(parseChatCloneInput(bad)).toBeNull();
     expect(parseOpenWorkspaceInput({ chatId: A })).toEqual({ chatId: A });
     expect(parseInboxUpdateInput({ key: 'budget:a:2026-10-04', action: 'dismiss' })).toEqual({
       key: 'budget:a:2026-10-04',

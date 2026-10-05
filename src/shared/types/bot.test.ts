@@ -297,8 +297,12 @@ describe('parseGroupEntry', () => {
         state: 'running',
       },
       { seq: 4, id: 'e4', at: 4, kind: 'system', text: 'limit reached' },
+      { seq: 5, id: 'e5', at: 5, kind: 'system', text: '新对话', newConversation: true },
     ];
     for (const entry of entries) expect(parseGroupEntry(entry)).toEqual(entry);
+    expect(
+      parseGroupEntry({ seq: 6, id: 'e6', at: 6, kind: 'system', text: 'x', newConversation: 1 })
+    ).toEqual({ seq: 6, id: 'e6', at: 6, kind: 'system', text: 'x' });
   });
 
   it('rejects dirty entries', () => {

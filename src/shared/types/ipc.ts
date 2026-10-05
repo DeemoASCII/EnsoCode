@@ -382,6 +382,7 @@ export const IPC_CHANNELS = {
   BOT_CHAT_UPDATE: 'bots:chat-update',
   BOT_CHAT_DELETE: 'bots:chat-delete',
   BOT_CHAT_NEW_SESSION: 'bots:chat-new-session',
+  BOT_CHAT_CLONE: 'bots:chat-clone',
   BOT_CHAT_STOP: 'bots:chat-stop',
   BOT_CHAT_STATE: 'bots:chat-state',
   BOT_CHAT_SESSIONS: 'bots:chat-sessions',

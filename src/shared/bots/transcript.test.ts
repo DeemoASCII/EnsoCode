@@ -39,6 +39,20 @@ describe('buildGroupDelta', () => {
     expect(r.cursor).toBe(3);
   });
 
+  it('读取下限：新对话分隔线之前的不进上下文，没有会话时仍带群介绍', () => {
+    const entries = [human(1, '旧事'), human(2, '分隔线'), human(3, '新事')];
+    const fresh = buildGroupDelta({ ...base, cursor: 0, floor: 2, entries });
+    expect(fresh.text).toContain('项目群');
+    expect(fresh.text).toContain('新事');
+    expect(fresh.text).not.toContain('旧事');
+    expect(fresh.text).not.toContain('分隔线');
+    expect(fresh.cursor).toBe(3);
+    const later = buildGroupDelta({ ...base, cursor: 3, floor: 2, entries: [human(4, '再说')] });
+    expect(later.text).toBe(
+      `<group-message from="${TRANSCRIPT_LABELS.human}" role="${TRANSCRIPT_LABELS.humanRole}" seq="4">再说</group-message>`
+    );
+  });
+
   it('人类发言用固定的 from/role 常量', () => {
     const r = buildGroupDelta({ ...base, cursor: 1, entries: [human(2, '你好')] });
     expect(r.text).toBe(

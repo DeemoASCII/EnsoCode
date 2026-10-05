@@ -133,6 +133,7 @@ import {
   parseAbilitySuggestRequest,
   parseBotDraftInput,
   parseBotUpdateInput,
+  parseChatCloneInput,
   parseChatCreateInput,
   parseChatUpdateInput,
   parseGoalSuggestRequest,
@@ -656,6 +657,44 @@ function activeMembers(bots: BotServices, members: readonly string[]): boolean {
   });
 }
 
+/** 建群失败：撤掉刚建的群专属目录项目 */
+function discardNewChatHome(bots: BotServices, chatId: string, workspace: BotChatWorkspace): void {
+  if (workspace.kind !== 'chat-home') return;
+  getSourceAuthorityRegistry()?.removeBotHomeProject(workspace.projectId);
+  rmSync(path.dirname(bots.chats.workspaceDir(chatId)), { recursive: true, force: true });
+}
+
+/**
+ * 群开新对话：停掉所有成员与排队，未 keep 的委派取消，结束全部成员会话，写分隔线并记 epochSeq。
+ * 旧段不提炼进记忆；当前段为空时不重复写分隔线。
+ */
+async function startGroupConversation(
+  services: BotServices,
+  chat: BotChat
+): Promise<BotNewSessionResult> {
+  const { chats, host, groups, delegations } = services;
+  const epochSeq = chat.epochSeq ?? 0;
+  if (chats.lastSeq(chat.id) <= epochSeq) return { ok: true, epochSeq };
+  const stopped = await groups.stop(chat.id);
+  if (!stopped.ok) return stopped;
+  await Promise.all(Object.keys(chat.sessions).map((botId) => host.stopTurn(chat.id, botId)));
+  delegations.startOver(chat.id);
+  host.resetSessions(chat.id);
+  const divider = chats.appendEntry(chat.id, {
+    kind: 'system',
+    id: randomUUID(),
+    at: Date.now(),
+    text: '新对话',
+    newConversation: true,
+  });
+  if (!divider) return INVALID;
+  chats.update(chat.id, (draft) => ({ ...draft, epochSeq: divider.seq }));
+  emitBotEvent({ kind: 'timeline', chatId: chat.id, seq: divider.seq });
+  emitBotEvent({ kind: 'chat', chatId: chat.id });
+  void delegations.deliverPending();
+  return { ok: true, epochSeq: divider.seq };
+}
+
 type Handler = (sender: number, request: unknown, bots: BotServices) => unknown;
 
 /**
@@ -941,7 +980,7 @@ export function groupHistoryTool(
   const query = parseGroupHistoryQuery(params);
   if (typeof query === 'string') return { ok: false, error: query };
   return queryGroupHistoryNewestFirst(
-    services.chats.backward(chat.id),
+    services.chats.backward(chat.id, undefined, chat.epochSeq ?? 0),
     (id) => services.bots.get(id)?.name,
     query
   );
@@ -1404,13 +1443,7 @@ export function registerBotHandlers(): void {
       if ('error' in workspace) return { ok: false, error: workspace.error };
       const chat = services.chats.create({ ...input, workspace }, chatId);
       if (!chat) {
-        if (workspace.kind === 'chat-home') {
-          getSourceAuthorityRegistry()?.removeBotHomeProject(workspace.projectId);
-          rmSync(path.dirname(services.chats.workspaceDir(chatId)), {
-            recursive: true,
-            force: true,
-          });
-        }
+        discardNewChatHome(services, chatId, workspace);
         return INVALID;
       }
       emitBotEvent({ kind: 'chat', chatId });
@@ -1495,9 +1528,11 @@ export function registerBotHandlers(): void {
   handle(
     IPC_CHANNELS.BOT_CHAT_NEW_SESSION,
     'write',
-    async (_sender, request, { chats, host, memory }): Promise<BotNewSessionResult> => {
+    async (_sender, request, services): Promise<BotNewSessionResult> => {
+      const { chats, host, memory } = services;
       const chatId = chatIdOf(request);
       const chat = chatId ? chats.get(chatId) : undefined;
+      if (chat?.kind === 'group') return startGroupConversation(services, chat);
       if (chat?.kind !== 'direct') return INVALID;
       const old = chat.sessions[chat.members[0]];
       if (old) await host.stopTurn(chat.id, chat.members[0]);
@@ -1506,6 +1541,40 @@ export function registerBotHandlers(): void {
       return host.ensureSession(chat.id, chat.members[0], { fresh: true });
     }
   );
+
+  handle(IPC_CHANNELS.BOT_CHAT_CLONE, 'write', (_sender, request, services): BotChatWriteResult => {
+    const input = parseChatCloneInput(request);
+    const source = input ? services.chats.get(input.chatId) : undefined;
+    if (!input || source?.kind !== 'group') return INVALID;
+    const members = source.members.filter((id) => activeMembers(services, [id]));
+    const chatId = randomUUID();
+    // 群专属目录不能共用（删原群会连目录一起删），克隆群新建空目录；绑项目的沿用同一项目
+    const workspace = resolveWorkspaceInput(
+      services,
+      chatId,
+      source.workspace.kind === 'project'
+        ? { kind: 'project', projectId: source.workspace.projectId }
+        : { kind: source.workspace.kind }
+    );
+    if ('error' in workspace) return { ok: false, error: workspace.error };
+    const chat = services.chats.create(
+      {
+        kind: 'group',
+        title: input.title,
+        members,
+        bossBotId: source.bossBotId && members.includes(source.bossBotId) ? source.bossBotId : null,
+        workspace,
+        routing: source.routing,
+      },
+      chatId
+    );
+    if (!chat) {
+      discardNewChatHome(services, chatId, workspace);
+      return INVALID;
+    }
+    emitBotEvent({ kind: 'chat', chatId });
+    return { ok: true, chat };
+  });
 
   handle(
     IPC_CHANNELS.BOT_CHAT_SESSIONS,

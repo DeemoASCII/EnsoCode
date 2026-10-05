@@ -6,6 +6,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ApprovalBar } from '@/components/chat/ApprovalBar';
 import { APPROVAL_MODE_META } from '@/components/chat/ApprovalModePicker';
 import { AskBar } from '@/components/chat/AskBar';
+import { ConfirmDialog } from '@/components/chat/ConfirmDialog';
 import { CHAT_COL } from '@/components/chat/MessageTimeline';
 import { ResizeHandle } from '@/components/chat/ResizeHandle';
 import { sidePanelWidthTransition } from '@/components/sidepanel/sidePanelWidthAnim';
@@ -98,6 +99,7 @@ export function BotChatView({ chat }: { chat: BotChat }) {
     if (parent) useBotsStore.getState().nudgePanelWidth(-deltaX, parent.clientWidth);
   }, []);
   const [history, setHistory] = useState<{ id: string; title: string } | null>(null);
+  const [confirmNew, setConfirmNew] = useState(false);
   const [historyFocus, setHistoryFocus] = useState<MessageFocus | undefined>();
   const [live, setLive] = useState<{ id: string; botId: string } | null>(null);
   const focus = useBotsStore((s) => (s.focus?.chatId === chat.id ? s.focus : null));
@@ -241,6 +243,16 @@ export function BotChatView({ chat }: { chat: BotChat }) {
     return true;
   };
 
+  const startNewConversation = () => {
+    const before = chat.epochSeq ?? 0;
+    void window.electronAPI.bots.newSession(chat.id).then((result) => {
+      if (!result.ok) addToast({ type: 'error', title: chatErrorText(result.error, t) });
+      else if ('epochSeq' in result && result.epochSeq === before)
+        addToast({ type: 'info', title: t('This conversation has no messages yet.') });
+      else void useBotsStore.getState().refreshChats();
+    });
+  };
+
   return (
     <div className="flex min-h-0 min-w-0 flex-1">
       <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-background">
@@ -270,7 +282,7 @@ export function BotChatView({ chat }: { chat: BotChat }) {
           </div>
           <div className="flex-1" />
           <WorkspaceMenu chat={chat} />
-          {direct && (
+          {direct ? (
             <button
               type="button"
               disabled={archived}
@@ -286,8 +298,35 @@ export function BotChatView({ chat }: { chat: BotChat }) {
               <MessageSquarePlus className="h-3.5 w-3.5" />
               {t('New conversation')}
             </button>
+          ) : (
+            <button
+              type="button"
+              disabled={archived}
+              onClick={() =>
+                summary.running ||
+                runtime?.current ||
+                runtime?.routing ||
+                chatDelegations.some((item) => item.state === 'queued' || item.state === 'running')
+                  ? setConfirmNew(true)
+                  : startNewConversation()
+              }
+              className="flex h-7 items-center gap-1 rounded-md border px-2 text-muted-foreground text-xs transition-colors hover:bg-muted hover:text-foreground disabled:opacity-50"
+            >
+              <MessageSquarePlus className="h-3.5 w-3.5" />
+              {t('New conversation')}
+            </button>
           )}
         </header>
+        <ConfirmDialog
+          open={confirmNew}
+          onOpenChange={setConfirmNew}
+          title={t('Start a new conversation?')}
+          description={t(
+            'Members still replying are stopped, and delegations not marked keep are canceled. Earlier messages fold into one row; members start fresh after the divider.'
+          )}
+          confirmLabel={t('Stop and start')}
+          onConfirm={startNewConversation}
+        />
 
         {direct ? (
           <>

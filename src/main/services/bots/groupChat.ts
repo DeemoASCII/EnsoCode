@@ -429,10 +429,9 @@ export class GroupChatService {
       const input = buildSmartRouteInput(
         chat,
         members,
-        this.deps.chats.readEntries(chat.id, {
-          beforeSeq: entry.seq,
-          limit: SMART_ROUTE_HISTORY_SCAN,
-        }),
+        this.deps.chats
+          .readEntries(chat.id, { beforeSeq: entry.seq, limit: SMART_ROUTE_HISTORY_SCAN })
+          .filter((item) => item.seq > (chat.epochSeq ?? 0)),
         entry
       );
       void this.smartRoute(chat.id, responder, input, abort);
@@ -642,11 +641,13 @@ export class GroupChatService {
     lead?: string
   ) {
     const cursor = chat.sessions[botId]?.cursor ?? 0;
-    const entries = this.deps.chats.readAfter(chat.id, cursor);
+    const floor = chat.epochSeq ?? 0;
+    const entries = this.deps.chats.readAfter(chat.id, Math.max(cursor, floor));
     const delta = buildGroupDelta({
       entries,
       botId,
       cursor,
+      floor,
       members: this.members(chat),
       chatTitle: chat.title,
     });

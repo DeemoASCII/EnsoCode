@@ -444,6 +444,19 @@ export class DelegationService {
     if (rest.length && !rest.some(active)) this.delivered(rest);
   }
 
+  /** 群开新对话：未 keep 的取消，已结束未投递的只落时间线；keep 的跑完后父会话已结束，同样只落时间线 */
+  startOver(chatId: string): void {
+    const records = () => this.deps.store.list().filter((record) => record.chatId === chatId);
+    this.discarding = true;
+    try {
+      for (const record of records()) if (active(record) && !record.keep) this.cancel(record.id);
+    } finally {
+      this.discarding = false;
+    }
+    const done = records().filter((record) => !active(record) && record.deliveredAt === undefined);
+    if (done.length) this.delivered(done);
+  }
+
   /** 私聊回退越过发起委派的回合：取消进行中的，未投递结果一律作废（规则见 rewoundDelegations） */
   discardRewound(parentConversationId: string, since: number): void {
     const { cancel, discard } = rewoundDelegations(this.list(), parentConversationId, since);
@@ -478,7 +491,11 @@ export class DelegationService {
       )
         continue;
       const parent = this.deps.authority.conversation(head.parentConversationId);
-      if (!parent || parent.lifecycle === 'ended') continue;
+      if (!parent || parent.lifecycle === 'ended') {
+        if (head.chatId && this.deps.chats.get(head.chatId)?.kind === 'group')
+          this.delivered(batch);
+        continue;
+      }
       if (this.deps.host.hasStartedDelivery(head.parentConversationId, deliveryId)) {
         this.delivered(batch);
         continue;

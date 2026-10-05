@@ -104,9 +104,26 @@ export function GroupTimeline({
   /** 翻页 / 裁剪期间的视口锚点：某条目相对视口顶部的位置，落地后据此还原 */
   const anchorRef = useRef<{ seq: number; top: number } | null>(null);
   const wasHistoryRef = useRef(false);
-  const entries = timeline?.entries ?? [];
+  const loaded = timeline?.entries ?? [];
   const history = timeline?.history;
+  // 最近一条「新对话」分隔线之前默认收起，点开才往上加载；历史窗口（跳转）时全部显示
+  const epoch = chat.epochSeq ?? 0;
+  const [expanded, setExpanded] = useState(false);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: 切换聊天或再开新对话时重新收起
+  useEffect(() => setExpanded(false), [chat.id, epoch]);
+  const folded = epoch > 0 && !expanded && !history;
+  const entries = useMemo(
+    () => (folded ? loaded.filter((entry) => entry.seq >= epoch) : loaded),
+    [loaded, folded, epoch]
+  );
   const rows = useMemo(() => buildRows(entries), [entries]);
+  const toggleEarlier = () => {
+    if (folded && timeline?.hasOlder && !timeline.loading && !loaded.some((e) => e.seq < epoch)) {
+      captureAnchor();
+      onLoadOlder();
+    }
+    setExpanded(folded);
+  };
   /** 每个成员最后一个显示出来的头像挂状态角标；历史窗口里不是最新，不挂 */
   const latestAvatars = useMemo(() => {
     const byBot = new Map<string, string>();
@@ -205,7 +222,8 @@ export function GroupTimeline({
     atBottomRef.current = fromBottom < 40;
     // 加载期间用户继续滚动：锚点跟着更新，落地时不把视口拉回去
     if (anchorRef.current) captureAnchor();
-    if (entries.length === 0) return;
+    // 收起时读到分隔线就不再往上自动加载
+    if (entries.length === 0 || (folded && (loaded[0]?.seq ?? 0) <= epoch)) return;
     if (el.scrollTop < 80 && timeline.hasOlder && !timeline.loading) {
       captureAnchor();
       onLoadOlder();
@@ -223,6 +241,10 @@ export function GroupTimeline({
   // biome-ignore lint/correctness/useExhaustiveDependencies: 条目加载与跳转状态是推进信号
   useLayoutEffect(() => {
     if (!focus || handledFocus.current === focus.nonce) return;
+    if (folded && focus.seq < epoch) {
+      setExpanded(true);
+      return;
+    }
     const first = entries[0]?.seq;
     const last = entries.at(-1)?.seq;
     const mine = jump?.nonce === focus.nonce ? jump : null;
@@ -256,7 +278,7 @@ export function GroupTimeline({
     scrollRef.current
       ?.querySelector(`[data-seq="${focus.seq}"]`)
       ?.scrollIntoView({ block: 'center' });
-  }, [focus, entries, timeline === undefined, jump]);
+  }, [focus, entries, timeline === undefined, jump, folded]);
   useEffect(() => {
     if (flashSeq === null) return;
     const timer = window.setTimeout(() => setFlashSeq(null), 2500);
@@ -284,7 +306,7 @@ export function GroupTimeline({
                 <Loader2 className="h-4 w-4 animate-spin" />
               </div>
             )}
-            {timeline && !timeline.hasOlder && entries.length > 0 && (
+            {timeline && !timeline.hasOlder && !folded && entries.length > 0 && (
               <div className="text-center text-[11px] text-muted-foreground">
                 {t('Beginning of the chat')}
               </div>
@@ -307,6 +329,22 @@ export function GroupTimeline({
                 </div>
               ) : (
                 <Fragment key={row.key}>
+                  {epoch > 0 && !history && row.entry.seq === epoch && (
+                    <button
+                      type="button"
+                      onClick={toggleEarlier}
+                      className="flex items-center gap-1 self-center rounded-md px-2 py-1 text-muted-foreground text-xs hover:bg-muted hover:text-foreground"
+                    >
+                      {folded ? (
+                        <ChevronRight className="h-3.5 w-3.5" />
+                      ) : (
+                        <ChevronDown className="h-3.5 w-3.5" />
+                      )}
+                      {folded
+                        ? t('Earlier conversation · {{n}} messages', { n: epoch - 1 })
+                        : t('Collapse earlier conversation')}
+                    </button>
+                  )}
                   <div
                     data-seq={row.entry.seq}
                     className={cn(
@@ -422,6 +460,14 @@ const EntryRow = memo(function EntryRow({
   const { t } = useI18n();
   switch (entry.kind) {
     case 'system':
+      if (entry.newConversation)
+        return (
+          <div className="flex items-center gap-3 text-muted-foreground text-xs">
+            <div className="h-px flex-1 bg-border" />
+            {t('New conversation')} · {timeOf(entry.at)}
+            <div className="h-px flex-1 bg-border" />
+          </div>
+        );
       return entry.routine ? (
         <RoutineProposalCard text={entry.text} target={entry.routine} />
       ) : (

@@ -204,6 +204,43 @@ describe('BotChatStore timeline', () => {
     expect(reloaded.findEntry(chat.id, 'e4')).toMatchObject({ seq: 4 });
   });
 
+  it('builds the dedupe index only after the new-conversation divider; old lookups still work', () => {
+    const small = new BotChatStore(root, now, { chunkSize: 11 });
+    const chat = small.create({
+      kind: 'group',
+      title: 't',
+      members: [BOT_A, BOT_B],
+      bossBotId: BOT_A,
+      workspace: { kind: 'project', projectId: 'p' },
+    });
+    if (!chat) throw new Error('create failed');
+    for (let i = 1; i <= 5; i++)
+      small.appendEntry(chat.id, { id: `e${i}`, at: i, kind: 'system', text: `旧${i}` });
+    small.update(chat.id, (draft) => ({ ...draft, epochSeq: 3 }));
+
+    const reloaded = new BotChatStore(root, now, { chunkSize: 11 });
+    expect(reloaded.get(chat.id)?.epochSeq).toBe(3);
+    expect(reloaded.hasEntry(chat.id, 'e5')).toBe(true);
+    expect(reloaded.hasEntry(chat.id, 'e4')).toBe(true);
+    expect(reloaded.hasEntry(chat.id, 'e3')).toBe(false);
+    expect(reloaded.hasEntry(chat.id, 'e1')).toBe(false);
+    expect(reloaded.findEntry(chat.id, 'e2')).toMatchObject({ seq: 2, text: '旧2' });
+    expect(reloaded.findEntry(chat.id, 'e3')).toMatchObject({ seq: 3 });
+    expect(reloaded.hasEntry(chat.id, 'e1')).toBe(true);
+    reloaded.appendEntry(chat.id, { id: 'e6', at: 6, kind: 'system', text: 'x' });
+    expect(reloaded.findEntry(chat.id, 'e6')).toMatchObject({ seq: 6 });
+    expect(reloaded.findEntry(chat.id, 'missing')).toBeUndefined();
+  });
+
+  it('reads backward down to a lower bound', () => {
+    const chat = group();
+    for (let i = 1; i <= 6; i++)
+      store.appendEntry(chat.id, { id: `e${i}`, at: i, kind: 'system', text: String(i) });
+    expect([...store.backward(chat.id, undefined, 3)].map((e) => e.seq)).toEqual([6, 5, 4]);
+    expect([...store.backward(chat.id, undefined, 6)]).toEqual([]);
+    expect(store.readAfter(chat.id, 4).map((e) => e.seq)).toEqual([5, 6]);
+  });
+
   it('scans the whole timeline asynchronously in batches', async () => {
     const chat = group();
     for (let i = 1; i <= 5; i++)

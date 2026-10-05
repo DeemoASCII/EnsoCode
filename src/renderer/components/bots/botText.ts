@@ -96,3 +96,9 @@ export function workspaceLabel(
 export function localProjects(projects: readonly Project[]): Project[] {
   return projects.filter((project) => project.kind !== 'ssh');
 }
+
+/** 「X 的副本」重名时依次加 2、3… */
+export function cloneTitle(base: string, taken: readonly string[]): string {
+  if (!taken.includes(base)) return base;
+  for (let n = 2; ; n++) if (!taken.includes(`${base} ${n}`)) return `${base} ${n}`;
+}
