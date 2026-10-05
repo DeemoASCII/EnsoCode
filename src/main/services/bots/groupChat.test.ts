@@ -346,6 +346,132 @@ it('limits relay and does not publish skip replies', async () => {
   expect(entries().filter((e) => e.kind === 'bot')).toHaveLength(2);
 });
 
+describe('all-skipped human rounds', () => {
+  const targets = () => deliver.mock.calls.map((call) => call[1]);
+  const notices = () => entries().filter((entry) => entry.kind === 'system');
+
+  it('forwards a mentioned member skip to the boss once and retains the original image', async () => {
+    const images = [{ data: 'cGljdHVyZQ==', mimeType: 'image/png' }];
+    await group.send(
+      id,
+      '@Bob 这里怎么乱码了？',
+      { images, deliveryId: 'human-image' },
+      undefined,
+      ['image.png']
+    );
+    await done(b, ' [SKIP] ');
+    expect(targets()).toEqual([b, a]);
+    expect(deliver.mock.calls[1][2]).toContain('这里怎么乱码了？');
+    expect(deliver.mock.calls[1][3]).toMatchObject({ images });
+    expect(deliver.mock.calls[1][3].deliveryId).not.toBe('human-image');
+    expect(notices()).toMatchObject([{ text: '「Bob」已跳过，交给群主「Alice」回复。' }]);
+    await done(a, '[skip]');
+    expect(targets()).toEqual([b, a]);
+    expect(group.state(id)).toMatchObject({ current: null, queue: [] });
+    expect(notices().at(-1)?.text).toContain('本轮无人回复');
+    expect(entries().filter((entry) => entry.kind === 'bot')).toEqual([]);
+  });
+
+  it('reports no reply when the boss is the only skipped member', async () => {
+    await group.send(id, 'hello');
+    await done(a, '[skip]');
+    expect(targets()).toEqual([a]);
+    expect(notices()).toMatchObject([{ text: '「Alice」已跳过，本轮无人回复。' }]);
+  });
+
+  it('waits for the whole selected queue before forwarding and names every skipped member', async () => {
+    const carol = bots.create({ name: 'Carol' }, []);
+    if (!carol.ok) throw new Error('fixture');
+    const c = carol.bot.id;
+    chats.update(id, (chat) => ({ ...chat, members: [a, b, c] }));
+    await group.send(id, '@Bob @Carol hello');
+    await done(b, '[skip]');
+    expect(targets()).toEqual([b, c]);
+    expect(notices()).toEqual([]);
+    await done(c, '[skip]');
+    expect(targets()).toEqual([b, c, a]);
+    expect(notices()).toMatchObject([{ text: '「Bob」「Carol」已跳过，交给群主「Alice」回复。' }]);
+  });
+
+  it('does not repeat the boss when everyone was explicitly selected', async () => {
+    await group.send(id, '@所有人 hello');
+    await done(a, '[skip]');
+    expect(notices()).toEqual([]);
+    await done(b, '[skip]');
+    expect(targets()).toEqual([a, b]);
+    expect(notices()).toMatchObject([{ text: '「Alice」「Bob」已跳过，本轮无人回复。' }]);
+  });
+
+  it('does not forward a skip after someone has already spoken', async () => {
+    await group.send(id, '@Bob hello');
+    await done(b, 'answer @Alice');
+    await done(a, '[skip]');
+    expect(targets()).toEqual([b, a]);
+    expect(notices()).toEqual([]);
+  });
+
+  it.each(['deliver', 'turn'] as const)(
+    'does not treat a %s failure as a skip',
+    async (failure) => {
+      if (failure === 'deliver') deliver.mockResolvedValueOnce({ ok: false, error: 'offline' });
+      await group.send(id, '@Bob @Alice hello');
+      if (failure === 'turn') await done(b, '[skip]', false);
+      await done(a, '[skip]');
+      expect(targets()).toEqual([b, a]);
+      expect(notices()).toHaveLength(1);
+      expect(notices()[0].text).not.toContain('本轮无人回复');
+    }
+  );
+
+  it('does not forward autonomous skips or retain skip tracking from the previous round', async () => {
+    await group.send(id, '@Bob hello');
+    await done(b, '[skip]');
+    await done(a, '[skip]');
+    const count = notices().length;
+    await group.runAs(id, b, 'routine', undefined);
+    await done(b, '[skip]');
+    expect(targets()).toEqual([b, a, b]);
+    expect(notices()).toHaveLength(count);
+  });
+
+  it('starts a pending human message without announcing a discarded fallback', async () => {
+    await group.send(id, '@Bob old');
+    await group.send(id, '@Alice new');
+    await done(b, '[skip]');
+    expect(targets()).toEqual([b, a]);
+    expect(notices()).toEqual([]);
+    await done(a, '[skip]');
+    expect(notices()).toMatchObject([{ text: '「Alice」已跳过，本轮无人回复。' }]);
+  });
+
+  it('counts the fallback toward the existing hop and per-member limits', async () => {
+    chats.update(id, (chat) => ({
+      ...chat,
+      routing: { ...chat.routing, maxHops: 1, maxTurnsPerBot: 1 },
+    }));
+    await group.send(id, '@Bob hello');
+    await done(b, '[skip]');
+    expect(group.state(id)).toMatchObject({ hops: 1, turnsByBot: { [a]: 1, [b]: 0 } });
+    await done(a, '@Bob take another look');
+    expect(targets()).toEqual([b, a]);
+    expect(group.state(id)).toMatchObject({ current: null });
+    expect(notices().at(-1)?.text).toContain('本轮接力已达上限');
+  });
+
+  it('does not forward twice even if the boss changes during the fallback', async () => {
+    const carol = bots.create({ name: 'Carol' }, []);
+    if (!carol.ok) throw new Error('fixture');
+    const c = carol.bot.id;
+    chats.update(id, (chat) => ({ ...chat, members: [a, b, c] }));
+    await group.send(id, '@Bob hello');
+    await done(b, '[skip]');
+    chats.update(id, (chat) => ({ ...chat, bossBotId: c }));
+    await done(a, '[skip]');
+    expect(targets()).toEqual([b, a]);
+    expect(notices().at(-1)?.text).toContain('本轮无人回复');
+  });
+});
+
 it('continues after failed turns and delivery without advancing failed cursor', async () => {
   chats.update(id, (c) => ({ ...c, sessions: { [a]: { conversationId: a, cursor: 0 } } }));
   deliver.mockResolvedValueOnce({ ok: false, error: 'offline' });
@@ -634,6 +760,22 @@ describe('smart routing', () => {
       { botId: b, routedBy: 'smart' },
       { botId: a, routedBy: 'smart' },
     ]);
+  });
+
+  it('智能选中成员全跳过时保留原图交群主，不再调用分类器', async () => {
+    select.mockResolvedValueOnce({ ids: [b] });
+    const images = [{ data: 'cGljdHVyZQ==', mimeType: 'image/png' }];
+    await group.send(id, '这里怎么乱码了？', { images }, undefined, ['image.png']);
+    await vi.waitFor(() => expect(deliver).toHaveBeenCalledTimes(1));
+    await done(b, '[skip]');
+    expect(deliver.mock.calls.map((call) => call[1])).toEqual([b, a]);
+    expect(deliver.mock.calls[1][2]).toContain('这里怎么乱码了？');
+    expect(deliver.mock.calls[1][3]).toMatchObject({ images });
+    expect(select).toHaveBeenCalledTimes(1);
+    await done(a, '我来检查');
+    expect(group.state(id)).toMatchObject({ current: null, hops: 1 });
+    expect(entries().filter((entry) => entry.kind === 'bot')).toMatchObject([{ botId: a }]);
+    expect(entries().at(-1)).not.toHaveProperty('routedBy');
   });
 
   it('多人队列中第二位 [skip]：不写条目、不报错并结束本轮', async () => {

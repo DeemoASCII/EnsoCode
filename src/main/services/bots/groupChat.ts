@@ -49,6 +49,8 @@ import { readJson, writeJsonAtomic } from './files';
 
 interface Round {
   retrying?: boolean;
+  /** 仅人类触发且至今全员 [skip] 的轮次保留；群主兜底最多一次 */
+  allSkipped?: { botIds: BotId[]; forwarded?: boolean };
   state: RouterState;
   pending: HumanEntry[];
   options?: BotDeliverOptions;
@@ -511,6 +513,7 @@ export class GroupChatService {
     delete round.retrying;
     const members = this.members(chat);
     this.clearSmart(round);
+    round.allSkipped = { botIds: [] };
     const responder = this.deps.responder;
     if (responder && needsSmartRoute(chat, members, entry)) {
       round.state = empty();
@@ -596,6 +599,7 @@ export class GroupChatService {
   }
 
   private clearSmart(round: Round): void {
+    delete round.allSkipped;
     delete round.smartPicked;
     delete round.smartIntent;
     delete round.buildNote;
@@ -605,8 +609,9 @@ export class GroupChatService {
   private advance(chat: BotChat, text: string, delegated?: readonly string[], seq?: number): void {
     const round = this.round(chat.id);
     const members = this.members(chat);
+    const botId = round.state.current!;
     const result = onReply(round.state, chat, members, {
-      botId: round.state.current!,
+      botId,
       text,
       ...(delegated?.length ? { delegated } : {}),
       ...(seq !== undefined ? { seq } : {}),
@@ -618,6 +623,36 @@ export class GroupChatService {
         note: buildSummaryNote(members, result.summary.reports),
       };
     for (const notice of result.notices) this.system(chat.id, notice);
+    if (result.skipped) round.allSkipped?.botIds.push(botId);
+    else delete round.allSkipped;
+    const skipped = round.allSkipped;
+    if (!skipped?.botIds.length || round.state.current || round.pending.length > 0) return;
+    const names = skipped.botIds
+      .map((id) => `「${members.find((m) => m.id === id)?.name ?? id}」`)
+      .join('');
+    const boss = members.find((m) => m.id === chat.bossBotId && m.archivedAt === undefined);
+    if (
+      boss &&
+      !skipped.forwarded &&
+      !skipped.botIds.includes(boss.id) &&
+      round.state.hops < chat.routing.maxHops &&
+      (round.state.turnsByBot[boss.id] ?? 0) < chat.routing.maxTurnsPerBot
+    ) {
+      skipped.forwarded = true;
+      round.state = {
+        ...round.state,
+        current: boss.id,
+        hops: round.state.hops + 1,
+        turnsByBot: {
+          ...round.state.turnsByBot,
+          [boss.id]: (round.state.turnsByBot[boss.id] ?? 0) + 1,
+        },
+      };
+      this.system(chat.id, `${names}已跳过，交给群主「${boss.name}」回复。`);
+    } else {
+      delete round.allSkipped;
+      this.system(chat.id, `${names}已跳过，本轮无人回复。`);
+    }
   }
 
   private async dispatch(chatId: string): Promise<void> {
