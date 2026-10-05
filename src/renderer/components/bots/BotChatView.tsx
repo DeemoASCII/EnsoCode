@@ -597,7 +597,7 @@ export function PendingBars({
         const approvals = list.flatMap((item) => (item.kind === 'approval' ? [item.request] : []));
         const asks = list.flatMap((item) => (item.kind === 'ask' ? [item.request] : []));
         return (
-          <div key={conversationId}>
+          <div key={conversationId} data-pending-conversation={conversationId}>
             {(showNames || delegation) && (
               <div className="mb-1 flex items-center gap-1.5 text-muted-foreground text-xs">
                 <BotAvatar bot={bot} size="xs" />

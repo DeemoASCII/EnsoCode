@@ -7,6 +7,7 @@ import { cn } from '@/lib/utils';
 import { useBotsStore } from '@/stores/bots';
 import { delegationActions, formatElapsed, isActiveDelegation } from '@/stores/bots/delegations';
 import { BotAvatar } from './BotAvatar';
+import { PresenceChip, useDelegationPresence } from './PresenceMark';
 
 const timeOf = (at: number) =>
   new Date(at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
@@ -130,6 +131,8 @@ export function DelegationCard({
   const from = bots.get(record?.parentBotId ?? entry?.from ?? '');
   const to = bots.get(record?.targetBotId ?? entry?.to ?? '');
   const actions = delegationActions(state);
+  const presence = useDelegationPresence(record);
+  const active = presence && isActiveDelegation(state);
   const summary = record
     ? state === 'completed'
       ? record.result
@@ -145,10 +148,14 @@ export function DelegationCard({
         <BotAvatar bot={from} size="xs" />
         <span className="text-foreground">{from?.name ?? t('Deleted member')}</span>
         <span>→</span>
-        <BotAvatar bot={to} size="xs" />
+        <BotAvatar bot={to} size="xs" presence={presence?.state} />
         <span className="text-foreground">{to?.name ?? t('Deleted member')}</span>
         <span>· {t('Delegation')}</span>
-        <DelegationBadge state={state} interrupted={record?.failure === 'interrupted'} />
+        {active ? (
+          <PresenceChip info={presence} />
+        ) : (
+          <DelegationBadge state={state} interrupted={record?.failure === 'interrupted'} />
+        )}
         {record && <span>{formatElapsed((record.finishedAt ?? now) - record.createdAt)}</span>}
         <span className="flex-1" />
         <span>{timeOf(entry?.at ?? record?.createdAt ?? now)}</span>

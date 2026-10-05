@@ -34,6 +34,7 @@ import { useBotsStore } from '@/stores/bots';
 import { updateTemplateLibrary } from '@/stores/bots/templateLibrary';
 import { useSettingsStore } from '@/stores/settings';
 import { BotAvatar } from './BotAvatar';
+import { PresenceAvatar } from './BotPresence';
 import { chatErrorText } from './botText';
 import { GroupDelegations, TaskBoard } from './GroupBoard';
 import { MemorySpaceList } from './MemorySpaceList';
@@ -187,7 +188,7 @@ export function GroupInfoPanel({
                   onClick={() => void openDirect(id)}
                   className="flex min-w-0 flex-1 items-center gap-2 text-left"
                 >
-                  <BotAvatar bot={bot} size="sm" busy={runtime?.current === id} />
+                  <PresenceAvatar chatId={chat.id} botId={id} bot={bot} />
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-1.5 text-sm">
                       <span className="truncate">{bot?.name ?? t('Deleted member')}</span>

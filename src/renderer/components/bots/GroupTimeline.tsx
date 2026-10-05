@@ -38,6 +38,7 @@ import { useSettingsStore } from '@/stores/settings';
 import { ArtifactCards } from './ArtifactCards';
 import { BotAvatar } from './BotAvatar';
 import { BotLiveStatus } from './BotLiveStatus';
+import { PresenceAvatar } from './BotPresence';
 import { chatTitle } from './botText';
 import { DelegationCard } from './DelegationCard';
 import { RoutineProposalCard } from './RoutineCards';
@@ -106,6 +107,15 @@ export function GroupTimeline({
   const entries = timeline?.entries ?? [];
   const history = timeline?.history;
   const rows = useMemo(() => buildRows(entries), [entries]);
+  /** 每个成员最后一个显示出来的头像挂状态角标；历史窗口里不是最新，不挂 */
+  const latestAvatars = useMemo(() => {
+    const byBot = new Map<string, string>();
+    if (!history)
+      for (const row of rows)
+        if (row.kind === 'entry' && row.entry.kind === 'bot' && !row.continued)
+          byBot.set(row.entry.botId, row.entry.id);
+    return new Set(byBot.values());
+  }, [rows, history]);
   const records = useMemo(
     () =>
       new Map(
@@ -308,6 +318,7 @@ export function GroupTimeline({
                       chatId={chat.id}
                       entry={row.entry}
                       continued={row.continued}
+                      latest={latestAvatars.has(row.entry.id)}
                       bots={bots}
                       records={records}
                       onOpenConversation={openConversation}
@@ -394,6 +405,7 @@ const EntryRow = memo(function EntryRow({
   chatId,
   entry,
   continued,
+  latest,
   bots,
   records,
   onOpenConversation,
@@ -401,6 +413,8 @@ const EntryRow = memo(function EntryRow({
   chatId: string;
   entry: GroupEntry;
   continued: boolean;
+  /** 该成员最新一个头像：显示状态角标 */
+  latest: boolean;
   bots: Map<string, BotProfile>;
   records: Map<string, { record: Delegation; retried: boolean }>;
   onOpenConversation: (conversationId: string, title: string) => void;
@@ -443,7 +457,13 @@ const EntryRow = memo(function EntryRow({
       const bot = bots.get(entry.botId);
       return (
         <div className={cn('flex w-full gap-2.5', continued && '-mt-1.5')}>
-          {continued ? <span className="w-6 shrink-0" /> : <BotAvatar bot={bot} size="sm" />}
+          {continued ? (
+            <span className="w-6 shrink-0" />
+          ) : latest ? (
+            <PresenceAvatar chatId={chatId} botId={entry.botId} bot={bot} />
+          ) : (
+            <BotAvatar bot={bot} size="sm" />
+          )}
           <div className="min-w-0 flex-1">
             {!continued && (
               <div className="mb-0.5 text-muted-foreground text-xs">

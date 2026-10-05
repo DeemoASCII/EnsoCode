@@ -2,7 +2,9 @@ import { avatarPalette } from '@shared/bots/avatarPalette';
 import Avatar from 'boring-avatars';
 import { useState } from 'react';
 import { cn } from '@/lib/utils';
+import type { Presence } from '@/stores/bots/presence';
 import { type AvatarBot, botAvatarSrc } from './avatarImage';
+import { PresenceMark } from './PresenceMark';
 
 const SIZES = {
   xs: 'h-5 w-5 text-[9px]',
@@ -11,12 +13,13 @@ const SIZES = {
   lg: 'h-16 w-16 text-2xl',
 } as const;
 
-/** 成员头像：有图显示图片（加载失败回落），否则按名字与成员色生成 boring-avatars；busy 时右下角呼吸点 */
+/** 成员头像：有图显示图片（加载失败回落），否则按名字与成员色生成 boring-avatars；busy 时右下角呼吸点，presence 时右下角状态角标 */
 export function BotAvatar({
   bot,
   src: override,
   size = 'md',
   busy = false,
+  presence,
   className,
 }: {
   bot: AvatarBot | undefined;
@@ -24,6 +27,7 @@ export function BotAvatar({
   src?: string;
   size?: keyof typeof SIZES;
   busy?: boolean;
+  presence?: Presence;
   className?: string;
 }) {
   const src = override ?? (bot ? botAvatarSrc(bot) : undefined);
@@ -50,6 +54,12 @@ export function BotAvatar({
       ) : null}
       {busy && (
         <span className="-right-px -bottom-px absolute h-2.5 w-2.5 animate-pulse rounded-full border-2 border-background bg-success" />
+      )}
+      {presence && (
+        <PresenceMark
+          state={presence}
+          className="-right-1 -bottom-1 absolute box-content border-2 border-background"
+        />
       )}
     </span>
   );
