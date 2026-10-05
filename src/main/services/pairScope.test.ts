@@ -61,6 +61,7 @@ describe('配对作用域', () => {
       'voice-chunk',
       'bot-send',
       'bot-stop',
+      'bot-retry',
       'bot-inbox-dismiss',
     ] as const)
       expect(commandAllowedForScope('read', type), type).toBe(false);

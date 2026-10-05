@@ -285,6 +285,8 @@ export type GroupEntry =
       routine?: { botId: BotId; id: string };
       /** 群「新对话」分隔线 */
       newConversation?: true;
+      failure?: { botId: BotId; conversationId?: string; mode: 'resume' | 'deliver' };
+      retryOf?: string;
     });
 
 export type GroupEntryInput = GroupEntry extends infer E
@@ -586,6 +588,21 @@ export function parseGroupEntry(value: unknown): GroupEntry | undefined {
             kind: 'system',
             text: value.text,
             ...(value.newConversation === true ? { newConversation: true as const } : {}),
+            ...(isObject(value.failure) &&
+            isBotId(value.failure.botId) &&
+            (value.failure.mode === 'deliver' ||
+              (value.failure.mode === 'resume' && typeof value.failure.conversationId === 'string'))
+              ? {
+                  failure: {
+                    botId: value.failure.botId,
+                    mode: value.failure.mode as 'resume' | 'deliver',
+                    ...(typeof value.failure.conversationId === 'string'
+                      ? { conversationId: value.failure.conversationId }
+                      : {}),
+                  },
+                }
+              : {}),
+            ...(typeof value.retryOf === 'string' ? { retryOf: value.retryOf } : {}),
           };
     default:
       return undefined;

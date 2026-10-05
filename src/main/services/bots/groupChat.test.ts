@@ -19,6 +19,7 @@ let finish: (event: BotTurnFinished) => void;
 let deliverySent: (event: { conversationId: string; deliveryId: string }) => void;
 const deliver = vi.fn();
 const stopTurn = vi.fn(async () => {});
+const retryConversation = vi.fn(async (id: string) => ({ ok: true as const, conversationId: id }));
 const emit = vi.fn();
 const host = {
   onDeliverySent: (listener: typeof deliverySent) => {
@@ -26,6 +27,7 @@ const host = {
     return () => {};
   },
   deliver,
+  retryConversation,
   stopTurn,
   onTurnFinished: (listener: typeof finish) => {
     finish = listener;
@@ -85,6 +87,75 @@ it('routes mentions in order, then uses the boss without mentions', async () => 
   await group.send(id, 'question');
   expect(group.state(id)).toMatchObject({ current: a });
   expect(emit).toHaveBeenCalledWith({ kind: 'timeline', chatId: id, seq: 1 });
+});
+
+it('retries only the failed member in the same session and consumes the recovery action', async () => {
+  await group.send(id, '@Bob @Alice hello');
+  await done(b, '', false);
+  const failure = entries().find((entry) => entry.kind === 'system')!;
+  expect(failure).toMatchObject({ failure: { botId: b, conversationId: b, mode: 'resume' } });
+  expect(await group.retry(id, failure.id)).toEqual({ ok: false, error: 'session-busy' });
+  await done(a, 'done');
+  expect(await group.retry(id, failure.id)).toEqual({ ok: true });
+  expect(retryConversation).toHaveBeenCalledWith(b);
+  await done(b, 'fixed @Alice');
+  expect(deliver).toHaveBeenCalledTimes(2);
+  expect(entries().at(-1)).toMatchObject({ kind: 'bot', botId: b, text: 'fixed @Alice' });
+  expect(await group.retry(id, failure.id)).toEqual({ ok: false, error: 'retry-unavailable' });
+});
+
+it('rejects recovery after a new human message or conversation boundary', async () => {
+  await group.send(id, 'hello');
+  await done(a, '', false);
+  const failure = entries().at(-1)!;
+  await group.send(id, 'new task');
+  await done(a, 'done');
+  expect(await group.retry(id, failure.id)).toEqual({ ok: false, error: 'retry-unavailable' });
+  chats.update(id, (chat) => ({ ...chat, epochSeq: failure.seq + 1 }));
+  expect(await group.retry(id, failure.id)).toEqual({ ok: false, error: 'retry-unavailable' });
+  expect(retryConversation).not.toHaveBeenCalled();
+});
+
+it('re-delivers a message that never reached a worker without adding a duplicate human entry', async () => {
+  deliver.mockResolvedValueOnce({ ok: false, error: 'offline' });
+  await group.send(id, 'hello');
+  const failure = entries().at(-1)!;
+  expect(await group.retry(id, failure.id)).toEqual({ ok: true });
+  expect(deliver).toHaveBeenCalledTimes(2);
+  expect(retryConversation).not.toHaveBeenCalled();
+  expect(entries().filter((entry) => entry.kind === 'human')).toHaveLength(1);
+});
+
+it.each(['removed', 'replaced', 'archived'] as const)(
+  'rejects recovery when the member is %s',
+  async (change) => {
+    await group.send(id, '@Bob hello');
+    await done(b, '', false);
+    const failure = entries().at(-1)!;
+    chats.update(id, (chat) => {
+      if (change === 'removed') chat.members = [a, '11111111-1111-4111-8111-111111111111'];
+      if (change === 'replaced') chat.sessions[b].conversationId = 'replacement';
+      if (change === 'archived') chat.archivedAt = Date.now();
+      return chat;
+    });
+    expect((await group.retry(id, failure.id)).ok).toBe(false);
+    expect(retryConversation).not.toHaveBeenCalled();
+  }
+);
+
+it('restores an interrupted reply as a recoverable failure without automatically rerunning it', async () => {
+  await group.send(id, '@Bob hello');
+  // 模拟进程中断，不走会清空 router.json 的正常 dispose。
+  group = new GroupChatService({ bots, chats, host, emit });
+  const interrupted = entries().at(-1)!;
+  expect(interrupted).toMatchObject({ failure: { botId: b, mode: 'resume' } });
+  expect(retryConversation).not.toHaveBeenCalled();
+  const results = await Promise.all([
+    group.retry(id, interrupted.id),
+    group.retry(id, interrupted.id),
+  ]);
+  expect(results.filter((result) => result.ok)).toHaveLength(1);
+  expect(retryConversation).toHaveBeenCalledTimes(1);
 });
 it('queued delivery only commits cursor after the worker receives the message', async () => {
   chats.update(id, (chat) => ({ ...chat, sessions: { [a]: { conversationId: a, cursor: 0 } } }));

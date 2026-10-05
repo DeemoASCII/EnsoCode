@@ -436,7 +436,7 @@ export const IPC_CHANNELS = {
   BOT_ARTIFACT_OPEN: 'bots:artifact-open',
   /** 输入框 @文件补全：只收 chatId + 查询词，工作区根由 Main 推导 */
   BOT_FILE_SEARCH: 'bots:file-search',
-  /** 私聊回退 / 重试：只收 chatId（+ 持久化 user entryId），会话由 Main 按聊天推导 */
+  /** 回退 / 重试：只收 chatId（群重试加失败 entryId），会话由 Main 按聊天推导 */
   BOT_REWIND: 'bots:rewind',
   BOT_RETRY: 'bots:retry',
   /** 成员 / 团队模板库（userData/bot-templates.json）；写入后广播 CHANGED */

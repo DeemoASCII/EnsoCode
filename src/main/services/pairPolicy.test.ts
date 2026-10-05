@@ -583,6 +583,13 @@ describe('Bot 模式上行命令', () => {
       ok: true,
       command: { type: 'bot-stop', chatId },
     });
+    expect(parsePhoneCommand({ type: 'bot-retry', chatId, entryId: 'failure' })).toEqual({
+      ok: true,
+      command: { type: 'bot-retry', chatId, entryId: 'failure' },
+    });
+    expect(parsePhoneCommand({ type: 'bot-retry', chatId, conversationId: 'injected' }).ok).toBe(
+      false
+    );
     expect(parsePhoneCommand({ type: 'bot-timeline', chatId })).toEqual({
       ok: true,
       command: { type: 'bot-timeline', chatId },

@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { dirname, join } from 'node:path';
+import { retryableGroupFailures } from '../../../shared/bots/groupRetry';
 import { parseMentions } from '../../../shared/bots/mentions';
 import {
   buildSummaryNote,
@@ -47,6 +48,7 @@ import type { BotChatStore } from './chatStore';
 import { readJson, writeJsonAtomic } from './files';
 
 interface Round {
+  retrying?: boolean;
   state: RouterState;
   pending: HumanEntry[];
   options?: BotDeliverOptions;
@@ -88,8 +90,10 @@ export interface GroupBatchSettled {
 interface GroupChatDeps {
   bots: BotStore;
   chats: BotChatStore;
-  host: Pick<BotSessionHost, 'deliver' | 'onTurnFinished' | 'stopTurn' | 'onDeliverySent'>;
+  host: Pick<BotSessionHost, 'deliver' | 'onTurnFinished' | 'stopTurn' | 'onDeliverySent'> &
+    Partial<Pick<BotSessionHost, 'retryConversation'>>;
   emit: (event: BotEvent) => void;
+  retryImages?: (chatId: string, mediaIds: string[]) => NonNullable<BotDeliverOptions['images']>;
   responder?: GroupResponderSelector;
   /** 接力整批结束（无人在回复、无排队、无待路由消息）；用户停止的批次不报 */
   onBatchSettled?: (batch: GroupBatchSettled) => void;
@@ -155,7 +159,13 @@ export class GroupChatService {
         'current' in saved.state &&
         saved.state.current
       ) {
-        this.system(chat.id, '回复被中断');
+        const botId = typeof saved.state.current === 'string' ? saved.state.current : undefined;
+        const conversationId = botId ? chat.sessions[botId]?.conversationId : undefined;
+        this.system(
+          chat.id,
+          '回复被中断',
+          botId && conversationId ? { botId, conversationId, mode: 'resume' } : undefined
+        );
       }
       this.persist(chat.id);
     }
@@ -190,6 +200,75 @@ export class GroupChatService {
 
   settled(chatId: string): Promise<unknown> {
     return this.locks.get(chatId) ?? Promise.resolve();
+  }
+
+  retry(chatId: string, entryId: string): Promise<BotActionResult> {
+    return this.lock(chatId, async () => {
+      const chat = this.deps.chats.get(chatId);
+      if (this.disposed || chat?.kind !== 'group' || chat.archivedAt !== undefined)
+        return { ok: false, error: 'group-unavailable' };
+      const round = this.round(chatId);
+      if (round.state.current || round.routing || round.stopping || round.pending.length)
+        return { ok: false, error: 'session-busy' };
+      const entry = this.deps.chats.findEntry(chatId, entryId);
+      const entries = this.deps.chats.readAfter(chatId, chat.epochSeq ?? 0);
+      if (
+        entry?.kind !== 'system' ||
+        !entry.failure ||
+        !retryableGroupFailures(entries).has(entryId)
+      )
+        return { ok: false, error: 'retry-unavailable' };
+      const { botId, conversationId, mode } = entry.failure;
+      const bot = this.deps.bots.get(botId);
+      if (
+        !chat.members.includes(botId) ||
+        !bot ||
+        bot.archivedAt !== undefined ||
+        (mode === 'resume' && chat.sessions[botId]?.conversationId !== conversationId)
+      )
+        return { ok: false, error: 'retry-unavailable' };
+      round.state = { ...empty(), current: botId, turnsByBot: { [botId]: 1 } };
+      round.options = undefined;
+      round.retrying = true;
+      round.generation++;
+      this.persist(chatId);
+      try {
+        const human = entries.findLast((item) => item.kind === 'human');
+        const mediaIds = human?.kind === 'human' ? human.images : undefined;
+        if (mode === 'deliver' && mediaIds?.length && !this.deps.retryImages)
+          throw new Error('retry images unavailable');
+        const images =
+          mode === 'deliver' && mediaIds?.length
+            ? this.deps.retryImages?.(chatId, mediaIds)
+            : undefined;
+        const result =
+          mode === 'resume' && conversationId
+            ? ((await this.deps.host.retryConversation?.(conversationId)) ?? {
+                ok: false,
+                error: 'retry-unavailable',
+              })
+            : await this.deliver(chat, botId, { source: 'human', ...(images ? { images } : {}) });
+        if (!result.ok) {
+          round.state = empty();
+          delete round.retrying;
+          return result;
+        }
+        this.append(chatId, {
+          kind: 'system',
+          text: `正在重试 ${bot.name} 的回复`,
+          retryOf: entryId,
+          id: randomUUID(),
+          at: Date.now(),
+        });
+        return { ok: true };
+      } catch {
+        round.state = empty();
+        delete round.retrying;
+        return { ok: false, error: 'retry-unavailable' };
+      } finally {
+        this.persist(chatId);
+      }
+    });
   }
 
   state(chatId: string): BotChatStateResult {
@@ -301,6 +380,7 @@ export class GroupChatService {
       round.state = empty();
       round.pending = [];
       delete round.batch;
+      delete round.retrying;
       this.cancelRouting(round);
       this.clearSmart(round);
       for (const job of this.autonomous.get(chatId) ?? [])
@@ -342,7 +422,8 @@ export class GroupChatService {
           ? budgetNotice(name)
           : event.error === BOT_TURN_LIMIT_ERROR
             ? `${name} 本回合用量${event.estimated ? '（按估算）' : ''}超过单回合上限，已停止`
-            : `${name} 回复失败：${event.error ?? '未知错误'}`
+            : `${name} 回复失败：${event.error ?? '未知错误'}`,
+        { botId: event.botId, conversationId: event.conversationId, mode: 'resume' }
       );
     } else if (!isSkipReply(event.text) && event.turnId) {
       const smart = round.smartPicked?.includes(event.botId) ?? false;
@@ -366,12 +447,18 @@ export class GroupChatService {
     }
     round.smartPicked = round.smartPicked?.filter((botId) => botId !== event.botId);
     this.recordBatch(round, event);
-    this.advance(
-      chat,
-      event.ok ? event.text : '',
-      event.turnKey ? this.deps.delegatedTargets?.(event.conversationId, event.turnKey) : undefined,
-      seq
-    );
+    const retrying = round.retrying;
+    delete round.retrying;
+    if (retrying) round.state = empty();
+    else
+      this.advance(
+        chat,
+        event.ok ? event.text : '',
+        event.turnKey
+          ? this.deps.delegatedTargets?.(event.conversationId, event.turnKey)
+          : undefined,
+        seq
+      );
     const pending = mergePending(round.pending);
     if (pending) {
       round.pending = [];
@@ -421,6 +508,7 @@ export class GroupChatService {
   /** 新一轮：需要智能选人时异步分类（不占锁），否则按 @ / 群主直接开始 */
   private async begin(chat: BotChat, entry: HumanEntry): Promise<void> {
     const round = this.round(chat.id);
+    delete round.retrying;
     const members = this.members(chat);
     this.clearSmart(round);
     const responder = this.deps.responder;
@@ -599,7 +687,8 @@ export class GroupChatService {
           ? `${bot.name} 的投递已处理过，本次未发出`
           : sent.error === BOT_BUDGET_ERROR
             ? budgetNotice(bot.name)
-            : `${bot.name} 暂时无法回复`
+            : `${bot.name} 暂时无法回复`,
+        sent.ok ? undefined : { botId, mode: 'deliver' }
       );
       this.advance(chat, '');
     }
@@ -747,8 +836,18 @@ export class GroupChatService {
     if (saved) this.deps.emit({ kind: 'timeline', chatId: id, seq: saved.seq });
     return saved;
   }
-  private system(id: string, text: string): void {
-    this.append(id, { kind: 'system', id: randomUUID(), at: Date.now(), text });
+  private system(
+    id: string,
+    text: string,
+    failure?: Extract<GroupEntry, { kind: 'system' }>['failure']
+  ): void {
+    this.append(id, {
+      kind: 'system',
+      id: randomUUID(),
+      at: Date.now(),
+      text,
+      ...(failure ? { failure } : {}),
+    });
   }
   private lock<T>(id: string, task: () => Promise<T>): Promise<T> {
     const run = (this.locks.get(id) ?? Promise.resolve()).then(task, task);

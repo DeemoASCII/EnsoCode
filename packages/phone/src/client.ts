@@ -122,6 +122,7 @@ export interface ClientEvents {
   onBotEvent?(event: PairBotEvent): void;
   onBotChatState?(frame: BotChatStateFrame): void;
   onBotSendResult?(frame: BotSendResultFrame): void;
+  onBotRetryResult?(frame: Extract<HostToPhone, { type: 'bot-retry-result' }>): void;
   /** Bot 收件箱整表（未结束且未忽略） */
   onBotInbox?(items: PairBotInboxItem[]): void;
   /** 成员实时运行态整表；clockOffset = 本机时钟 − host 时钟 */
@@ -573,6 +574,10 @@ export class PairClient {
         break;
       case 'bot-send-result':
         if (typeof payload.deliveryId === 'string') this.events.onBotSendResult?.(payload);
+        break;
+      case 'bot-retry-result':
+        if (typeof payload.chatId === 'string' && typeof payload.entryId === 'string')
+          this.events.onBotRetryResult?.(payload);
         break;
       case 'bot-inbox':
         if (Array.isArray(payload.items)) this.events.onBotInbox?.(payload.items);

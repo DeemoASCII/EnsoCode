@@ -370,6 +370,14 @@ export function App() {
         outboxRef.current?.settle(result.deliveryId, result.ok, result.error);
         if (result.error === READ_ONLY_ERROR) rejectedReadOnly();
       },
+      onBotRetryResult: (result) => {
+        if (result.chatId === botChatIdRef.current)
+          setBotNotice(
+            result.ok
+              ? '已开始重试'
+              : `重试失败：${result.error === 'session-busy' ? '请等当前回复结束' : '该回复已过期或无法恢复，请重新发送需求'}`
+          );
+      },
       onSync: (state) => setSyncing(state === 'syncing'),
       onGhostSession: (id) => {
         // 订阅的会话已在桌面被删：跳回列表态，由 firstId 兑底选最近一条
@@ -765,6 +773,10 @@ export function App() {
           }}
           onSend={(text, images) => sendBot(chat.id, text, images)}
           onStop={() => send({ type: 'bot-stop', chatId: chat.id })}
+          onRetry={(entryId) => {
+            setBotNotice('正在请求重试…');
+            send({ type: 'bot-retry', chatId: chat.id, entryId });
+          }}
           onOpenProcess={setProcessId}
           onApproval={(sessionId, requestId, decision) =>
             send({ type: 'approval-respond', sessionId, requestId, decision })

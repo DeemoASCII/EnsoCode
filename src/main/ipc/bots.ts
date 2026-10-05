@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { mkdirSync, rmSync } from 'node:fs';
+import { mkdirSync, readFileSync, rmSync } from 'node:fs';
 import path from 'node:path';
 import { botBrowserKey } from '@shared/bots/browser';
 import { checkAvatarImage } from '@shared/bots/cardPng';
@@ -97,7 +97,7 @@ import { GroupTaskStore } from '../services/bots/groupTaskStore';
 import { GroupTaskService } from '../services/bots/groupTasks';
 import { BotInboxService } from '../services/bots/inbox';
 import { BotInboxStore } from '../services/bots/inboxStore';
-import { ScreenshotCache, sendImage, storeMedia } from '../services/bots/media';
+import { mediaFile, ScreenshotCache, sendImage, storeMedia } from '../services/bots/media';
 import { compressImage } from '../services/bots/mediaImage';
 import { removeBotMemorySpace } from '../services/bots/memoryCleanup';
 import { proposeRoutine } from '../services/bots/routineProposal';
@@ -411,6 +411,15 @@ export function getBotServices(): BotServices | null {
     chats,
     host,
     emit: emitBotEvent,
+    retryImages: (chatId, ids) =>
+      ids.map((id) => {
+        const file = mediaFile(chats.mediaDir(chatId), id);
+        if (!file) throw new Error('missing image');
+        return {
+          data: readFileSync(file).toString('base64'),
+          mimeType: id.endsWith('.jpg') ? 'image/jpeg' : `image/${id.split('.').at(-1)}`,
+        };
+      }),
     refsAppendix: (chat, botId, entries) => composerRefs.groupAppendix(chat, botId, entries),
     onBatchSettled: (batch) => {
       const chat = chats.get(batch.chatId);
@@ -965,13 +974,24 @@ export async function rewindBotChat(
   return { ok: true };
 }
 
-/** 私聊重试：经宿主占用回合，结算、并发与委派批次与普通投递一致 */
+/** 重试只收聊天及失败条目标识，目标会话由 Main 权威记录推导。 */
 export async function retryBotChat(
   services: BotServices,
   request: unknown
 ): Promise<BotActionResult> {
   const input = objectInput(request);
-  if (!input || Object.keys(input).some((key) => key !== 'chatId')) return INVALID;
+  if (
+    !input ||
+    !isBotId(input.chatId) ||
+    Object.keys(input).some((key) => key !== 'chatId' && key !== 'entryId')
+  )
+    return INVALID;
+  if (services.chats.get(input.chatId)?.kind === 'group') {
+    if (typeof input.entryId !== 'string' || !input.entryId || input.entryId.length > 200)
+      return INVALID;
+    return services.groups.retry(input.chatId, input.entryId);
+  }
+  if (input.entryId !== undefined) return INVALID;
   const target = directSession(services, input.chatId);
   if ('ok' in target) return target;
   const result = await services.host.retryConversation(target.conversationId);

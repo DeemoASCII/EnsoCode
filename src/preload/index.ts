@@ -1291,8 +1291,8 @@ const electronAPI = {
       entryId: string;
       restoreFiles?: boolean;
     }): Promise<BotActionResult> => ipcRenderer.invoke(IPC_CHANNELS.BOT_REWIND, request),
-    retry: (chatId: string): Promise<BotActionResult> =>
-      ipcRenderer.invoke(IPC_CHANNELS.BOT_RETRY, { chatId }),
+    retry: (chatId: string, entryId?: string): Promise<BotActionResult> =>
+      ipcRenderer.invoke(IPC_CHANNELS.BOT_RETRY, { chatId, ...(entryId ? { entryId } : {}) }),
     templates: {
       get: (): Promise<BotTemplatesResult> => ipcRenderer.invoke(IPC_CHANNELS.BOT_TEMPLATES_GET),
       save: (library: BotTemplateLibrary): Promise<BotTemplatesResult> =>

@@ -29,6 +29,7 @@ import {
   getBotServices,
   observeBotEvents,
   readBotTimeline,
+  retryBotChat,
   sendBotMessage,
 } from './bots';
 import { phoneArtifactImage, phoneArtifacts } from './botsContent';
@@ -233,6 +234,23 @@ async function handle(_pairId: string, command: PairBotCommand, reply: PairReply
     case 'bot-stop': {
       const result = await services.groups.stop(command.chatId);
       if (result.ok) replyState(services, command.chatId, reply);
+      return;
+    }
+    case 'bot-retry': {
+      const result = await retryBotChat(services, {
+        chatId: command.chatId,
+        entryId: command.entryId,
+      });
+      await reply({
+        type: 'bot-retry-result',
+        chatId: command.chatId,
+        entryId: command.entryId,
+        ...result,
+      });
+      if (result.ok) {
+        await replyTimeline(services, command.chatId, undefined, reply);
+        replyState(services, command.chatId, reply);
+      }
       return;
     }
     case 'bot-artifacts': {

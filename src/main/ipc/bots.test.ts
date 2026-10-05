@@ -462,7 +462,7 @@ describe('bots IPC', () => {
     });
     expect(await retryBotChat(services, { chatId: groupId })).toEqual({
       ok: false,
-      error: 'direct-only',
+      error: 'invalid',
     });
   });
 

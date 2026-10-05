@@ -1,3 +1,4 @@
+import { retryableGroupFailures } from '@shared/bots/groupRetry';
 import type { ProjectedMessage } from '@shared/types/agent';
 import type { BotChat, BotProfile, BotRoutedBy, Delegation, GroupEntry } from '@shared/types/bot';
 import {
@@ -21,6 +22,8 @@ import {
 import { Markdown } from '@/components/chat/Markdown';
 import { CHAT_COL } from '@/components/chat/MessageTimeline';
 import { USER_BUBBLE } from '@/components/chat/TimelineRow';
+import { Button } from '@/components/ui/button';
+import { addToast } from '@/components/ui/toast';
 import { useI18n } from '@/i18n';
 import { toolLabel } from '@/lib/toolLabels';
 import { cn } from '@/lib/utils';
@@ -39,7 +42,7 @@ import { ArtifactCards } from './ArtifactCards';
 import { BotAvatar } from './BotAvatar';
 import { BotLiveStatus } from './BotLiveStatus';
 import { PresenceAvatar } from './BotPresence';
-import { chatTitle } from './botText';
+import { chatErrorText, chatTitle } from './botText';
 import { DelegationCard } from './DelegationCard';
 import { RoutineProposalCard } from './RoutineCards';
 import { SilenceNote } from './SilenceNote';
@@ -105,6 +108,7 @@ export function GroupTimeline({
   const anchorRef = useRef<{ seq: number; top: number } | null>(null);
   const wasHistoryRef = useRef(false);
   const loaded = timeline?.entries ?? [];
+  const retryable = retryableGroupFailures(loaded, chat.epochSeq ?? 0);
   const history = timeline?.history;
   // 最近一条「新对话」分隔线之前默认收起，点开才往上加载；历史窗口（跳转）时全部显示
   const epoch = chat.epochSeq ?? 0;
@@ -357,6 +361,8 @@ export function GroupTimeline({
                       entry={row.entry}
                       continued={row.continued}
                       latest={latestAvatars.has(row.entry.id)}
+                      retryable={retryable.has(row.entry.id) && chat.archivedAt === undefined}
+                      retryBusy={Boolean(runtime?.current || runtime?.routing)}
                       bots={bots}
                       records={records}
                       onOpenConversation={openConversation}
@@ -447,17 +453,39 @@ const EntryRow = memo(function EntryRow({
   bots,
   records,
   onOpenConversation,
+  retryable,
+  retryBusy,
 }: {
   chatId: string;
   entry: GroupEntry;
   continued: boolean;
   /** 该成员最新一个头像：显示状态角标 */
   latest: boolean;
+  retryable: boolean;
+  retryBusy: boolean;
   bots: Map<string, BotProfile>;
   records: Map<string, { record: Delegation; retried: boolean }>;
   onOpenConversation: (conversationId: string, title: string) => void;
 }) {
   const { t } = useI18n();
+  const [retrying, setRetrying] = useState(false);
+  const retry = async () => {
+    if (retrying) return;
+    setRetrying(true);
+    try {
+      const result = await window.electronAPI.bots.retry(chatId, entry.id);
+      if (!result.ok)
+        addToast({
+          type: 'error',
+          title: t('Retry failed'),
+          description: chatErrorText(result.error, t),
+        });
+    } catch {
+      addToast({ type: 'error', title: t('Retry failed') });
+    } finally {
+      setRetrying(false);
+    }
+  };
   switch (entry.kind) {
     case 'system':
       if (entry.newConversation)
@@ -473,6 +501,17 @@ const EntryRow = memo(function EntryRow({
       ) : (
         <div className="self-center rounded-full bg-muted px-2.5 py-0.5 text-center text-muted-foreground text-xs">
           {entry.text}
+          {retryable && (
+            <Button
+              size="xs"
+              variant="outline"
+              className="ml-2"
+              disabled={retryBusy || retrying}
+              onClick={retry}
+            >
+              {t('Retry')}
+            </Button>
+          )}
         </div>
       );
     case 'human':

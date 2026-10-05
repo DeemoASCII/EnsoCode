@@ -7,6 +7,7 @@ import type {
   PairDelegationState,
   PairGroupEntry,
 } from '@enso/pair';
+import { retryableGroupFailures } from '@shared/bots/groupRetry';
 import { ArrowUp, ChevronRight, ImagePlus, Loader2, PanelLeft, Square, X } from 'lucide-react';
 import { type ReactNode, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { ApprovalBar } from '@/components/chat/ApprovalBar';
@@ -55,6 +56,7 @@ interface Props {
   onLoadOlder(): void;
   onSend(text: string, images: AttachedImage[]): void;
   onStop(): void;
+  onRetry?(entryId: string): void;
   onOpenProcess(conversationId: string): void;
   onApproval(
     sessionId: string,
@@ -116,6 +118,7 @@ export function GroupChatScreen(props: Props) {
   const [sending, setSending] = useState(false);
   const [imageError, setImageError] = useState<string | null>(null);
   const entries = timeline?.entries ?? [];
+  const retryable = retryableGroupFailures(entries);
   const members = chat.members
     .map((id) => bots.get(id))
     .filter((bot): bot is PairBotMember => Boolean(bot && !bot.archived));
@@ -274,6 +277,16 @@ export function GroupChatScreen(props: Props) {
         return (
           <p key={entry.seq} className="text-center text-muted-foreground text-xs">
             {entry.text}
+            {retryable.has(entry.id) && props.onRetry && !props.deviceReadOnly && (
+              <button
+                type="button"
+                className="ml-2 underline disabled:opacity-50"
+                disabled={running || props.connState !== 'online'}
+                onClick={() => props.onRetry?.(entry.id)}
+              >
+                重试
+              </button>
+            )}
           </p>
         );
     }

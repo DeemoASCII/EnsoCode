@@ -60,6 +60,8 @@ export function chatErrorText(error: string, t: TFunction): string {
       return t('This skill is not available to the member.');
     case 'session-busy':
       return t('The member is busy. Try again after the current turn.');
+    case 'retry-unavailable':
+      return t('This reply can no longer be retried. Please send your request again.');
     case 'rewind-target-not-found':
       return t('That message is no longer on the current branch.');
     default:

@@ -74,6 +74,10 @@ function parseBotCommand(v: Record<string, unknown>): CommandCheck {
     case 'bot-stop':
       if (!isChatId(v.chatId)) return { ok: false, error: 'invalid chatId' };
       return { ok: true, command: { type: v.type, chatId: v.chatId } };
+    case 'bot-retry':
+      if (!isChatId(v.chatId) || !isStr(v.entryId) || v.entryId.length > 200)
+        return { ok: false, error: 'invalid retry target' };
+      return { ok: true, command: { type: 'bot-retry', chatId: v.chatId, entryId: v.entryId } };
     case 'bot-timeline': {
       if (!isChatId(v.chatId)) return { ok: false, error: 'invalid chatId' };
       if (v.beforeSeq === undefined) {
