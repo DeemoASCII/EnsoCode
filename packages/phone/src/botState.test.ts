@@ -16,6 +16,7 @@ import {
   insertMention,
   mentionOptions,
   mergeGroupTimeline,
+  visibleGroupEntries,
 } from './botState';
 
 const member = (id: string, name: string, extra: Partial<PairBotMember> = {}): PairBotMember => ({
@@ -45,7 +46,7 @@ const chat = (
   ...extra,
 });
 
-const human = (seq: number): PairGroupEntry => ({
+const human = (seq: number): Extract<PairGroupEntry, { kind: 'human' }> => ({
   seq,
   id: `e${seq}`,
   at: seq,
@@ -92,6 +93,58 @@ describe('Bot 抽屉列表', () => {
 });
 
 describe('群时间线分页合并', () => {
+  it('stops requesting history when an older page is empty', () => {
+    const current = mergeGroupTimeline(undefined, page([4, 5]));
+    expect(
+      mergeGroupTimeline(current, page([], { beforeSeq: 4, hasOlder: false, lastSeq: 5 })).hasOlder
+    ).toBe(false);
+  });
+  it('does not replace a complete message with a relay-truncated projection', () => {
+    const current = mergeGroupTimeline(undefined, {
+      ...page([1]),
+      entries: [{ ...human(1), text: 'complete content' }],
+    });
+    const next = mergeGroupTimeline(current, {
+      ...page([1]),
+      entries: [{ ...human(1), text: 'complete', truncated: true }],
+    });
+    expect(next.entries[0]).toMatchObject({ text: 'complete content' });
+  });
+  it('leaves the old reading window when a new conversation starts and ignores old-epoch pages', () => {
+    const current = {
+      ...mergeGroupTimeline(undefined, page([1, 2, 3])),
+      history: true as const,
+      epochSeq: 0,
+    };
+    const next = mergeGroupTimeline(current, { ...page([4, 5]), epochSeq: 4 });
+    expect(next.entries.map((entry) => entry.seq)).toEqual([4, 5]);
+    expect(next.history).toBeUndefined();
+    expect(mergeGroupTimeline(next, { ...page([1, 2, 3], { beforeSeq: 4 }), epochSeq: 0 })).toBe(
+      next
+    );
+  });
+  it('shows the epoch and current segment until earlier messages are explicitly expanded', () => {
+    const entries = [human(1), human(2), human(3)];
+    expect(visibleGroupEntries(entries, 2, false).map((entry) => entry.seq)).toEqual([2, 3]);
+    expect(visibleGroupEntries(entries, 2, true)).toEqual(entries);
+  });
+  it('bounds long histories and retains the reading window when live updates arrive', () => {
+    const seqs = Array.from({ length: 600 }, (_, i) => i + 1);
+    const latest = mergeGroupTimeline(undefined, page(seqs));
+    expect(latest.entries).toHaveLength(400);
+    expect(latest.entries[0].seq).toBe(201);
+    const older = mergeGroupTimeline(
+      latest,
+      page(seqs.slice(150, 200), { beforeSeq: 201, lastSeq: 600 })
+    );
+    expect(older.entries).toHaveLength(400);
+    expect(older.entries[0].seq).toBe(151);
+    expect(older.entries.at(-1)?.seq).toBe(550);
+    expect(older.history).toBe(true);
+    const updated = mergeGroupTimeline(older, page([600, 601]));
+    expect(updated.entries).toEqual(older.entries);
+    expect(updated.lastSeq).toBe(601);
+  });
   it('首屏直接采用', () => {
     const state = mergeGroupTimeline(undefined, page([3, 4, 5]));
     expect(state.entries.map((e) => e.seq)).toEqual([3, 4, 5]);
@@ -110,7 +163,7 @@ describe('群时间线分页合并', () => {
     let state = mergeGroupTimeline(undefined, page([3, 4]));
     state = mergeGroupTimeline(state, page([1, 2], { beforeSeq: 3, lastSeq: 4 }));
     const latest = page([4, 5, 6]);
-    latest.entries[0] = { ...latest.entries[0], text: 'edited' } as PairGroupEntry;
+    latest.entries[0] = { ...latest.entries[0], text: 'edited' };
     state = mergeGroupTimeline(state, latest);
     expect(state.entries.map((e) => e.seq)).toEqual([1, 2, 3, 4, 5, 6]);
     expect(state.entries[3]).toMatchObject({ text: 'edited' });

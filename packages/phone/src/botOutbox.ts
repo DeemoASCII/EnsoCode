@@ -62,6 +62,10 @@ export class BotOutbox {
   private writing: Promise<void> = Promise.resolve();
   private newId: () => string;
   private now: () => number;
+  private durable = new Set<string>();
+  private sentAt = new Map<string, number>();
+  private loadFailed = false;
+  private loading: Promise<void> | undefined;
 
   constructor(
     private storage: OutboxStorage,
@@ -73,15 +77,30 @@ export class BotOutbox {
   }
 
   async restore(): Promise<void> {
-    let stored: OutboxItem[] = [];
+    const run = this.loadExisting();
+    this.loading = run;
+    try {
+      await run;
+    } finally {
+      if (this.loading === run) this.loading = undefined;
+    }
+  }
+
+  private async loadExisting(): Promise<void> {
+    let stored: OutboxItem[];
     try {
       stored = parseOutbox(await this.storage.load(this.pairId));
-    } catch {}
+      this.loadFailed = false;
+    } catch (error) {
+      this.loadFailed = true;
+      throw error;
+    }
     const known = new Set(this.items.map((item) => item.deliveryId));
     const restored = stored.filter((item) => !known.has(item.deliveryId));
     if (restored.length === 0) return;
     this.items = [...restored, ...this.items];
-    this.changed();
+    for (const item of restored) this.durable.add(item.deliveryId);
+    for (const listener of this.listeners) listener([...this.items]);
   }
 
   list(chatId?: string): OutboxItem[] {
@@ -109,21 +128,28 @@ export class BotOutbox {
 
   /** 在线时取出待发项并标记在途；调用方负责真正发出 */
   drain(): OutboxItem[] {
-    const ready = this.items.filter((item) => item.status === 'pending');
+    const ready = this.items.filter(
+      (item) => item.status === 'pending' && this.durable.has(item.deliveryId)
+    );
     if (ready.length === 0) return [];
-    this.update((item) => (item.status === 'pending' ? { ...item, status: 'sending' } : item));
+    const ids = new Set(ready.map((item) => item.deliveryId));
+    for (const id of ids) this.sentAt.set(id, this.now());
+    this.update((item) => (ids.has(item.deliveryId) ? { ...item, status: 'sending' } : item));
     return ready;
   }
 
   /** 连接断开：在途的结果未知，退回待发 */
   interrupted(): void {
+    this.sentAt.clear();
     if (!this.items.some((item) => item.status === 'sending')) return;
     this.update((item) => (item.status === 'sending' ? { ...item, status: 'pending' } : item));
   }
 
   settle(deliveryId: string, ok: boolean, error?: string): void {
+    this.sentAt.delete(deliveryId);
     if (!this.items.some((item) => item.deliveryId === deliveryId)) return;
     if (ok) {
+      this.durable.delete(deliveryId);
       this.items = this.items.filter((item) => item.deliveryId !== deliveryId);
       this.changed();
       return;
@@ -136,6 +162,7 @@ export class BotOutbox {
   }
 
   retry(deliveryId: string): void {
+    this.durable.delete(deliveryId);
     this.update((item) => {
       if (item.deliveryId !== deliveryId || item.status !== 'failed') return item;
       const { error: _error, ...rest } = item;
@@ -143,14 +170,49 @@ export class BotOutbox {
     });
   }
 
-  discard(deliveryId: string): void {
-    this.items = this.items.filter((item) => item.deliveryId !== deliveryId);
-    this.changed();
+  async discard(deliveryId: string): Promise<void> {
+    if (!this.items.some((item) => item.deliveryId === deliveryId)) return;
+    this.durable.delete(deliveryId);
+    this.sentAt.delete(deliveryId);
+    this.items = this.items.map((item) =>
+      item.deliveryId === deliveryId
+        ? { ...item, status: 'failed', error: 'outbox-discarding' }
+        : item
+    );
+    for (const listener of this.listeners) listener([...this.items]);
+    const run = this.writing.then(async () => {
+      try {
+        await this.loading;
+        if (this.loadFailed) await this.loadExisting();
+        await this.storage.save(
+          this.pairId,
+          this.items.filter((item) => item.deliveryId !== deliveryId)
+        );
+        this.items = this.items.filter((item) => item.deliveryId !== deliveryId);
+      } catch {
+        this.items = this.items.map((item) =>
+          item.deliveryId === deliveryId
+            ? { ...item, status: 'failed', error: 'outbox-discard' }
+            : item
+        );
+        // 尽力保存失败标记，防止下次启动把原待发项自动发出；仍失败则保留可见警告。
+        await this.storage.save(this.pairId, this.items).catch(() => {});
+      }
+      for (const listener of this.listeners) listener([...this.items]);
+    });
+    this.writing = run;
+    return run;
   }
 
   /** 等待已排队的持久化写完（测试与解绑清理用） */
   flushed(): Promise<void> {
     return this.writing;
+  }
+
+  /** 回执丢失不等于没送达；只提示结果未知，手动重试仍沿用原 id 去重。 */
+  expire(now = this.now()): void {
+    for (const [id, at] of this.sentAt)
+      if (now - at >= 60_000) this.settle(id, false, 'delivery-unconfirmed');
   }
 
   private update(map: (item: OutboxItem) => OutboxItem): void {
@@ -159,11 +221,31 @@ export class BotOutbox {
   }
 
   private changed(): void {
-    const snapshot = [...this.items];
-    for (const listener of this.listeners) listener(snapshot);
-    this.writing = this.writing
-      .then(() => this.storage.save(this.pairId, snapshot))
-      .catch(() => {});
+    for (const listener of this.listeners) listener([...this.items]);
+    this.writing = this.writing.then(async () => {
+      let snapshot = [...this.items];
+      try {
+        await this.loading;
+        if (this.loadFailed) await this.loadExisting();
+        snapshot = [...this.items];
+        await this.storage.save(this.pairId, snapshot);
+        let ready = false;
+        for (const saved of snapshot) {
+          const current = this.items.find((item) => item.deliveryId === saved.deliveryId);
+          if (!current || this.durable.has(saved.deliveryId)) continue;
+          this.durable.add(saved.deliveryId);
+          if (current.status === 'pending') ready = true;
+        }
+        if (ready) for (const listener of this.listeners) listener([...this.items]);
+      } catch {
+        this.items = this.items.map((item) => {
+          if (item.status !== 'pending' || !snapshot.includes(item)) return item;
+          this.durable.delete(item.deliveryId);
+          return { ...item, status: 'failed', error: 'outbox-storage' };
+        });
+        for (const listener of this.listeners) listener([...this.items]);
+      }
+    });
   }
 }
 
@@ -197,8 +279,11 @@ export function indexedDbOutboxStorage(
   ): Promise<T> => {
     const db = await database();
     return new Promise<T>((resolve, reject) => {
-      const request = action(db.transaction(STORE_NAME, mode).objectStore(STORE_NAME));
-      request.onsuccess = () => resolve(request.result as T);
+      const tx = db.transaction(STORE_NAME, mode);
+      const request = action(tx.objectStore(STORE_NAME));
+      tx.oncomplete = () => resolve(request.result as T);
+      tx.onabort = () => reject(tx.error ?? new Error('Outbox transaction aborted'));
+      tx.onerror = () => reject(tx.error);
       request.onerror = () => reject(request.error);
     });
   };

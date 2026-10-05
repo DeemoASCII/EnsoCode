@@ -31,6 +31,28 @@ export interface GroupTimelineState {
   entries: PairGroupEntry[];
   lastSeq: number;
   hasOlder: boolean;
+  /** 达到窗口上限后向上翻页，暂不被最新页覆盖；用户可点「回到最新」。 */
+  history?: true;
+  epochSeq?: number;
+}
+
+const GROUP_WINDOW = 400;
+function boundGroupTimeline(state: GroupTimelineState, older = false): GroupTimelineState {
+  if (state.entries.length <= GROUP_WINDOW) return state;
+  return {
+    ...state,
+    entries: older ? state.entries.slice(0, GROUP_WINDOW) : state.entries.slice(-GROUP_WINDOW),
+    hasOlder: older ? state.hasOlder : true,
+    ...(older ? { history: true as const } : {}),
+  };
+}
+
+export function visibleGroupEntries(
+  entries: readonly PairGroupEntry[],
+  epoch: number,
+  expanded: boolean
+): readonly PairGroupEntry[] {
+  return expanded || epoch === 0 ? entries : entries.filter((entry) => entry.seq >= epoch);
 }
 
 type GroupTimelineFrame = Extract<HostToPhone, { type: 'group-timeline' }>;
@@ -43,25 +65,49 @@ export function mergeGroupTimeline(
     entries: [...frame.entries].sort((a, b) => a.seq - b.seq),
     lastSeq: frame.lastSeq,
     hasOlder: frame.hasOlder,
+    ...(frame.epochSeq !== undefined ? { epochSeq: frame.epochSeq } : {}),
   };
-  if (!current || current.entries.length === 0) return incoming;
+  if (current && frame.epochSeq !== undefined) {
+    if (frame.epochSeq < (current.epochSeq ?? 0)) return current;
+    if (frame.epochSeq > (current.epochSeq ?? 0) && frame.beforeSeq === undefined)
+      return boundGroupTimeline(incoming);
+  }
+  if (!current || current.entries.length === 0)
+    return boundGroupTimeline(incoming, frame.beforeSeq !== undefined);
+  if (frame.beforeSeq === undefined && current.history)
+    return { ...current, lastSeq: Math.max(current.lastSeq, frame.lastSeq) };
+  if (frame.beforeSeq === undefined && frame.lastSeq < current.lastSeq) return current;
   const first = current.entries[0].seq;
   if (frame.beforeSeq !== undefined) {
     // 换过最新页或重复请求的迟到应答：与当前最早条目不衔接就丢弃
     if (frame.beforeSeq !== first) return current;
   } else {
     const last = current.entries.at(-1)?.seq ?? 0;
-    if ((incoming.entries[0]?.seq ?? last + 1) > last + 1) return incoming;
+    if ((incoming.entries[0]?.seq ?? last + 1) > last + 1) return boundGroupTimeline(incoming);
   }
   const bySeq = new Map(current.entries.map((entry) => [entry.seq, entry]));
-  for (const entry of incoming.entries) bySeq.set(entry.seq, entry);
+  for (const entry of incoming.entries) {
+    const previous = bySeq.get(entry.seq);
+    if (entry.truncated && previous && !previous.truncated) continue;
+    bySeq.set(entry.seq, entry);
+  }
   const entries = [...bySeq.values()].sort((a, b) => a.seq - b.seq);
   const olderFromIncoming = (incoming.entries[0]?.seq ?? Number.POSITIVE_INFINITY) < first;
-  return {
-    entries,
-    lastSeq: Math.max(current.lastSeq, incoming.lastSeq),
-    hasOlder: olderFromIncoming ? incoming.hasOlder : current.hasOlder,
-  };
+  return boundGroupTimeline(
+    {
+      entries,
+      lastSeq: Math.max(current.lastSeq, incoming.lastSeq),
+      hasOlder:
+        frame.beforeSeq !== undefined || olderFromIncoming ? incoming.hasOlder : current.hasOlder,
+      ...(current.history ? { history: true as const } : {}),
+      ...(incoming.epochSeq !== undefined
+        ? { epochSeq: incoming.epochSeq }
+        : current.epochSeq !== undefined
+          ? { epochSeq: current.epochSeq }
+          : {}),
+    },
+    frame.beforeSeq !== undefined
+  );
 }
 
 /** @ 前紧挨着这些字符时视为邮箱等，不触发补全（与 parseMentions 同规则） */

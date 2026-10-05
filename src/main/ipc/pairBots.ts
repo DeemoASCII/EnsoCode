@@ -189,6 +189,7 @@ function replyTimeline(
       chatId,
       entries: result.entries,
       lastSeq: result.lastSeq,
+      epochSeq: services.chats.get(chatId)?.epochSeq ?? 0,
       ...(beforeSeq !== undefined ? { beforeSeq } : {}),
       hasOlder: (result.entries[0]?.seq ?? 1) > 1,
     })

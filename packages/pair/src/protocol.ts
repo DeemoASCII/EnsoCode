@@ -312,6 +312,7 @@ export interface PairBotChatSummary {
   archived?: true;
   updatedAt: number;
   lastSeq: number;
+  epochSeq?: number;
   /** 时间线末条摘要（私聊无时间线时缺省） */
   last?: { kind: PairGroupEntry['kind']; text: string; botId?: string; at: number };
   /** 各成员当前在用会话：手机打开私聊 / 查看过程时订阅它 */
@@ -325,6 +326,7 @@ interface PairGroupEntryBase {
   seq: number;
   id: string;
   at: number;
+  truncated?: true;
 }
 
 export type PairGroupEntry =
@@ -539,6 +541,7 @@ export type HostToPhone =
       chatId: string;
       entries: PairGroupEntry[];
       lastSeq: number;
+      epochSeq?: number;
       beforeSeq?: number;
       hasOlder: boolean;
     }

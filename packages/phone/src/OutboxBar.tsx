@@ -22,23 +22,32 @@ export function OutboxBar({ items, readOnly, onRetry, onDiscard }: Props) {
         <div
           key={item.deliveryId}
           className={cn(
-            'flex items-center gap-2 rounded-xl border px-2.5 py-1.5 text-xs',
+            'flex flex-wrap items-center gap-2 rounded-xl border px-2.5 py-1.5 text-xs',
             item.status === 'failed' ? 'border-destructive/40 bg-destructive/5' : 'bg-muted/40'
           )}
         >
-          <span className="min-w-0 flex-1 truncate">
+          <span
+            className={cn(
+              'min-w-0 flex-1',
+              item.status === 'failed' ? 'whitespace-pre-wrap break-words select-text' : 'truncate'
+            )}
+          >
             {item.text || (item.images?.length ? `[${item.images.length} 张图片]` : '')}
           </span>
           <span
             className={cn(
-              'shrink-0',
+              'min-w-0 break-words',
               item.status === 'failed' ? 'text-destructive' : 'text-muted-foreground'
             )}
           >
-            {STATUS_TEXT[item.status]}
+            {item.error?.startsWith('outbox-discard')
+              ? '移除消息'
+              : item.error === 'delivery-unconfirmed'
+                ? '结果未确认'
+                : STATUS_TEXT[item.status]}
             {item.status === 'failed' && item.error ? `：${rejectionText(item.error)}` : ''}
           </span>
-          {item.status === 'failed' && !readOnly && (
+          {item.status === 'failed' && !item.error?.startsWith('outbox-discard') && !readOnly && (
             <button
               type="button"
               aria-label="重试"
@@ -52,6 +61,7 @@ export function OutboxBar({ items, readOnly, onRetry, onDiscard }: Props) {
             <button
               type="button"
               aria-label="删除"
+              disabled={item.error === 'outbox-discarding'}
               onClick={() => onDiscard(item.deliveryId)}
               className="shrink-0 rounded p-0.5 text-muted-foreground hover:bg-accent"
             >

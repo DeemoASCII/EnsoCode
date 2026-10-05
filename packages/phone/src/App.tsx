@@ -212,6 +212,7 @@ export function App() {
   const sessionBotsRef = useRef(new Map<string, string>());
   /** 群时间线上滑分页：同一 beforeSeq 只发一次 */
   const olderRequestRef = useRef<string | null>(null);
+  const [olderLoading, setOlderLoading] = useState(false);
   /** VAPID 公钥（桌面下发）；用 ref 避免重建连接 effect */
   const vapidKeyRef = useRef<string | null>(null);
 
@@ -347,11 +348,19 @@ export function App() {
         for (const item of items) sessionBotsRef.current.set(item.conversationId, item.botId);
         setBotActivity({ items, offset });
       },
-      onGroupTimeline: (frame) =>
+      onGroupTimeline: (frame) => {
+        if (
+          frame.beforeSeq !== undefined &&
+          olderRequestRef.current === `${frame.chatId}:${frame.beforeSeq}`
+        ) {
+          olderRequestRef.current = null;
+          setOlderLoading(false);
+        }
         setTimelines((prev) => ({
           ...prev,
           [frame.chatId]: mergeGroupTimeline(prev[frame.chatId], frame),
-        })),
+        }));
+      },
       onBotChatState: ({ type: _type, chatId, ...rest }) =>
         setChatStates((prev) => ({ ...prev, [chatId]: rest })),
       onBotEvent: (event) => {
@@ -480,7 +489,9 @@ export function App() {
     outboxRef.current = box;
     setOutbox([]);
     const off = box.subscribe((items) => setOutbox([...items]));
-    void box.restore();
+    void box
+      .restore()
+      .catch(() => setBotNotice('离线消息读取失败，请勿清除浏览器数据；恢复存储后可重试。'));
     return () => {
       off();
       if (outboxRef.current === box) outboxRef.current = null;
@@ -502,13 +513,29 @@ export function App() {
     }
   }, [state, outbox]);
 
+  useEffect(() => {
+    const timer = setInterval(() => outboxRef.current?.expire(), 1000);
+    return () => clearInterval(timer);
+  }, []);
+
   // 打开群聊或重连后：拉最新一页时间线与运行态；成员审批先用本地已有投影垫上
   const groupOpenId = botChat?.kind === 'group' ? botChat.id : null;
   useEffect(() => {
     if (!groupOpenId || state !== 'online') return;
     olderRequestRef.current = null;
+    setOlderLoading(false);
     clientRef.current?.send({ type: 'bot-chat-open', chatId: groupOpenId });
   }, [groupOpenId, state]);
+
+  useEffect(() => {
+    if (!olderLoading) return;
+    const timer = setTimeout(() => {
+      olderRequestRef.current = null;
+      setOlderLoading(false);
+      setBotNotice('历史加载未完成，请点击加载重试。');
+    }, 10_000);
+    return () => clearTimeout(timer);
+  }, [olderLoading]);
   // biome-ignore lint/correctness/useExhaustiveDependencies: memberIdsRef 随 botChat 在渲染期更新
   useEffect(() => {
     const seeded: Record<string, SessionView> = {};
@@ -767,9 +794,21 @@ export function App() {
           onLoadOlder={() => {
             const beforeSeq = timelines[chat.id]?.entries[0]?.seq;
             const key = `${chat.id}:${beforeSeq}`;
-            if (beforeSeq === undefined || olderRequestRef.current === key) return;
+            if (state !== 'online' || beforeSeq === undefined || olderRequestRef.current) return;
             olderRequestRef.current = key;
+            setOlderLoading(true);
             send({ type: 'bot-timeline', chatId: chat.id, beforeSeq });
+          }}
+          historyLoading={olderLoading}
+          onJumpLatest={() => {
+            olderRequestRef.current = null;
+            setOlderLoading(false);
+            setTimelines((prev) => {
+              const next = { ...prev };
+              delete next[chat.id];
+              return next;
+            });
+            send({ type: 'bot-chat-open', chatId: chat.id });
           }}
           onSend={(text, images) => sendBot(chat.id, text, images)}
           onStop={() => send({ type: 'bot-stop', chatId: chat.id })}

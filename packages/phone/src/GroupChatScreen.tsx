@@ -23,6 +23,7 @@ import {
   insertMention,
   type MentionOption,
   mentionOptions,
+  visibleGroupEntries,
 } from './botState';
 import type { ConnState, SessionView } from './client';
 import { compressImages } from './image';
@@ -54,6 +55,8 @@ interface Props {
   readOnlyRejected?: boolean;
   onOpenDrawer(): void;
   onLoadOlder(): void;
+  onJumpLatest?(): void;
+  historyLoading?: boolean;
   onSend(text: string, images: AttachedImage[]): void;
   onStop(): void;
   onRetry?(entryId: string): void;
@@ -117,8 +120,17 @@ export function GroupChatScreen(props: Props) {
   const [picked, setPicked] = useState<{ file: File; url: string }[]>([]);
   const [sending, setSending] = useState(false);
   const [imageError, setImageError] = useState<string | null>(null);
-  const entries = timeline?.entries ?? [];
-  const retryable = retryableGroupFailures(entries);
+  const loaded = timeline?.entries ?? [];
+  const epoch =
+    chat.epochSeq ??
+    loaded.findLast((entry) => entry.kind === 'system' && entry.newConversation)?.seq ??
+    0;
+  const [expanded, setExpanded] = useState(false);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: 新聊天 / 新段重新折叠
+  useEffect(() => setExpanded(false), [chat.id, epoch]);
+  const folded = epoch > 0 && !expanded;
+  const entries = visibleGroupEntries(loaded, epoch, expanded);
+  const retryable = retryableGroupFailures(loaded, epoch);
   const members = chat.members
     .map((id) => bots.get(id))
     .filter((bot): bot is PairBotMember => Boolean(bot && !bot.archived));
@@ -145,7 +157,14 @@ export function GroupChatScreen(props: Props) {
 
   const loadOlder = () => {
     const el = scrollRef.current;
-    if (!timeline?.hasOlder || !el) return;
+    if (
+      !timeline?.hasOlder ||
+      !el ||
+      props.historyLoading ||
+      props.connState !== 'online' ||
+      (folded && (loaded[0]?.seq ?? epoch) <= epoch)
+    )
+      return;
     anchorRef.current = { height: el.scrollHeight, top: el.scrollTop };
     props.onLoadOlder();
   };
@@ -215,6 +234,9 @@ export function GroupChatScreen(props: Props) {
             {entry.text && (
               <div className="max-w-[85%] whitespace-pre-wrap break-words rounded-2xl rounded-br-md bg-brand/10 px-3 py-2 text-sm">
                 {withMentions(entry.text, names)}
+                {entry.truncated && (
+                  <p className="text-xs text-muted-foreground">消息过长，仅显示部分内容</p>
+                )}
               </div>
             )}
             {entry.images?.length ? (
@@ -234,6 +256,9 @@ export function GroupChatScreen(props: Props) {
               </p>
               <div className="mt-0.5 min-w-0 text-sm">
                 <Markdown text={entry.text} />
+                {entry.truncated && (
+                  <p className="text-xs text-muted-foreground">消息过长，仅显示部分内容</p>
+                )}
               </div>
               <BotArtifacts target={{ chatId: props.chat.id, entryId: entry.id }} />
               <button
@@ -328,19 +353,50 @@ export function GroupChatScreen(props: Props) {
             <Loader2 className="h-4 w-4 animate-spin" />
             读取中…
           </p>
-        ) : timeline.hasOlder ? (
+        ) : timeline.hasOlder && (!folded || (loaded[0]?.seq ?? epoch) > epoch) ? (
           <button
             type="button"
             onClick={loadOlder}
+            disabled={props.historyLoading || props.connState !== 'online'}
             className="w-full py-1 text-center text-muted-foreground text-xs"
           >
-            加载更早的消息
+            {props.historyLoading ? '加载中…' : '加载更早的消息'}
           </button>
         ) : entries.length === 0 ? (
           <p className="py-8 text-center text-muted-foreground text-sm">
             @ 成员开始对话，未 @ 时由群主回复
           </p>
         ) : null}
+        {epoch > 0 && (
+          <button
+            type="button"
+            className="w-full py-1 text-center text-muted-foreground text-xs"
+            onClick={() => {
+              setExpanded(!expanded);
+              if (expanded && timeline?.history) props.onJumpLatest?.();
+              else if (
+                !expanded &&
+                timeline?.hasOlder &&
+                !loaded.some((entry) => entry.seq < epoch)
+              )
+                props.onLoadOlder();
+            }}
+          >
+            {folded ? `更早的对话 · ${epoch - 1} 条` : '收起更早的对话'}
+          </button>
+        )}
+        {timeline?.history && (
+          <button
+            type="button"
+            className="w-full py-1 text-center text-brand text-xs"
+            onClick={() => {
+              stickRef.current = true;
+              props.onJumpLatest?.();
+            }}
+          >
+            回到最新消息
+          </button>
+        )}
         {entries.map(renderEntry)}
         {props.activities.map((item) => (
           <BotActivityRow

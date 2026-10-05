@@ -55,6 +55,7 @@ export function summarizeBotChat(
     ...(chat.archivedAt !== undefined ? { archived: true as const } : {}),
     updatedAt: Math.max(chat.updatedAt, last?.at ?? 0),
     lastSeq,
+    ...(chat.epochSeq !== undefined ? { epochSeq: chat.epochSeq } : {}),
     ...(last
       ? {
           last: {
@@ -77,9 +78,9 @@ function truncateEntry(entry: PairGroupEntry, chars: number): PairGroupEntry {
   if (entry.kind === 'delegation') {
     return entry.summary === undefined
       ? entry
-      : { ...entry, summary: entry.summary.slice(0, chars) };
+      : { ...entry, summary: entry.summary.slice(0, chars), truncated: true };
   }
-  return { ...entry, text: entry.text.slice(0, chars) };
+  return { ...entry, text: entry.text.slice(0, chars), truncated: true };
 }
 
 /** 单帧须小于中继上限：从最旧一端减条数；只剩一条仍超限则截断其正文 */
