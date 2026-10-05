@@ -301,7 +301,7 @@ export class GroupChatService {
       if (this.round(chatId).stopping) return { ok: false, error: 'chat-stopping' };
       // 手机离线队列按原 deliveryId 重放：同一条人类消息只落一次时间线
       const entryId = options.deliveryId ? `human:${options.deliveryId}` : randomUUID();
-      if (options.deliveryId && this.deps.chats.hasEntry(chatId, entryId))
+      if (options.deliveryId && this.deps.chats.findEntry(chatId, entryId))
         return { ok: true, duplicate: true };
       const members = this.members(chat);
       const entry = this.append(chatId, {

@@ -874,7 +874,7 @@ export async function sendBotMessage(
           }
         : undefined;
     if (!groupSender) return { ok: false, error: 'group-not-ready' };
-    if (input.deliveryId && chats.hasEntry(chat.id, `human:${input.deliveryId}`))
+    if (input.deliveryId && chats.findEntry(chat.id, `human:${input.deliveryId}`))
       return { ok: true, duplicate: true };
     const images = keepGroupImages(chats, chat.id, input.images);
     if (!images.ok) return images;

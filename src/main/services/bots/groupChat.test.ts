@@ -178,6 +178,27 @@ it('resending the same deliveryId is idempotent (phone offline outbox replay)', 
   await group.send(id, 'hello', { deliveryId: 'phone-2' });
   expect(entries().filter((entry) => entry.kind === 'human')).toHaveLength(2);
 });
+
+it('deduplicates an unconfirmed phone send even after a new conversation and restart', async () => {
+  await group.send(id, 'old task', { deliveryId: 'phone-old' });
+  await done(a, 'done');
+  const boundary = chats.appendEntry(id, {
+    kind: 'system',
+    id: 'epoch',
+    at: Date.now(),
+    text: 'new',
+    newConversation: true,
+  })!;
+  chats.update(id, (chat) => ({ ...chat, epochSeq: boundary.seq }));
+  group.dispose();
+  chats = new BotChatStore(join(root, 'chats'));
+  group = new GroupChatService({ bots, chats, host, emit });
+  expect(await group.send(id, 'old task', { deliveryId: 'phone-old' })).toEqual({
+    ok: true,
+    duplicate: true,
+  });
+  expect(deliver).toHaveBeenCalledTimes(1);
+});
 it('failed delivery is not a skip and continues to the next member', async () => {
   deliver.mockResolvedValueOnce({ ok: false, error: 'offline' });
   await group.send(id, '@Bob @Alice hello');
