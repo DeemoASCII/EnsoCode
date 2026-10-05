@@ -11,6 +11,7 @@ export function BotBrowserPanel({ chatId, visible }: { chatId: string; visible: 
   const { t } = useI18n();
   const state = useBotsStore((s) => s.browserTabs[chatId]);
   const titles = useBotsStore((s) => s.browserTitles);
+  const holders = useBotsStore((s) => s.browserHolders);
   const { openBrowserTab, selectBrowserTab, closeBrowserTab, setBrowserTitle } =
     useBotsStore.getState();
   const active = state?.active;
@@ -38,36 +39,49 @@ export function BotBrowserPanel({ chatId, visible }: { chatId: string; visible: 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="flex h-8 shrink-0 items-center gap-0.5 overflow-x-auto border-b px-1.5">
-        {state?.tabs.map((tabId) => (
-          <div
-            key={tabId}
-            className={cn(
-              'flex h-6 min-w-0 max-w-44 shrink items-center rounded-md text-xs',
-              tabId === active
-                ? 'bg-muted text-foreground'
-                : 'text-muted-foreground hover:bg-muted/60 hover:text-foreground'
-            )}
-          >
-            <button
-              type="button"
-              title={titles[tabId] || t('Browser')}
-              onClick={() => selectBrowserTab(chatId, tabId)}
-              className="flex h-full min-w-0 items-center gap-1.5 pl-2"
+        {state?.tabs.map((tabId) => {
+          const holder = holders[tabId];
+          const title = titles[tabId] || t('Browser');
+          return (
+            <div
+              key={tabId}
+              className={cn(
+                'flex h-6 min-w-0 max-w-44 shrink items-center rounded-md text-xs',
+                tabId === active
+                  ? 'bg-muted text-foreground'
+                  : 'text-muted-foreground hover:bg-muted/60 hover:text-foreground'
+              )}
             >
-              <Globe className="h-3 w-3 shrink-0" />
-              <span className="truncate">{titles[tabId] || t('Browser')}</span>
-            </button>
-            <button
-              type="button"
-              aria-label={t('Close')}
-              title={t('Close')}
-              onClick={() => void closeBrowserTab(chatId, tabId)}
-              className="mx-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded opacity-60 hover:bg-foreground/10 hover:opacity-100"
-            >
-              <X className="h-3 w-3" />
-            </button>
-          </div>
-        ))}
+              <button
+                type="button"
+                title={
+                  holder
+                    ? `${title}\n${t('{{name}} is using this tab', { name: holder.name })}`
+                    : title
+                }
+                onClick={() => selectBrowserTab(chatId, tabId)}
+                className="flex h-full min-w-0 items-center gap-1.5 pl-2"
+              >
+                <Globe className="h-3 w-3 shrink-0" />
+                <span className="truncate">{title}</span>
+                {holder && (
+                  <span className="max-w-16 shrink-0 truncate text-muted-foreground">
+                    · {holder.name}
+                  </span>
+                )}
+              </button>
+              <button
+                type="button"
+                aria-label={t('Close')}
+                title={t('Close')}
+                onClick={() => void closeBrowserTab(chatId, tabId)}
+                className="mx-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded opacity-60 hover:bg-foreground/10 hover:opacity-100"
+              >
+                <X className="h-3 w-3" />
+              </button>
+            </div>
+          );
+        })}
         <button
           type="button"
           aria-label={t('New tab')}

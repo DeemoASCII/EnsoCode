@@ -1,6 +1,7 @@
 import type { ProjectedMessage, RendererAgentEvent } from '@shared/types/agent';
 import type { BotChat, GroupEntry } from '@shared/types/bot';
 import type { BotEvent } from '@shared/types/botIpc';
+import type { BrowserTabState } from '@shared/types/browser';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { chatSummary } from './selectors';
 import { groupReadMark, isUnread } from './unread';
@@ -49,6 +50,9 @@ async function fixture() {
   const browserListeners = {
     reveal: new Set<(event: { conversationId: string; tabId: string }) => void>(),
     closed: new Set<(event: { conversationId: string; tabId: string }) => void>(),
+    state: new Set<
+      (event: { conversationId: string; tabId: string; state: BrowserTabState }) => void
+    >(),
   };
   vi.stubGlobal('window', {
     electronAPI: {
@@ -79,6 +83,16 @@ async function fixture() {
         onTabClosed: (listener: (event: { conversationId: string; tabId: string }) => void) => {
           browserListeners.closed.add(listener);
           return () => browserListeners.closed.delete(listener);
+        },
+        onState: (
+          listener: (event: {
+            conversationId: string;
+            tabId: string;
+            state: BrowserTabState;
+          }) => void
+        ) => {
+          browserListeners.state.add(listener);
+          return () => browserListeners.state.delete(listener);
         },
       },
     },
@@ -138,6 +152,40 @@ describe('Bot mode subscription lifecycle', () => {
       listener({ conversationId: 'bot-chat:c', tabId: 'browser:7' });
     expect(f.store.getState().browserTabs).toEqual({});
     expect(f.store.getState().panelTab).toBe('info');
+  });
+
+  it('Main 推送的标签占用者与标题按 tabId 记下，只收 Bot 聊天，标签关闭时清掉', async () => {
+    const f = await fixture();
+    const push = (conversationId: string, tabId: string, patch: Partial<BrowserTabState>) => {
+      const state: BrowserTabState = {
+        tabId,
+        url: 'https://example.com/',
+        title: '',
+        favicon: null,
+        loading: false,
+        canGoBack: false,
+        canGoForward: false,
+        locked: false,
+        devtoolsOpen: false,
+        designMode: false,
+        holder: null,
+        ...patch,
+      };
+      for (const listener of f.browserListeners.state) listener({ conversationId, tabId, state });
+    };
+    const holder = { conversationId: 'conv-a', name: 'Alice' };
+    push('s', 'browser:code', { holder });
+    push('bot-chat:c', 'browser:7', { holder, title: ' Example ' });
+    expect(f.store.getState().browserHolders).toEqual({ 'browser:7': holder });
+    expect(f.store.getState().browserTitles).toEqual({ 'browser:7': 'Example' });
+    push('bot-chat:c', 'browser:7', { holder: null });
+    expect(f.store.getState().browserHolders).toEqual({});
+    push('bot-chat:c', 'browser:7', { holder });
+    for (const listener of f.browserListeners.reveal)
+      listener({ conversationId: 'bot-chat:c', tabId: 'browser:7' });
+    for (const listener of f.browserListeners.closed)
+      listener({ conversationId: 'bot-chat:c', tabId: 'browser:7' });
+    expect(f.store.getState().browserHolders).toEqual({});
   });
 
   it('别的聊天的浏览器不抢当前面板', async () => {

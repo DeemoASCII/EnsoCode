@@ -18,6 +18,7 @@ import type {
   BotSendResult,
   BotSilence,
 } from '@shared/types/botIpc';
+import type { BrowserTabHolder } from '@shared/types/browser';
 import { create } from 'zustand';
 import { draftFromSentText, seedBotDraft } from '@/components/bots/botDraft';
 import { usePendingMemoryWrites } from '@/stores/memoryReview';
@@ -150,6 +151,8 @@ interface BotsState {
   browserTabs: Record<string, ChatBrowserTabs>;
   /** 聊天浏览器当前页标题（面板页签显示，不持久化） */
   browserTitles: Record<string, string>;
+  /** 聊天浏览器各标签当前占用的成员会话（Main 推送，不持久化） */
+  browserHolders: Record<string, BrowserTabHolder>;
   searchOpen: boolean;
   focus: BotFocus | null;
 
@@ -357,7 +360,8 @@ export const useBotsStore = create<BotsState>()((set, get) => {
     const next = closeChatTab(current, tabId);
     if (next === current) return;
     const { [tabId]: _title, ...browserTitles } = get().browserTitles;
-    set({ browserTitles });
+    const { [tabId]: _holder, ...browserHolders } = get().browserHolders;
+    set({ browserTitles, browserHolders });
     putChatTabs(chatId, next);
     const { view, panelTab } = get();
     if (!next && panelTab === 'browser' && view?.kind === 'chat' && view.chatId === chatId)
@@ -381,6 +385,14 @@ export const useBotsStore = create<BotsState>()((set, get) => {
       const chatId = botBrowserChatId(event.conversationId);
       const current = chatId ? get().browserTabs[chatId] : undefined;
       if (chatId && current) dropChatTab(chatId, current, event.tabId);
+    });
+    const offState = window.electronAPI.browser.onState(({ conversationId, tabId, state }) => {
+      if (!tabId || state.tabId !== tabId || !botBrowserChatId(conversationId)) return;
+      if (state.title.trim()) get().setBrowserTitle(tabId, state.title.trim());
+      const { [tabId]: held, ...rest } = get().browserHolders;
+      const next = state.holder;
+      if (held?.conversationId === next?.conversationId && held?.name === next?.name) return;
+      set({ browserHolders: next ? { ...rest, [tabId]: next } : rest });
     });
     const offAgent = window.electronAPI.agent.onEvent((event) => {
       const { sessions } = get();
@@ -431,6 +443,7 @@ export const useBotsStore = create<BotsState>()((set, get) => {
       offAgent();
       offReveal();
       offClosed();
+      offState();
     };
   };
 
@@ -457,6 +470,7 @@ export const useBotsStore = create<BotsState>()((set, get) => {
     panelTab: localStorage.getItem(PANEL_TAB_KEY) === 'browser' ? 'browser' : 'info',
     browserTabs: loadBrowserTabs(),
     browserTitles: {},
+    browserHolders: {},
     searchOpen: false,
     focus: null,
 

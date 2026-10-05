@@ -5,30 +5,38 @@ import { PreviewCard, PreviewCardPopup, PreviewCardTrigger } from '@/components/
 import { type TFunction, useI18n } from '@/i18n';
 import { useBotsStore } from '@/stores/bots';
 import { formatElapsed } from '@/stores/bots/delegations';
-import { lastHumanAt, memberSources, type PresenceInfo, presenceOf } from '@/stores/bots/presence';
+import {
+  heldBrowserTab,
+  lastHumanAt,
+  memberSources,
+  type PresenceInfo,
+  presenceOf,
+} from '@/stores/bots/presence';
 import { BotAvatar } from './BotAvatar';
 import { failureText } from './DelegationCard';
 import { PresenceChip, presenceLabel } from './PresenceMark';
 
 /** 成员在该聊天的状态（成员会话 + 进行中委派子会话；做完 / 失败保留到下一条人类消息） */
-export function useMemberPresence(chatId: string, botId: string): PresenceInfo {
+export function useMemberPresence(
+  chatId: string,
+  botId: string
+): PresenceInfo & { browserTab?: string } {
   const chat = useBotsStore((s) => s.chats.find((item) => item.id === chatId));
   const sessions = useBotsStore((s) => s.sessions);
   const queue = useBotsStore((s) => s.queue);
   const silences = useBotsStore((s) => s.silences);
   const delegations = useBotsStore((s) => s.delegations);
+  const holders = useBotsStore((s) => s.browserHolders);
+  const chatTabs = useBotsStore((s) => s.browserTabs[chatId]?.tabs);
   const clearedAt = useBotsStore((s) => lastHumanAt(s.timelines[chatId]?.entries ?? []));
-  return useMemo(
-    () =>
-      presenceOf({
-        ...memberSources(botId, chat ?? { id: chatId, sessions: {} }, delegations),
-        sessions,
-        queue,
-        silences,
-        clearedAt,
-      }),
-    [botId, chat, chatId, delegations, sessions, queue, silences, clearedAt]
-  );
+  return useMemo(() => {
+    const sources = memberSources(botId, chat ?? { id: chatId, sessions: {} }, delegations);
+    const browserTab = heldBrowserTab(sources.conversationIds, holders, chatTabs ?? []);
+    return {
+      ...presenceOf({ ...sources, sessions, queue, silences, clearedAt }),
+      ...(browserTab ? { browserTab } : {}),
+    };
+  }, [botId, chat, chatId, delegations, sessions, queue, silences, clearedAt, holders, chatTabs]);
 }
 
 function waitText(info: PresenceInfo, t: TFunction): string | undefined {
@@ -90,6 +98,9 @@ export function PresenceAvatar({
   );
   const record = info.delegation;
   const wait = waitText(info, t);
+  const browserTitle = useBotsStore((s) =>
+    info.browserTab ? s.browserTitles[info.browserTab] || t('Browser') : undefined
+  );
   const pending = info.wait && 'conversationId' in info.wait ? info.wait.conversationId : undefined;
   return (
     <PreviewCard>
@@ -118,6 +129,11 @@ export function PresenceAvatar({
               </>
             )}
             {wait && <Row label={t('Waiting on')}>{wait}</Row>}
+            {browserTitle && (
+              <Row label={t('Browser')}>
+                <span className="line-clamp-1">{browserTitle}</span>
+              </Row>
+            )}
             {info.quietSince !== undefined && (
               <div className="text-muted-foreground">
                 {t('Still running, no output for {{time}}', {

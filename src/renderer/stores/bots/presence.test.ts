@@ -3,6 +3,7 @@ import type { Delegation } from '@shared/types/bot';
 import type { BotQueueItem, BotSilence } from '@shared/types/botIpc';
 import { describe, expect, it } from 'vitest';
 import {
+  heldBrowserTab,
   lastHumanAt,
   memberSources,
   type PresenceInput,
@@ -240,5 +241,22 @@ describe('presence 审批超时', () => {
     expect(presenceOf(input({ sessions: { c1: waiting } })).state).toBe('wait');
     const after = session({ messages: [user, call('t1', 'bash'), timedOut] });
     expect(presenceOf(input({ sessions: { c1: after } })).state).toBe('think');
+  });
+});
+
+describe('heldBrowserTab', () => {
+  const holders = {
+    t1: { conversationId: 'other', name: 'Bob' },
+    t2: { conversationId: 'child', name: 'Alice' },
+    t3: null,
+  };
+
+  it('finds the chat tab held by any of the member sessions', () => {
+    expect(heldBrowserTab(['own', 'child'], holders, ['t1', 't2', 't3'])).toBe('t2');
+  });
+
+  it('ignores tabs of other chats and members holding nothing', () => {
+    expect(heldBrowserTab(['own', 'child'], holders, ['t1'])).toBeUndefined();
+    expect(heldBrowserTab(['own'], holders, ['t1', 't2'])).toBeUndefined();
   });
 });

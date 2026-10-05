@@ -2,6 +2,7 @@ import { type LiveSession, liveActivity } from '@shared/bots/liveActivity';
 import type { ApprovalRequestInfo, AskRequestInfo } from '@shared/types/agent';
 import type { Delegation, GroupEntry } from '@shared/types/bot';
 import type { BotQueueItem, BotSilence } from '@shared/types/botIpc';
+import type { BrowserTabHolder } from '@shared/types/browser';
 import { isActiveDelegation } from './delegations';
 
 /** 成员头像六态；同时成立时按 等你 > 卡住 > 干 > 想 > 做完 > 闲 取一个 */
@@ -101,6 +102,18 @@ export function presenceOf(input: PresenceInput): PresenceInfo {
     ...(best?.quietSince !== undefined ? { quietSince: best.quietSince } : {}),
     ...(delegation && state !== 'idle' ? { delegation } : {}),
   };
+}
+
+/** 成员（含其委派子会话）当前占用的本聊天浏览器标签 */
+export function heldBrowserTab(
+  conversationIds: readonly string[],
+  holders: Readonly<Record<string, BrowserTabHolder | null | undefined>>,
+  tabIds: readonly string[]
+): string | undefined {
+  return tabIds.find((tabId) => {
+    const holder = holders[tabId];
+    return holder ? conversationIds.includes(holder.conversationId) : false;
+  });
 }
 
 /** 最近一条人类消息时间；做完 / 失败的成员在它之后回到闲 */

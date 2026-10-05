@@ -99,6 +99,7 @@ import { AgentService } from '../services/agentService';
 import { HumanRequestTimeouts } from '../services/bots/humanRequestTimeouts';
 import { pickBrowserFileRoot, setBrowserFileRootResolver } from '../services/browserFileRoot';
 import { browserHost } from '../services/browserHost';
+import type { BrowserActor } from '../services/browserTabClaims';
 import { chatModelsRoot } from '../services/chatModels';
 import { computerHost } from '../services/computerHost';
 import { reloadConversation } from '../services/conversationReload';
@@ -578,6 +579,14 @@ function browserKeyFor(sessionId: string): string {
 }
 
 const sharesBrowser = (sessionId: string) => browserKeyFor(sessionId) !== sessionId;
+
+/** 共享浏览器里按成员会话加标签锁；委派子会话按它自己的会话占用 */
+function browserActorFor(sessionId: string): BrowserActor | undefined {
+  if (!sharesBrowser(sessionId)) return undefined;
+  const botId = sourceAuthority?.conversation(sessionId)?.bot?.botId;
+  const name = botId ? getBotServices()?.bots.get(botId)?.name : undefined;
+  return { sessionId, name: name ?? 'Another member' };
+}
 
 /** Bot 会话的截图留最近 3 张给 send_image（子会话截的图归到父会话）；非 Bot 会话不缓存 */
 function cacheBotScreenshots(
@@ -1108,8 +1117,12 @@ export function registerAgentHandlers(): void {
     ) {
       void browserHost.closeForSession(workerEvent.identity.sessionId);
     }
+    if (workerEvent.type === 'turn-completed' || workerEvent.type === 'turn-failed') {
+      browserHost.releaseActor(workerEvent.identity.sessionId);
+    }
     if (workerEvent.type === 'parent-ended') {
       forgetParentToolProfile(workerEvent.identity.sessionId);
+      browserHost.forgetActor(workerEvent.identity.sessionId);
       if (!sharesBrowser(workerEvent.identity.sessionId))
         void browserHost.closeForSession(workerEvent.identity.sessionId, { force: true });
       computerHost.close(workerEvent.identity.sessionId);
@@ -1132,17 +1145,19 @@ export function registerAgentHandlers(): void {
     }
     if (workerEvent.type === 'browser-invoke') {
       const { identity, requestId, op, params } = workerEvent;
-      void browserHost.invoke(browserKeyFor(identity.sessionId), op, params).then(
-        (result) => {
-          if (op === 'screenshot') cacheBotScreenshots(identity, [result], 'web');
-          sendBrowserResultToSession(identity, requestId, { ok: true, result });
-        },
-        (error: unknown) =>
-          sendBrowserResultToSession(identity, requestId, {
-            ok: false,
-            error: error instanceof Error ? error.message : String(error),
-          })
-      );
+      void browserHost
+        .invoke(browserKeyFor(identity.sessionId), op, params, browserActorFor(identity.sessionId))
+        .then(
+          (result) => {
+            if (op === 'screenshot') cacheBotScreenshots(identity, [result], 'web');
+            sendBrowserResultToSession(identity, requestId, { ok: true, result });
+          },
+          (error: unknown) =>
+            sendBrowserResultToSession(identity, requestId, {
+              ok: false,
+              error: error instanceof Error ? error.message : String(error),
+            })
+        );
       return;
     }
     if (workerEvent.type === 'memory-invoke') {

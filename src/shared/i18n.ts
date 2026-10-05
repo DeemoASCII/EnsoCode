@@ -2292,6 +2292,7 @@ export const zhTranslations: Record<string, string> = {
   'A free slot (concurrency limit, not a person)': '空位（并发已满，不是在等某个人）',
   'Its previous turn to finish': '上一轮结束',
   'Still running, no output for {{time}}': '还在跑，但已经 {{time}} 没有输出',
+  '{{name}} is using this tab': '{{name}} 正在用这个标签页',
   Delegation: '委派',
   'In progress': '进行中',
   Canceled: '已取消',
