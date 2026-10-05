@@ -161,10 +161,15 @@ export function GroupChatScreen(props: Props) {
     switch (entry.kind) {
       case 'human':
         return (
-          <div key={entry.seq} className="flex justify-end">
-            <div className="max-w-[85%] whitespace-pre-wrap break-words rounded-2xl rounded-br-md bg-brand/10 px-3 py-2 text-sm">
-              {withMentions(entry.text, names)}
-            </div>
+          <div key={entry.seq} className="flex flex-col items-end">
+            {entry.text && (
+              <div className="max-w-[85%] whitespace-pre-wrap break-words rounded-2xl rounded-br-md bg-brand/10 px-3 py-2 text-sm">
+                {withMentions(entry.text, names)}
+              </div>
+            )}
+            {entry.images?.length ? (
+              <BotArtifacts target={{ chatId: props.chat.id, entryId: entry.id }} />
+            ) : null}
           </div>
         );
       case 'bot': {

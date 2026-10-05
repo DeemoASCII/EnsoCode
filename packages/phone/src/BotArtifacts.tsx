@@ -18,6 +18,7 @@ const LABEL: Record<PairBotMedia['source'], string> = {
   web: '网页截图',
   desktop: '桌面截图',
   file: '工作区',
+  upload: '',
 };
 
 const sizeText = (size: number) =>
@@ -75,16 +76,18 @@ export function BotArtifacts({ target }: { target: PairBotArtifactTarget }) {
                 ) : (
                   <ImageOff className="m-auto h-4 w-4 text-muted-foreground" />
                 )}
-                <span
-                  className={cn(
-                    'absolute top-1 left-1 rounded px-1 text-[10px] leading-4',
-                    item.source === 'desktop'
-                      ? 'bg-warning text-warning-foreground'
-                      : 'bg-black/60 text-white'
-                  )}
-                >
-                  {LABEL[item.source]}
-                </span>
+                {LABEL[item.source] && (
+                  <span
+                    className={cn(
+                      'absolute top-1 left-1 rounded px-1 text-[10px] leading-4',
+                      item.source === 'desktop'
+                        ? 'bg-warning text-warning-foreground'
+                        : 'bg-black/60 text-white'
+                    )}
+                  >
+                    {LABEL[item.source]}
+                  </span>
+                )}
                 {(item.caption || item.name) && (
                   <span className="absolute inset-x-0 bottom-0 truncate bg-gradient-to-t from-black/70 to-transparent px-1.5 pt-3 pb-0.5 text-left text-[10px] text-white">
                     {item.caption ?? item.name}

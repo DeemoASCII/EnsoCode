@@ -2,7 +2,8 @@
 export const SEND_IMAGE_PER_REPLY = 4;
 export const SEND_IMAGE_CAPTION_MAX = 200;
 
-export type BotMediaSource = 'file' | 'web' | 'desktop';
+/** upload：人在群聊里随消息发的图（不出现在 send_image 结果里） */
+export type BotMediaSource = 'file' | 'web' | 'desktop' | 'upload';
 export type BotMediaError = 'too-large' | 'quota';
 
 /** ok：已复制到聊天 media 目录；失败项只保留可展示的两类（压不下来 / 群空间已满） */

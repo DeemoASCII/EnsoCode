@@ -326,7 +326,7 @@ interface PairGroupEntryBase {
 }
 
 export type PairGroupEntry =
-  | (PairGroupEntryBase & { kind: 'human'; text: string; mentions: string[] })
+  | (PairGroupEntryBase & { kind: 'human'; text: string; mentions: string[]; images?: string[] })
   | (PairGroupEntryBase & {
       kind: 'bot';
       botId: string;
@@ -384,11 +384,11 @@ export interface PairBotArtifact {
   kind: 'image' | 'markdown' | 'html' | 'pdf' | 'text' | 'other';
 }
 
-/** send_image 的图：web = 网页截图，desktop = 桌面截图，file = 工作区副本；失败项只展示原因 */
+/** send_image 的图：web = 网页截图，desktop = 桌面截图，file = 文件副本；upload = 人随群消息发的图；失败项只展示原因 */
 export type PairBotMedia = (
   | { ok: true; mediaId: string; thumb?: string }
   | { ok: false; error: 'too-large' | 'quota' }
-) & { source: 'file' | 'web' | 'desktop'; name?: string; caption?: string };
+) & { source: 'file' | 'web' | 'desktop' | 'upload'; name?: string; caption?: string };
 
 export interface PairBotChatState {
   current: string | null;

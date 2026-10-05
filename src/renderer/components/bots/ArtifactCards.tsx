@@ -87,13 +87,15 @@ export function ArtifactCards({ target }: { target: BotArtifactTarget }) {
 function useMediaLabel() {
   const { t } = useI18n();
   return ({ source, name }: BotMediaItem) =>
-    source === 'web'
-      ? t('Web screenshot')
-      : source === 'desktop'
-        ? t('Desktop screenshot')
-        : name && /^(?:\/|[A-Za-z]:[\\/])/.test(name)
-          ? t('This computer')
-          : t('Workspace image');
+    source === 'upload'
+      ? ''
+      : source === 'web'
+        ? t('Web screenshot')
+        : source === 'desktop'
+          ? t('Desktop screenshot')
+          : name && /^(?:\/|[A-Za-z]:[\\/])/.test(name)
+            ? t('This computer')
+            : t('Workspace image');
 }
 
 function useMediaImage(
@@ -207,16 +209,18 @@ function MediaThumb({
       ) : (
         <Loader2 className="m-auto h-4 w-4 animate-spin text-muted-foreground" />
       )}
-      <span
-        className={cn(
-          'absolute top-1 left-1 rounded px-1 text-[10px] leading-4',
-          item.source === 'desktop'
-            ? 'bg-warning text-warning-foreground'
-            : 'bg-black/60 text-white'
-        )}
-      >
-        {label}
-      </span>
+      {label && (
+        <span
+          className={cn(
+            'absolute top-1 left-1 rounded px-1 text-[10px] leading-4',
+            item.source === 'desktop'
+              ? 'bg-warning text-warning-foreground'
+              : 'bg-black/60 text-white'
+          )}
+        >
+          {label}
+        </span>
+      )}
       {(item.caption || item.name) && (
         <span className="absolute inset-x-0 bottom-0 truncate bg-gradient-to-t from-black/70 to-transparent px-1.5 pt-3 pb-0.5 text-left text-[10px] text-white">
           {item.caption ?? item.name}

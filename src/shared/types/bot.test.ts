@@ -334,6 +334,32 @@ describe('parseGroupEntry', () => {
     ).toMatchObject({ mentions: [BOT_A] });
   });
 
+  it('human 条目只保留合法的 media 图片 id', () => {
+    const id = `${'a'.repeat(64)}.png`;
+    expect(
+      parseGroupEntry({
+        seq: 1,
+        id: 'e',
+        at: 1,
+        kind: 'human',
+        text: '',
+        mentions: [],
+        images: [id, '../x.png', 3],
+      })
+    ).toMatchObject({ images: [id] });
+    expect(
+      parseGroupEntry({
+        seq: 1,
+        id: 'e',
+        at: 1,
+        kind: 'human',
+        text: 'x',
+        mentions: [],
+        images: [],
+      })
+    ).not.toHaveProperty('images');
+  });
+
   it('bot 条目保留 routedBy: smart，其余值丢弃', () => {
     const base = {
       seq: 2,

@@ -483,6 +483,7 @@ const EntryRow = memo(function EntryRow({
               <MentionText text={entry.text} bots={bots} />
             </div>
           )}
+          {entry.images?.length ? <ArtifactCards target={{ chatId, entryId: entry.id }} /> : null}
           {entry.refs && <HumanRefs refs={entry.refs} />}
           {!continued && (
             <span className="mt-0.5 text-[11px] text-muted-foreground">{timeOf(entry.at)}</span>

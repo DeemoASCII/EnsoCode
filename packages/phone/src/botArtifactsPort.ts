@@ -18,7 +18,7 @@ export interface TurnArtifacts {
 }
 
 const KINDS = new Set(['image', 'markdown', 'html', 'pdf', 'text', 'other']);
-const SOURCES = new Set(['file', 'web', 'desktop']);
+const SOURCES = new Set(['file', 'web', 'desktop', 'upload']);
 const IMAGE_TIMEOUT_MS = 30_000;
 
 export const artifactKey = (target: PairBotArtifactTarget): string =>

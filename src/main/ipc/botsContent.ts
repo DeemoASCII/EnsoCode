@@ -99,6 +99,17 @@ async function artifactsOf(
   if ('entryId' in target) {
     if (chat.kind !== 'group') return null;
     const entry = chats.findEntry(chat.id, target.entryId);
+    if (entry?.kind === 'human') {
+      const mediaDir = chats.mediaDir(chat.id);
+      return {
+        root: null,
+        mediaDir,
+        artifacts: [],
+        media: (entry.images ?? [])
+          .filter((mediaId) => mediaFile(mediaDir, mediaId) !== null)
+          .map((mediaId) => ({ ok: true as const, mediaId, source: 'upload' as const })),
+      };
+    }
     if (entry?.kind !== 'bot') return null;
     conversationId = entry.conversationId;
     locate = (messages) => turnOfReply(messages, entry.text);

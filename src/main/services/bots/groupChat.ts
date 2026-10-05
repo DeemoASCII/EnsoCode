@@ -211,7 +211,8 @@ export class GroupChatService {
     chatId: string,
     text: string,
     options: BotDeliverOptions = {},
-    refs?: HumanEntryRefs
+    refs?: HumanEntryRefs,
+    images?: string[]
   ): Promise<BotSendResult> {
     return this.lock(chatId, async () => {
       if (this.disposed) return { ok: false, error: 'disabled' };
@@ -229,6 +230,7 @@ export class GroupChatService {
         text,
         mentions: parseMentions(text, members).ids,
         ...(refs ? { refs } : {}),
+        ...(images?.length ? { images } : {}),
         id: entryId,
         at: Date.now(),
       });

@@ -1,4 +1,5 @@
 import { MISSED_RUNS_MAX, parseCron } from '../bots/cron';
+import { isMediaId } from '../bots/sendImage';
 import { APPROVAL_MODES, type ApprovalMode, THINKING_LEVELS, type ThinkingLevel } from './agent';
 
 export type BotId = string;
@@ -243,6 +244,11 @@ function parseHumanRefs(value: unknown): { refs?: HumanEntryRefs } {
   return refs.chats || refs.skill ? { refs } : {};
 }
 
+function parseHumanImages(value: unknown): { images?: string[] } {
+  const images = Array.isArray(value) ? value.filter(isMediaId).slice(0, 20) : [];
+  return images.length ? { images } : {};
+}
+
 export type GroupEntry =
   | (GroupEntryBase & {
       kind: 'human';
@@ -250,6 +256,8 @@ export type GroupEntry =
       mentions: BotId[];
       /** 输入框 @聊天（chatId）与 $技能（技能 id）；Main 投递时按成员展开 */
       refs?: HumanEntryRefs;
+      /** 随消息发的图：聊天 media 目录里的副本 id */
+      images?: string[];
     })
   | (GroupEntryBase & {
       kind: 'bot';
@@ -523,6 +531,7 @@ export function parseGroupEntry(value: unknown): GroupEntry | undefined {
             text: value.text,
             mentions: strings(value.mentions),
             ...parseHumanRefs(value.refs),
+            ...parseHumanImages(value.images),
           }
         : undefined;
     case 'bot':

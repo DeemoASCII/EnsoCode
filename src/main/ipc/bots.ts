@@ -94,7 +94,7 @@ import { GroupTaskStore } from '../services/bots/groupTaskStore';
 import { GroupTaskService } from '../services/bots/groupTasks';
 import { BotInboxService } from '../services/bots/inbox';
 import { BotInboxStore } from '../services/bots/inboxStore';
-import { ScreenshotCache, sendImage } from '../services/bots/media';
+import { ScreenshotCache, sendImage, storeMedia } from '../services/bots/media';
 import { compressImage } from '../services/bots/mediaImage';
 import { removeBotMemorySpace } from '../services/bots/memoryCleanup';
 import { proposeRoutine } from '../services/bots/routineProposal';
@@ -172,7 +172,8 @@ type GroupSender = (
   chat: BotChat,
   text: string,
   options: { images?: AttachedImage[]; deliveryId: string },
-  refs?: HumanEntryRefs
+  refs?: HumanEntryRefs,
+  media?: string[]
 ) => Promise<BotSendResult>;
 
 let services: BotServices | null = null;
@@ -567,7 +568,9 @@ export function getBotServices(): BotServices | null {
   host.onDiscard((scope) => {
     if (scope.conversationId) memory.remove(scope.conversationId);
   });
-  setBotGroupSender((chat, text, options, refs) => groups.send(chat.id, text, options, refs));
+  setBotGroupSender((chat, text, options, refs, media) =>
+    groups.send(chat.id, text, options, refs, media)
+  );
   const snooze = new ChatSnoozeTimer({
     chats,
     onDue: (chat) => {
@@ -787,6 +790,27 @@ function assistantCompleter(maxTokens: number): AbilityCompleter {
   };
 }
 
+/** 群时间线只存正文：随消息的图另存一份到聊天 media，条目记 id；存不下的只发给成员 */
+function keepGroupImages(
+  chats: BotChatStore,
+  chatId: string,
+  images: readonly AttachedImage[] | undefined
+): string[] | undefined {
+  const ids: string[] = [];
+  for (const image of images ?? []) {
+    try {
+      const stored = storeMedia(chats.mediaDir(chatId), Buffer.from(image.data, 'base64'), {
+        compress: compressImage,
+      });
+      if (stored.ok && !ids.includes(stored.mediaId)) ids.push(stored.mediaId);
+      else if (!stored.ok) console.warn('[bots] group image not kept', stored.error);
+    } catch (error) {
+      console.warn('[bots] group image not kept', error);
+    }
+  }
+  return ids.length ? ids : undefined;
+}
+
 /** 桌面 BOT_SEND 与手机 bot-send 共用 */
 export async function sendBotMessage(
   { chats, host, composerRefs }: BotServices,
@@ -814,9 +838,14 @@ export async function sendBotMessage(
             ...(input.skill ? { skill: input.skill } : {}),
           }
         : undefined;
-    return groupSender
-      ? groupSender(chat, input.text, options, refs)
-      : { ok: false, error: 'group-not-ready' };
+    if (!groupSender) return { ok: false, error: 'group-not-ready' };
+    return groupSender(
+      chat,
+      input.text,
+      options,
+      refs,
+      keepGroupImages(chats, chat.id, input.images)
+    );
   }
   const text = await composerRefs.expandDirect(chat, input);
   return host.deliver(chat.id, chat.members[0], text, options);

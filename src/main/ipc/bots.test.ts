@@ -516,6 +516,56 @@ describe('bots IPC', () => {
     expect(await call(IPC_CHANNELS.BOT_CHAT_DELETE, { chatId })).toEqual({ ok: true });
     expect(existsSync(join(mocks.root, 'bot-chats', chatId))).toBe(false);
   });
+
+  it('群聊里人发的图存进聊天 media 并挂在时间线条目上，可按条目读取', async () => {
+    const alice = await createBot('Alice');
+    const bob = await createBot('Bob');
+    const group = await call(IPC_CHANNELS.BOT_CHAT_CREATE, {
+      kind: 'group',
+      title: 'team',
+      members: [alice, bob],
+      bossBotId: alice,
+      workspace: { kind: 'chat-home' },
+    });
+    const chatId = (group.chat as { id: string }).id;
+    const png = Buffer.concat([
+      Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+      Buffer.from('pixels'),
+    ]).toString('base64');
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    expect(
+      await call(IPC_CHANNELS.BOT_SEND, {
+        chatId,
+        text: '看这张',
+        images: [
+          { data: png, mimeType: 'image/png' },
+          { data: Buffer.from('not an image').toString('base64'), mimeType: 'image/png' },
+        ],
+        deliveryId: 'img',
+      })
+    ).toEqual({ ok: true });
+    warn.mockRestore();
+    const timeline = await call(IPC_CHANNELS.BOT_CHAT_TIMELINE, { chatId });
+    const human = (timeline.entries as { kind: string; id: string; images?: string[] }[]).find(
+      (entry) => entry.kind === 'human'
+    );
+    expect(human?.images).toHaveLength(1);
+    const mediaId = human!.images![0];
+    expect(existsSync(join(mocks.root, 'bot-chats', chatId, 'media', mediaId))).toBe(true);
+    expect(await call(IPC_CHANNELS.BOT_ARTIFACTS_LIST, { chatId, entryId: human!.id })).toEqual({
+      ok: true,
+      artifacts: [],
+      media: [{ ok: true, mediaId, source: 'upload' }],
+    });
+    expect(
+      await call(IPC_CHANNELS.BOT_ARTIFACT_READ, {
+        chatId,
+        entryId: human!.id,
+        mediaId,
+        variant: 'full',
+      })
+    ).toEqual({ ok: true, kind: 'image', dataUrl: `data:image/png;base64,${png}` });
+  });
 });
 
 describe('群任务看板 IPC', () => {
