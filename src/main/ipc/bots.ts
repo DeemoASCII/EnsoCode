@@ -58,6 +58,9 @@ import {
   respondApproval,
   retrySession,
   rewindSession,
+  setSessionModel,
+  setSessionReasoning,
+  setSessionThinking,
   spawnSession,
   steerSession,
 } from '../services/agentHost';
@@ -241,6 +244,29 @@ function rootIdentity(conversationId: string): SessionIdentity | undefined {
 
 function createRuntime(botsRoot: string): BotRuntimePort {
   return {
+    async updateEngine(conversationId, engine) {
+      const identity = rootIdentity(conversationId);
+      if (!identity) return { ok: false, error: 'stale session generation' };
+      let keys: ReadonlySet<string>;
+      try {
+        keys = await readStoredOauthCredentialKeys();
+      } catch {
+        return { ok: false, error: 'model credentials unavailable' };
+      }
+      const model = pickBotModel(
+        engine,
+        readSettingsState() ?? {},
+        (ref) => resolveModelSelection(ref.providerId, ref.modelId, keys, { allowVirtual: true }).ok
+      );
+      if (!model) return { ok: false, error: 'no-usable-model' };
+      if (rootIdentity(conversationId)?.generation !== identity.generation)
+        return { ok: false, error: 'stale session generation' };
+      // worker 按会话串行执行命令，模型与推理档先于随后投递的 prompt 生效。
+      const changed = setSessionModel(identity, model.providerId, model.modelId, keys);
+      if (!changed.ok) return changed;
+      const reasoning = setSessionReasoning(identity, model.reasoningEnabled, model.thinkingLevel);
+      return reasoning.ok ? setSessionThinking(identity, model.thinkingLevel) : reasoning;
+    },
     async spawn(spec) {
       const identity = rootIdentity(spec.conversationId) ?? {
         sessionId: spec.conversationId,
@@ -1384,14 +1410,24 @@ export function registerBotHandlers(): void {
     }
   );
 
-  handle(IPC_CHANNELS.BOT_UPDATE, 'write', (_sender, request, { bots }): BotWriteIpcResult => {
-    const parsed = parseBotUpdateInput(request);
-    if (!parsed) return INVALID;
-    const result = bots.update(parsed.botId, parsed.draft, reservedNames(), parsed.expectedVersion);
-    if (!result.ok) return { ok: false, error: result.reason };
-    emitBotEvent({ kind: 'catalog' });
-    return result;
-  });
+  handle(
+    IPC_CHANNELS.BOT_UPDATE,
+    'write',
+    async (_sender, request, { bots, host }): Promise<BotWriteIpcResult> => {
+      const parsed = parseBotUpdateInput(request);
+      if (!parsed) return INVALID;
+      const result = bots.update(
+        parsed.botId,
+        parsed.draft,
+        reservedNames(),
+        parsed.expectedVersion
+      );
+      if (!result.ok) return { ok: false, error: result.reason };
+      emitBotEvent({ kind: 'catalog' });
+      await host.refreshModel(result.bot.id);
+      return result;
+    }
+  );
 
   handle(IPC_CHANNELS.BOT_ARCHIVE, 'write', (_sender, request, { bots }): BotWriteIpcResult => {
     const botId = botIdOf(request);

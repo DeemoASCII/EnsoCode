@@ -11,7 +11,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { AgentWorkerEvent } from '../../../shared/types/agent';
-import type { BotChat } from '../../../shared/types/bot';
+import type { BotChat, BotEngine } from '../../../shared/types/bot';
 import { SourceAuthorityRegistry } from '../sourceAuthorityRegistry';
 import {
   type BotRuntimePort,
@@ -31,6 +31,12 @@ let events: Array<{ kind: string; chatId?: string }>;
 let host: BotSessionHost;
 
 class FakeRuntime implements BotRuntimePort {
+  engines: Array<{ id: string; engine?: BotEngine }> = [];
+  modelResult = { ok: true } as { ok: boolean; error?: string };
+  async updateEngine(id: string, engine?: BotEngine) {
+    if (this.modelResult.ok) this.engines.push({ id, engine });
+    return this.modelResult;
+  }
   spawns: BotSpawnSpec[] = [];
   prompts: Array<{ id: string; text: string }> = [];
   steers: Array<{ id: string; text: string }> = [];
@@ -103,6 +109,145 @@ function ev(event: Record<string, unknown>, sessionId: string): AgentWorkerEvent
 }
 
 describe('BotSessionHost.ensureSession', () => {
+  it('updates idle member models in place and can return to the default model', async () => {
+    const alice = bot('Alice');
+    const chat = direct(alice.id);
+    const first = await host.deliver(chat.id, alice.id, 'hi');
+    if (!first.ok) throw new Error(first.error);
+    host.observe(ev({ type: 'turn-completed', turnId: 't1' }, first.conversationId));
+    const engine = { providerId: 'next', modelId: 'new', thinkingLevel: 'high' as const };
+    bots.update(alice.id, { engine }, []);
+    await host.refreshModel(alice.id);
+    expect(runtime.engines).toEqual([{ id: first.conversationId, engine }]);
+    expect(host.effectiveBot(first.conversationId)?.engine).toEqual(engine);
+    bots.update(alice.id, { engine: undefined }, []);
+    await host.refreshModel(alice.id);
+    expect(runtime.engines.at(-1)).toEqual({ id: first.conversationId, engine: undefined });
+    expect(runtime.spawns).toHaveLength(1);
+    expect(runtime.released).toEqual([]);
+    expect(chats.get(chat.id)?.sessions[alice.id].conversationId).toBe(first.conversationId);
+  });
+
+  it('keeps an active response on its model and switches before the next queued prompt', async () => {
+    const alice = bot('Alice');
+    const chat = direct(alice.id);
+    const first = await host.deliver(chat.id, alice.id, 'hi');
+    if (!first.ok) throw new Error(first.error);
+    const engine = { providerId: 'next', modelId: 'new' };
+    bots.update(alice.id, { engine }, []);
+    await host.refreshModel(alice.id);
+    expect(runtime.engines).toEqual([]);
+    await host.deliver(chat.id, alice.id, 'next', { queueIfBusy: true });
+    const prompt = runtime.prompt.bind(runtime);
+    runtime.prompt = (id, text) => {
+      expect(runtime.engines.at(-1)).toEqual({ id, engine });
+      return prompt(id, text);
+    };
+    host.observe(ev({ type: 'turn-completed', turnId: 't1' }, first.conversationId));
+    await flush();
+    expect(runtime.prompts.at(-1)?.text).toBe('next');
+    expect(runtime.engines).toHaveLength(1);
+    expect(runtime.aborted).toEqual([]);
+  });
+
+  it('does not send a new prompt with the old model when synchronization fails', async () => {
+    const alice = bot('Alice');
+    const chat = direct(alice.id);
+    const first = await host.deliver(chat.id, alice.id, 'hi');
+    if (!first.ok) throw new Error(first.error);
+    host.observe(ev({ type: 'turn-completed', turnId: 't1' }, first.conversationId));
+    await flush();
+    bots.update(alice.id, { engine: { providerId: 'next', modelId: 'new' } }, []);
+    runtime.modelResult = { ok: false, error: 'no-usable-model' };
+    expect(await host.deliver(chat.id, alice.id, 'next')).toEqual({
+      ok: false,
+      error: 'no-usable-model',
+    });
+    expect(runtime.prompts).toHaveLength(1);
+    expect(host.effectiveBot(first.conversationId)?.engine).toBeUndefined();
+  });
+
+  it('catches up with a second save while a model update is in flight', async () => {
+    const alice = bot('Alice');
+    const chat = direct(alice.id);
+    const first = await host.deliver(chat.id, alice.id, 'hi');
+    if (!first.ok) throw new Error(first.error);
+    host.observe(ev({ type: 'turn-completed', turnId: 't1' }, first.conversationId));
+    await flush();
+    let resume!: () => void;
+    const blocked = new Promise<void>((resolve) => {
+      resume = resolve;
+    });
+    const update = runtime.updateEngine.bind(runtime);
+    runtime.updateEngine = async (id, engine) => {
+      if (engine?.modelId === 'first') await blocked;
+      return update(id, engine);
+    };
+    bots.update(alice.id, { engine: { providerId: 'p', modelId: 'first' } }, []);
+    const saving = host.refreshModel(alice.id);
+    await flush();
+    const latest = { providerId: 'p', modelId: 'second', thinkingLevel: 'low' as const };
+    bots.update(alice.id, { engine: latest }, []);
+    resume();
+    await saving;
+    expect(runtime.engines.map((item) => item.engine?.modelId)).toEqual(['first', 'second']);
+    expect(host.effectiveBot(first.conversationId)?.engine).toEqual(latest);
+  });
+
+  it('synchronizes the model before retrying a failed response', async () => {
+    const alice = bot('Alice');
+    const chat = direct(alice.id);
+    const first = await host.deliver(chat.id, alice.id, 'hi');
+    if (!first.ok) throw new Error(first.error);
+    host.observe(ev({ type: 'turn-failed', turnId: 't1', error: 'offline' }, first.conversationId));
+    await flush();
+    const engine = { providerId: 'p', modelId: 'new' };
+    bots.update(alice.id, { engine }, []);
+    let retried = false;
+    const port: BotRuntimePort = runtime;
+    port.retry = (id) => {
+      expect(runtime.engines.at(-1)).toEqual({ id, engine });
+      retried = true;
+      return { ok: true };
+    };
+    expect(await host.retryConversation(first.conversationId)).toMatchObject({ ok: true });
+    expect(retried).toBe(true);
+    expect(runtime.spawns).toHaveLength(1);
+  });
+
+  it('updates the member across chats without changing another member or resending unchanged models', async () => {
+    const alice = bot('Alice');
+    const bob = bot('Bob');
+    const personal = direct(alice.id);
+    const group = chats.create({
+      kind: 'group',
+      title: 'team',
+      members: [alice.id, bob.id],
+      bossBotId: alice.id,
+      workspace: { kind: 'chat-home', projectId: 'home' },
+    });
+    if (!group) throw new Error('chat');
+    const ids: string[] = [];
+    for (const [chatId, botId] of [
+      [personal.id, alice.id],
+      [group.id, alice.id],
+      [group.id, bob.id],
+    ]) {
+      const sent = await host.deliver(chatId, botId, 'hi');
+      if (!sent.ok) throw new Error(sent.error);
+      ids.push(sent.conversationId);
+      host.observe(ev({ type: 'turn-completed', turnId: 't1' }, sent.conversationId));
+    }
+    await flush();
+    const engine = { providerId: 'p', modelId: 'new' };
+    bots.update(alice.id, { engine }, []);
+    await host.refreshModel(alice.id);
+    expect(runtime.engines.map((item) => item.id).sort()).toEqual(ids.slice(0, 2).sort());
+    bots.update(alice.id, { title: 'Lead' }, []);
+    await host.refreshModel(alice.id);
+    expect(runtime.engines).toHaveLength(2);
+    expect(host.effectiveBot(ids[2])?.engine).toBeUndefined();
+  });
   it('injects notes into the system prompt and announces later updates once per conversation', async () => {
     let snap: { version: string; section: string; update: string } | undefined = {
       version: 'v1',

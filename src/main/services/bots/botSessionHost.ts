@@ -9,7 +9,7 @@ import type {
   ProjectAuthority,
   ProjectedMessage,
 } from '../../../shared/types/agent';
-import type { BotChat, BotProfile } from '../../../shared/types/bot';
+import type { BotChat, BotEngine, BotProfile } from '../../../shared/types/bot';
 import type {
   BotEvent,
   BotQueueItem,
@@ -73,6 +73,7 @@ export interface BotSpawnSpec {
 }
 
 export interface BotRuntimePort {
+  updateEngine?(conversationId: string, engine?: BotEngine): Promise<ActionResult>;
   spawn(spec: BotSpawnSpec): Promise<ActionResult>;
   prompt(
     conversationId: string,
@@ -342,6 +343,56 @@ export class BotSessionHost {
       this.independentSpecs.get(conversationId)?.bot ??
       this.deps.bots.get(this.binding(conversationId)?.botId ?? '')
     );
+  }
+
+  /** 空闲立即更新；活轮不换模型，结束或下次投递时再同步。委派保留任务自己的配置。 */
+  async refreshModel(botId: string): Promise<void> {
+    await Promise.all(
+      [...this.live]
+        .filter((id) => this.binding(id)?.botId === botId)
+        .map((id) =>
+          this.withLock(id, async () => {
+            if (this.turnActive(id)) return;
+            const error = await this.syncEngine(id);
+            if (error) console.warn('[bots] model update deferred:', error);
+          })
+        )
+    );
+  }
+
+  private async syncEngine(conversationId: string): Promise<string | undefined> {
+    if (
+      this.disposed ||
+      !this.live.has(conversationId) ||
+      this.independentSpecs.has(conversationId)
+    )
+      return undefined;
+    const previous = this.liveProfiles.get(conversationId);
+    const bot = this.deps.bots.get(this.binding(conversationId)?.botId ?? '');
+    if (!previous || !bot) return undefined;
+    const a = previous.engine;
+    const b = bot.engine;
+    if (
+      a?.providerId === b?.providerId &&
+      a?.modelId === b?.modelId &&
+      a?.thinkingLevel === b?.thinkingLevel
+    )
+      return undefined;
+    try {
+      const result = await this.deps.runtime.updateEngine?.(conversationId, b);
+      if (!result?.ok) return result?.error ?? 'model-update-failed';
+      if (
+        this.disposed ||
+        !this.live.has(conversationId) ||
+        this.liveProfiles.get(conversationId) !== previous
+      )
+        return 'session-unavailable';
+      this.liveProfiles.set(conversationId, { ...previous, engine: b });
+      // 配置可能在取凭证期间再次改变；发下一条消息前追上最后一次保存。
+      return this.syncEngine(conversationId);
+    } catch {
+      return 'model-update-failed';
+    }
   }
 
   async abortConversation(conversationId: string): Promise<void> {
@@ -982,7 +1033,11 @@ export class BotSessionHost {
     if (!this.live.has(conversationId)) {
       const spawned = await this.spawnLive(delivery, bot);
       if (spawned) return fail(spawned);
-    } else notes = this.withNotesUpdate(delivery);
+    } else {
+      const error = await this.syncEngine(conversationId);
+      if (error) return fail(error);
+      notes = this.withNotesUpdate(delivery);
+    }
     const sent = this.deps.runtime.prompt(
       conversationId,
       notes.text,
@@ -1067,6 +1122,8 @@ export class BotSessionHost {
       const failed = await this.spawnLive(delivery, bot);
       if (failed) return { ok: false, error: failed };
     }
+    const error = await this.syncEngine(conversationId);
+    if (error) return { ok: false, error };
     return delivery;
   }
 
@@ -1181,6 +1238,8 @@ export class BotSessionHost {
     this.turnKeys.delete(conversationId);
     this.quiet(conversationId);
     if (!this.slots.delete(conversationId)) return;
+    const botId = this.binding(conversationId)?.botId;
+    if (botId) void this.refreshModel(botId);
     this.pump();
   }
 

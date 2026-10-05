@@ -14,6 +14,9 @@ const mocks = vi.hoisted(() => ({
   spawnSession: vi.fn((..._args: unknown[]) => ({ ok: true })),
   promptSession: vi.fn((..._args: unknown[]) => ({ ok: true })),
   steerSession: vi.fn((..._args: unknown[]) => ({ ok: true })),
+  setSessionModel: vi.fn((..._args: unknown[]) => ({ ok: true })),
+  setSessionReasoning: vi.fn((..._args: unknown[]) => ({ ok: true })),
+  setSessionThinking: vi.fn((..._args: unknown[]) => ({ ok: true })),
   identities: new Map<string, { sessionId: string; generation: string }>(),
 }));
 
@@ -41,6 +44,9 @@ vi.mock('../services/agentHost', () => ({
   spawnSession: mocks.spawnSession,
   promptSession: mocks.promptSession,
   steerSession: mocks.steerSession,
+  setSessionModel: mocks.setSessionModel,
+  setSessionReasoning: mocks.setSessionReasoning,
+  setSessionThinking: mocks.setSessionThinking,
   abortSession: vi.fn(),
   releaseParentSession: async () => ({ ok: true }),
 }));
@@ -76,6 +82,9 @@ beforeEach(async () => {
   mocks.identities.clear();
   mocks.spawnSession.mockClear();
   mocks.promptSession.mockClear();
+  mocks.setSessionModel.mockClear();
+  mocks.setSessionReasoning.mockClear();
+  mocks.setSessionThinking.mockClear();
   mocks.isMain.mockReturnValue(true);
   vi.resetModules();
   const { registerBotHandlers } = await import('./bots');
@@ -90,6 +99,35 @@ async function createBot(name: string): Promise<string> {
 }
 
 describe('bots IPC', () => {
+  it('saving a member model synchronizes idle sessions and reasoning without respawning', async () => {
+    const alice = await createBot('Alice');
+    const created = await call(IPC_CHANNELS.BOT_CHAT_CREATE, {
+      kind: 'direct',
+      members: [alice],
+      workspace: { kind: 'member-home' },
+    });
+    const chatId = (created.chat as { id: string }).id;
+    const { getBotServices } = await import('./bots');
+    const services = getBotServices()!;
+    const sent = await services.host.deliver(chatId, alice, 'hello');
+    if (!sent.ok) throw new Error(sent.error);
+    const identity = mocks.identities.get(sent.conversationId)!;
+    services.host.observe({ type: 'turn-completed', identity, seq: 1, turnId: 't1' });
+    expect(
+      await call(IPC_CHANNELS.BOT_UPDATE, {
+        botId: alice,
+        draft: { engine: { providerId: 'p2', modelId: 'm2', thinkingLevel: 'high' } },
+      })
+    ).toMatchObject({ ok: true });
+    expect(mocks.setSessionModel).toHaveBeenLastCalledWith(identity, 'p2', 'm2', new Set());
+    expect(mocks.setSessionReasoning).toHaveBeenLastCalledWith(identity, true, 'high');
+    expect(mocks.setSessionThinking).toHaveBeenLastCalledWith(identity, 'high');
+    expect(
+      await call(IPC_CHANNELS.BOT_UPDATE, { botId: alice, draft: { engine: null } })
+    ).toMatchObject({ ok: true });
+    expect(mocks.setSessionModel).toHaveBeenLastCalledWith(identity, 'p', 'm', new Set());
+    expect(mocks.spawnSession).toHaveBeenCalledTimes(1);
+  });
   it('自动设置能力：入参收窄；worker 未就绪时报 no-model；开关关闭报 disabled', async () => {
     expect(await call(IPC_CHANNELS.BOT_SUGGEST_ABILITIES, { name: 'x', path: '/etc' })).toEqual({
       ok: false,
