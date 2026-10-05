@@ -155,6 +155,8 @@ export interface SettingsState {
   botRouteClassifier: VirtualClassifierConfig | null;
   /** Bot 辅助任务（自动设置能力等）用的模型；null 跟随默认模型 */
   botAssistantModel: DefaultModelRef | null;
+  /** Bot 全局并发上限（私聊/群聊/委派/例行共用）；缺省 4，范围 1–16 */
+  botMaxRunningTurns: number;
   /** 桌面录音用的麦克风设备 id；SYSTEM_MICROPHONE 跟随系统 */
   voiceInputDevice: string;
   /** 本机语音识别模型 */
@@ -338,6 +340,7 @@ export interface SettingsState {
   setBotModeEnabled: (value: boolean) => void;
   setBotRouteClassifier: (value: VirtualClassifierConfig | null) => void;
   setBotAssistantModel: (value: DefaultModelRef | null) => void;
+  setBotMaxRunningTurns: (value: number) => void;
   setVoiceInputDevice: (deviceId: string) => void;
   setVoiceModel: (model: SpeechModelId) => void;
   setVoiceCorrectionEnabled: (value: boolean) => void;

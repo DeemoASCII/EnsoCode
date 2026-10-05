@@ -4,6 +4,7 @@ import path from 'node:path';
 import { botBrowserKey } from '@shared/bots/browser';
 import { checkAvatarImage } from '@shared/bots/cardPng';
 import { applyChatFlags, wakeOnActivity } from '@shared/bots/chatFlags';
+import { normalizeBotMaxRunningTurns } from '@shared/bots/concurrency';
 import { BOT_NOTES_MAX_CHARS } from '@shared/bots/notes';
 import { isSkipReply } from '@shared/bots/router';
 import { assignTeamNames } from '@shared/bots/team';
@@ -389,6 +390,7 @@ export function getBotServices(): BotServices | null {
     chats,
     authority,
     runtime: createRuntime(botsRoot),
+    maxRunningTurns: normalizeBotMaxRunningTurns(readSettingsState()?.botMaxRunningTurns),
     emit: emitBotEvent,
     notes,
     budget: usage,
@@ -643,8 +645,11 @@ export function getBotServices(): BotServices | null {
 }
 
 export function syncBotModeServices(): void {
-  if (botModeEnabled()) getBotServices()?.scheduler.start();
-  else if (services) {
+  if (botModeEnabled()) {
+    const current = getBotServices();
+    current?.host.setMaxRunningTurns(readSettingsState()?.botMaxRunningTurns);
+    current?.scheduler.start();
+  } else if (services) {
     const previous = services;
     previous.host.freeze();
     previous.scheduler.stop();

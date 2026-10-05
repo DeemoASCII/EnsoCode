@@ -99,6 +99,31 @@ async function createBot(name: string): Promise<string> {
 }
 
 describe('bots IPC', () => {
+  it('loads the configured capacity when services start and applies subsequent changes live', async () => {
+    const { getBotServices, syncBotModeServices } = await import('./bots');
+    mocks.settings.botModeEnabled = false;
+    syncBotModeServices();
+    mocks.settings.botMaxRunningTurns = 1;
+    mocks.settings.botModeEnabled = true;
+    const services = getBotServices()!;
+    for (const text of ['one', 'two']) {
+      const alice = await createBot(text);
+      const created = await call(IPC_CHANNELS.BOT_CHAT_CREATE, {
+        kind: 'direct',
+        members: [alice],
+        workspace: { kind: 'member-home' },
+      });
+      await services.host.deliver((created.chat as { id: string }).id, alice, text);
+    }
+    expect(mocks.promptSession).toHaveBeenCalledTimes(1);
+    expect(services.host.queueState()).toMatchObject([{ reason: 'capacity' }]);
+    mocks.settings.botMaxRunningTurns = 2;
+    syncBotModeServices();
+    await vi.waitFor(() => expect(mocks.promptSession).toHaveBeenCalledTimes(2));
+    expect(getBotServices()).toBe(services);
+    expect(services.host.queueState()).toEqual([]);
+  });
+
   it('saving a member model synchronizes idle sessions and reasoning without respawning', async () => {
     const alice = await createBot('Alice');
     const created = await call(IPC_CHANNELS.BOT_CHAT_CREATE, {

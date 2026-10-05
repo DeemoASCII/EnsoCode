@@ -1,7 +1,15 @@
+import { MAX_BOT_MAX_RUNNING_TURNS, MIN_BOT_MAX_RUNNING_TURNS } from '@shared/bots/concurrency';
 import { canBeVirtualMember, classifierProviderFor } from '@shared/virtualModels';
 import * as React from 'react';
 import { MODEL_PICKER_FORM_TRIGGER_CLASS, ModelPicker } from '@/components/chat/ModelPicker';
 import { Button } from '@/components/ui/button';
+import {
+  Select,
+  SelectItem,
+  SelectPopup,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
 import { useI18n } from '@/i18n';
 import {
   usableProvidersForOauthSnapshot,
@@ -23,6 +31,51 @@ export function BotSettings() {
       </div>
       <BotAssistantModelRow />
       <BotRouteClassifierRow />
+      <BotMaxRunningTurnsRow />
+    </div>
+  );
+}
+
+const BOT_MAX_RUNNING_TURNS_OPTIONS = Array.from(
+  { length: MAX_BOT_MAX_RUNNING_TURNS - MIN_BOT_MAX_RUNNING_TURNS + 1 },
+  (_, index) => MIN_BOT_MAX_RUNNING_TURNS + index
+);
+
+function BotMaxRunningTurnsRow() {
+  const { t } = useI18n();
+  const value = useSettingsStore((s) => s.botMaxRunningTurns);
+  const setValue = useSettingsStore((s) => s.setBotMaxRunningTurns);
+  return (
+    <div
+      className="flex items-center justify-between gap-3 rounded-md border px-3 py-2.5"
+      data-settings-row="bots.maxRunningTurns"
+    >
+      <div className="min-w-0">
+        <p className="text-sm">{t('Bot concurrency limit')}</p>
+        <p className="text-xs text-muted-foreground">
+          {t(
+            'Shared by private chats, group chats, delegations and routines. Lowering it never interrupts running work; raising it may hit model rate limits.'
+          )}
+        </p>
+      </div>
+      <Select
+        items={Object.fromEntries(
+          BOT_MAX_RUNNING_TURNS_OPTIONS.map((option) => [String(option), String(option)])
+        )}
+        value={String(value)}
+        onValueChange={(next) => setValue(Number(next))}
+      >
+        <SelectTrigger className="w-20">
+          <SelectValue />
+        </SelectTrigger>
+        <SelectPopup>
+          {BOT_MAX_RUNNING_TURNS_OPTIONS.map((option) => (
+            <SelectItem key={option} value={String(option)}>
+              {option}
+            </SelectItem>
+          ))}
+        </SelectPopup>
+      </Select>
     </div>
   );
 }

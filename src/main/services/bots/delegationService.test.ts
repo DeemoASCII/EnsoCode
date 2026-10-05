@@ -110,6 +110,34 @@ function fixture(autoStart = true, over = new Set<string>()) {
     deps: { bots, chats, authority, host, store, emit: () => {}, minuteMs: 1 },
   };
 }
+it('runs queued delegations at capacity one after the parent yields, then delivers their batch', async () => {
+  const f = fixture();
+  f.host.setMaxRunningTurns(1);
+  await f.host.deliverConversation(f.parent, 'delegate and wait');
+  const sent = ['one', 'two'].map((task) => f.service.delegate(f.parent, { to: 'Bob', task }));
+  const records = sent.map((result) => {
+    if (!result.ok) throw new Error(result.error);
+    return f.store.get(result.delegationId)!;
+  });
+  await vi.advanceTimersByTimeAsync(0);
+  expect(f.prompts).toHaveLength(1);
+  expect(f.host.queueState().map((item) => item.reason)).toEqual(['capacity', 'capacity']);
+  f.finish(f.parent);
+  await vi.advanceTimersByTimeAsync(0);
+  for (const record of records) {
+    expect(f.prompts.at(-1)?.id).toBe(record.childConversationId);
+    expect(f.host.runningCount()).toBe(1);
+    f.finish(record.childConversationId);
+    await vi.advanceTimersByTimeAsync(0);
+  }
+  expect(f.prompts.at(-1)?.id).toBe(f.parent);
+  expect(f.prompts.at(-1)?.text).toContain('<delegation-results ');
+  expect(f.prompts).toHaveLength(4);
+  expect(f.host.queueState()).toEqual([]);
+  expect(f.abort).not.toHaveBeenCalled();
+  f.service.dispose();
+});
+
 it('truncates context, finishes once, and waits for the busy parent', async () => {
   const f = fixture();
   await f.host.deliverConversation(f.parent, 'busy');

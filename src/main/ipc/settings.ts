@@ -127,6 +127,7 @@ export const SETTINGS_STATE_FIELDS = [
   'memoryDistillEnabled',
   'voiceInputEnabled',
   'botModeEnabled',
+  'botMaxRunningTurns',
   'botRouteClassifier',
   'botAssistantModel',
   'protectedActionsInCode',
@@ -172,6 +173,7 @@ const CONFIG_SYNC_EXCLUDED_STATE_FIELDS = new Set<SettingsStateField>([
   'memoryEmbeddingRemoteProviderId',
   'voiceInputEnabled',
   'botModeEnabled',
+  'botMaxRunningTurns',
   'botRouteClassifier',
   'botAssistantModel',
   'protectedActionsInCode',
@@ -369,7 +371,10 @@ function scheduleWrite(
     notifyMemoryEmbeddingSettings(data);
     notifyTrayToggleShortcut(data);
     notifySpeechSettings(data);
-    if (settingsStateOf(previous).botModeEnabled !== settingsStateOf(data).botModeEnabled) {
+    if (
+      settingsStateOf(previous).botModeEnabled !== settingsStateOf(data).botModeEnabled ||
+      settingsStateOf(previous).botMaxRunningTurns !== settingsStateOf(data).botMaxRunningTurns
+    ) {
       void import('./bots')
         .then(({ syncBotModeServices }) => syncBotModeServices())
         .catch(() => {});

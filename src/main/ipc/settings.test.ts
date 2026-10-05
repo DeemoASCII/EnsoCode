@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { IPC_CHANNELS } from '@shared/types';
@@ -12,12 +12,15 @@ const mocks = vi.hoisted(() => {
   return {
     handlers,
     sends,
+    syncBotModeServices: vi.fn(),
     windows: [] as Array<{
       isDestroyed: () => boolean;
       webContents: { id: number; isDestroyed: () => boolean; send: (channel: string) => void };
     }>,
   };
 });
+
+vi.mock('./bots', () => ({ syncBotModeServices: mocks.syncBotModeServices }));
 
 vi.mock('electron', () => ({
   app: { getPath: () => userData, on: vi.fn() },
@@ -48,6 +51,29 @@ afterAll(async () => {
 });
 
 describe('settings广播策略', () => {
+  it('persists local Bot capacity across reload and notifies the scheduler on changes only', async () => {
+    const settings = await import('./settings');
+    expect(settings.SETTINGS_STATE_FIELDS).toContain('botMaxRunningTurns');
+    expect(settings.CONFIG_SYNC_COMMIT_FIELDS).not.toContain('botMaxRunningTurns');
+    mocks.syncBotModeServices.mockClear();
+    expect(settings.patchSettingsState('botMaxRunningTurns', 2)).toMatchObject({ ok: true });
+    await vi.waitFor(() => expect(mocks.syncBotModeServices).toHaveBeenCalledTimes(1));
+    settings.flushSettings();
+    expect(
+      JSON.parse(readFileSync(path.join(userData, 'settings.json'), 'utf8'))['enso-settings'].state
+        .botMaxRunningTurns
+    ).toBe(2);
+    vi.resetModules();
+    const reloaded = await import('./settings');
+    expect(reloaded.readSettings()?.['enso-settings']).toMatchObject({
+      state: { botMaxRunningTurns: 2 },
+    });
+    reloaded.patchSettingsState('theme', 'dark');
+    reloaded.flushSettings();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(mocks.syncBotModeServices).toHaveBeenCalledTimes(1);
+  });
+
   it('设置白名单同时保留 canonical editMode 与只读迁移用旧字段', async () => {
     const { CONFIG_SYNC_COMMIT_FIELDS, SETTINGS_STATE_FIELDS } = await import('./settings');
     expect(SETTINGS_STATE_FIELDS).toContain('editMode');

@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { normalizeBotMaxRunningTurns } from '../../../shared/bots/concurrency';
 import { wrapInterjection } from '../../../shared/bots/interject';
 import { type BotDeliverySource, enqueueByLane } from '../../../shared/bots/lane';
 import type {
@@ -28,8 +29,6 @@ import type { BotChatStore } from './chatStore';
 import { StartedDeliveryIndex } from './startedDeliveries';
 import { messageTokens } from './turnTokens';
 
-/** bot 会话同时在跑的轮次上限（私聊、群聊、委派、例行合计，Code 会话不计） */
-export const BOT_MAX_RUNNING_TURNS = 4;
 /** 运行中的轮次超过该时长没有任何输出（流式、工具进度、子代理）即视为静默 */
 export const BOT_SILENCE_MS = 90_000;
 /** 进行中的回合为成员日预算预留的估算 token：本回合已用部分抵扣，回合结束即释放 */
@@ -200,7 +199,7 @@ export class BotSessionHost {
   private readonly bindings = new Map<string, ConversationBotBinding | null>();
   private readonly locks = new Map<string, Promise<unknown>>();
   private readonly listeners = new Set<(event: BotTurnFinished) => void>();
-  private readonly maxRunning: number;
+  private maxRunning: number;
   private readonly settleGraceMs: number;
   private readonly settleTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private readonly independentSpecs = new Map<string, BotSpawnSpec>();
@@ -273,8 +272,16 @@ export class BotSessionHost {
   }
 
   constructor(private readonly deps: BotSessionHostDeps) {
-    this.maxRunning = deps.maxRunningTurns ?? BOT_MAX_RUNNING_TURNS;
+    this.maxRunning = normalizeBotMaxRunningTurns(deps.maxRunningTurns);
     this.settleGraceMs = deps.settleGraceMs ?? 2000;
+  }
+
+  setMaxRunningTurns(value: unknown): void {
+    const limit = normalizeBotMaxRunningTurns(value);
+    if (this.maxRunning === limit) return;
+    // 已占位的轮次（含 spawn / 预算准备）不撤销，只限制后续准入。
+    this.maxRunning = limit;
+    this.pump();
   }
 
   onTurnFinished(listener: (event: BotTurnFinished) => void): () => void {
@@ -1156,6 +1163,7 @@ export class BotSessionHost {
       if (!this.deps.runtime.retry) return { ok: false, error: 'unsupported' };
       if (await this.overBudget(ready.botId, ready.chatId || null))
         return { ok: false, error: BOT_BUDGET_ERROR };
+      if (this.runningCount() >= this.maxRunning) return { ok: false, error: 'session-busy' };
       const slot = { sawRunning: false };
       this.slots.set(conversationId, slot);
       this.turnKeys.set(conversationId, randomUUID());

@@ -108,6 +108,50 @@ function ev(event: Record<string, unknown>, sessionId: string): AgentWorkerEvent
   return { seq: 1, identity: { sessionId, generation: 'g' }, ...event } as AgentWorkerEvent;
 }
 
+describe('BotSessionHost live capacity', () => {
+  it('starts queued turns on increase but keeps the same conversation serial', async () => {
+    host.setMaxRunningTurns(1);
+    const alice = bot('Alice');
+    const one = direct(alice.id);
+    const two = direct(alice.id);
+    const first = await host.deliver(one.id, alice.id, 'first');
+    if (!first.ok) throw new Error(first.error);
+    await host.deliver(one.id, alice.id, 'same', { queueIfBusy: true });
+    await host.deliver(two.id, alice.id, 'other');
+    expect(host.queueState().map((item) => item.reason)).toEqual(['turn', 'capacity']);
+    host.setMaxRunningTurns(2);
+    await flush();
+    expect(runtime.prompts.map((item) => item.text)).toEqual(['first', 'other']);
+    expect(host.queueState()).toMatchObject([{ reason: 'turn' }]);
+    expect(host.runningCount()).toBe(2);
+    host.observe(ev({ type: 'turn-completed', turnId: 't1' }, first.conversationId));
+    await flush();
+    expect(runtime.prompts.at(-1)?.text).toBe('same');
+  });
+
+  it('does not interrupt active turns on decrease and waits until below the new limit', async () => {
+    host.setMaxRunningTurns(2);
+    const alice = bot('Alice');
+    const ids: string[] = [];
+    for (const text of ['first', 'second', 'third']) {
+      const sent = await host.deliver(direct(alice.id).id, alice.id, text);
+      if (!sent.ok) throw new Error(sent.error);
+      ids.push(sent.conversationId);
+    }
+    host.setMaxRunningTurns(1);
+    expect(host.runningCount()).toBe(2);
+    expect(runtime.aborted).toEqual([]);
+    expect(runtime.released).toEqual([]);
+    host.observe(ev({ type: 'turn-completed', turnId: 't1' }, ids[0]));
+    await flush();
+    expect(runtime.prompts).toHaveLength(2);
+    host.observe(ev({ type: 'turn-completed', turnId: 't2' }, ids[1]));
+    await flush();
+    expect(runtime.prompts.map((item) => item.text)).toEqual(['first', 'second', 'third']);
+    expect(host.runningCount()).toBe(1);
+  });
+});
+
 describe('BotSessionHost.ensureSession', () => {
   it('updates idle member models in place and can return to the default model', async () => {
     const alice = bot('Alice');
@@ -1482,6 +1526,33 @@ describe('BotSessionHost 私聊回退与重试', () => {
       emit: () => {},
     });
   };
+
+  it('rechecks capacity when the limit drops while a retry is preparing', async () => {
+    make();
+    host.setMaxRunningTurns(2);
+    const alice = bot('Alice');
+    await host.deliver(direct(alice.id).id, alice.id, 'running');
+    const session = host.ensureSession(direct(alice.id).id, alice.id);
+    if (!session.ok) throw new Error(session.error);
+    let resume!: () => void;
+    const blocked = new Promise<void>((resolve) => {
+      resume = resolve;
+    });
+    const spawn = control.spawn.bind(control);
+    control.spawn = async (spec) => {
+      await blocked;
+      return spawn(spec);
+    };
+    const retry = host.retryConversation(session.conversationId);
+    await flush();
+    expect(host.runningCount()).toBe(1);
+    host.setMaxRunningTurns(1);
+    resume();
+    expect(await retry).toEqual({ ok: false, error: 'session-busy' });
+    expect(control.retries).toEqual([]);
+    expect(host.runningCount()).toBe(1);
+    expect(host.isBusy(session.conversationId)).toBe(false);
+  });
 
   it('冷会话先恢复（只 spawn 不 prompt）再回退；运行中拒绝', async () => {
     make();

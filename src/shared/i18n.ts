@@ -2376,6 +2376,9 @@ export const zhTranslations: Record<string, string> = {
     '仍在测试中的功能，之后可能调整或移除。',
   'Bot mode settings': 'Bot 模式设置',
   'Settings shared by all members and group chats.': '所有成员和群聊共用的设置。',
+  'Bot concurrency limit': 'Bot 并发上限',
+  'Shared by private chats, group chats, delegations and routines. Lowering it never interrupts running work; raising it may hit model rate limits.':
+    '私聊、群聊、委派和例行任务共用一个上限。调低不会打断进行中的回复；调高可能触发模型限流。',
   Apply: '应用',
   'None selected': '未选择',
   'Suggested changes': '建议的修改',

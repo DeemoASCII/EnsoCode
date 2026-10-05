@@ -1,4 +1,8 @@
 import { type AccentColor, DEFAULT_ACCENT_COLOR, resolveAccentColor } from '@shared/accentColor';
+import {
+  DEFAULT_BOT_MAX_RUNNING_TURNS,
+  normalizeBotMaxRunningTurns,
+} from '@shared/bots/concurrency';
 import { sanitizeDefaultModel } from '@shared/defaultModel';
 import type { Locale } from '@shared/i18n';
 import { normalizeLocale } from '@shared/i18n';
@@ -152,6 +156,7 @@ const initialState = {
   botModeEnabled: false,
   botRouteClassifier: null as VirtualClassifierConfig | null,
   botAssistantModel: null as import('@shared/defaultModel').DefaultModelRef | null,
+  botMaxRunningTurns: DEFAULT_BOT_MAX_RUNNING_TURNS,
   voiceInputDevice: SYSTEM_MICROPHONE,
   voiceModel: DEFAULT_SPEECH_MODEL_ID,
   voiceCorrectionEnabled: false,
@@ -314,6 +319,8 @@ export const useSettingsStore = create<SettingsState>()(
       setBotModeEnabled: (botModeEnabled) => set({ botModeEnabled }),
       setBotRouteClassifier: (botRouteClassifier) => set({ botRouteClassifier }),
       setBotAssistantModel: (botAssistantModel) => set({ botAssistantModel }),
+      setBotMaxRunningTurns: (value) =>
+        set({ botMaxRunningTurns: normalizeBotMaxRunningTurns(value) }),
       setVoiceInputDevice: (voiceInputDevice) => set({ voiceInputDevice }),
       setVoiceModel: (voiceModel) => set({ voiceModel }),
       setVoiceCorrectionEnabled: (voiceCorrectionEnabled) => set({ voiceCorrectionEnabled }),
@@ -1043,6 +1050,10 @@ export const useSettingsStore = create<SettingsState>()(
         const maxActiveCoworkers = normalizeMaxActiveCoworkers(s.maxActiveCoworkers);
         if (maxActiveCoworkers !== s.maxActiveCoworkers) {
           useSettingsStore.setState({ maxActiveCoworkers });
+        }
+        const botMaxRunningTurns = normalizeBotMaxRunningTurns(s.botMaxRunningTurns);
+        if (botMaxRunningTurns !== s.botMaxRunningTurns) {
+          useSettingsStore.setState({ botMaxRunningTurns });
         }
         const sshTimeoutSeconds = normalizeSshTimeoutSeconds(s.sshTimeoutSeconds);
         if (sshTimeoutSeconds !== s.sshTimeoutSeconds) {
