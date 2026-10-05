@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -33,7 +33,18 @@ function fixture(autoStart = true, over = new Set<string>()) {
   })!;
   const authority = new SourceAuthorityRegistry({ registryFile: join(root, 'authority.json') });
   const prompts: Array<{ id: string; text: string; deliveryId?: string }> = [];
+  const retries: string[] = [];
+  const badSpawn = new Set<string>();
   const abort = vi.fn();
+  const running = (id: string) =>
+    queueMicrotask(() =>
+      host.observe({
+        type: 'status',
+        status: 'running',
+        identity: { sessionId: id, generation: 'g' },
+        seq: 1,
+      })
+    );
   const host = new BotSessionHost({
     bots,
     chats,
@@ -41,18 +52,16 @@ function fixture(autoStart = true, over = new Set<string>()) {
     emit: () => {},
     budget: { prepare: async () => {}, verdict: (botId) => (over.has(botId) ? 'tokens' : null) },
     runtime: {
-      spawn: async () => ({ ok: true }),
+      spawn: async (spec) =>
+        badSpawn.has(spec.conversationId) ? { ok: false, error: 'bad-session' } : { ok: true },
       prompt: (id, text, _images, deliveryId) => {
         prompts.push({ id, text, deliveryId });
-        if (autoStart)
-          queueMicrotask(() =>
-            host.observe({
-              type: 'status',
-              status: 'running',
-              identity: { sessionId: id, generation: 'g' },
-              seq: 1,
-            })
-          );
+        if (autoStart) running(id);
+        return { ok: true };
+      },
+      retry: (id) => {
+        retries.push(id);
+        if (autoStart) running(id);
         return { ok: true };
       },
       steer: () => ({ ok: true }),
@@ -80,12 +89,21 @@ function fixture(autoStart = true, over = new Set<string>()) {
       seq: 1,
       turnId: 'turn',
     });
+  /** 子会话已落盘（worker 报 ready 后才有 sessionFile） */
+  const persist = (conversationId: string) => {
+    const file = join(root, `${conversationId}.jsonl`);
+    writeFileSync(file, '{}\n');
+    authority.markReady(conversationId, file, { providerId: 'p', modelId: 'm' });
+  };
   return {
     service,
     host,
     store,
     parent: parent.conversationId,
     prompts,
+    retries,
+    badSpawn,
+    persist,
     finish,
     abort,
     bob: b.bot.id,
@@ -205,7 +223,7 @@ it("caps the delegation timeout by the target's limit and lets the caller ask fo
   expect(f.store.get(plain.delegationId)?.failure).toBe('timeout');
   // 重试沿用原时限，并按目标当前上限再收紧
   f.deps.bots.update(f.bob, { delegationTimeoutMinutes: 5 }, []);
-  const retried = f.service.retry(short.delegationId);
+  const retried = await f.service.retry(short.delegationId);
   if (!retried.ok) throw new Error(retried.error);
   expect(f.store.get(retried.delegationId)?.timeoutMinutes).toBe(5);
   f.service.dispose();
@@ -265,7 +283,7 @@ it('rejects a fourth concurrent delegation, retries with a new id, and prevents 
   expect(f.store.get(first.delegationId)?.state).toBe('queued');
   f.service.cancel(first.delegationId);
   expect(f.store.get(first.delegationId)?.state).toBe('canceled');
-  const retried = f.service.retry(first.delegationId);
+  const retried = await f.service.retry(first.delegationId, 'restart');
   expect(retried.ok && retried.delegationId).not.toBe(first.delegationId);
   await vi.advanceTimersByTimeAsync(0);
   f.service.dispose();
@@ -370,7 +388,7 @@ it('keeps a retried delegation out of the original batch', async () => {
   const first = f.service.delegate(f.parent, { to: 'Bob', task: 'one' });
   if (!first.ok) throw new Error(first.error);
   f.service.cancel(first.delegationId);
-  const retried = f.service.retry(first.delegationId);
+  const retried = await f.service.retry(first.delegationId, 'restart');
   if (!retried.ok) throw new Error(retried.error);
   const batchId = f.store.get(first.delegationId)?.batchId;
   expect(batchId).toBeTruthy();
@@ -448,12 +466,12 @@ it('links a board task: gate rejects before any record, sync sees every save, re
     expect.objectContaining({ id: sent.delegationId, state: 'canceled' })
   );
   free = true;
-  const retried = service.retry(sent.delegationId);
+  const retried = await service.retry(sent.delegationId, 'restart');
   if (!retried.ok) throw new Error(retried.error);
   expect(f.store.get(retried.delegationId)?.taskId).toBe(TASK);
   service.cancel(retried.delegationId);
   free = false;
-  const again = service.retry(retried.delegationId);
+  const again = await service.retry(retried.delegationId, 'restart');
   if (!again.ok) throw new Error(again.error);
   expect(f.store.get(again.delegationId)).not.toHaveProperty('taskId');
   service.dispose();
@@ -509,7 +527,7 @@ describe('acceptance check', () => {
     });
     expect(results(f)[0].text).toContain('status="failed"');
     expect(results(f)[0].text).toContain('验收未通过：未在工具输出中看到「XYZ_PASS」');
-    const retried = f.service.retry(sent.delegationId);
+    const retried = await f.service.retry(sent.delegationId);
     if (!retried.ok) throw new Error(retried.error);
     expect(f.store.get(retried.delegationId)?.check).toEqual(check);
     f.service.dispose();
@@ -562,6 +580,200 @@ describe('acceptance check', () => {
     expect(read).not.toHaveBeenCalled();
     service.dispose();
   });
+
+  it('retrying a failed check tells the member why in the original session instead of starting over', async () => {
+    let messages = [output('a', 'nope')];
+    const f = checked(() => messages);
+    const sent = f.service.delegate(f.parent, { to: 'Bob', task: 'run it', check });
+    if (!sent.ok) throw new Error(sent.error);
+    await vi.advanceTimersByTimeAsync(0);
+    const child = f.store.get(sent.delegationId)!.childConversationId;
+    f.persist(child);
+    f.finish(child);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(f.store.get(sent.delegationId)).toMatchObject({ state: 'failed', failure: 'check' });
+    const retried = await f.service.retry(sent.delegationId);
+    if (!retried.ok) throw new Error(retried.error);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(f.store.get(retried.delegationId)).toMatchObject({
+      childConversationId: child,
+      retryOf: sent.delegationId,
+      check,
+      state: 'running',
+    });
+    const notes = f.prompts.filter((p) => p.deliveryId === retried.delegationId);
+    expect(notes).toMatchObject([{ id: child }]);
+    expect(notes[0].text).toContain('<delegation-check-failed');
+    expect(notes[0].text).toContain('XYZ_PASS');
+    expect(f.retries).toEqual([]);
+    expect(f.prompts.filter((p) => p.text.includes('<delegation-task'))).toHaveLength(1);
+    messages = [output('a', 'nope'), output('b', 'XYZ_PASS')];
+    f.finish(child);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(f.store.get(retried.delegationId)).toMatchObject({
+      state: 'completed',
+      check: { ...check, passed: true },
+    });
+    f.service.dispose();
+  });
+
+  it('a resumed run counts check outputs produced before the interruption', async () => {
+    let messages: ReturnType<typeof output>[] = [];
+    const f = checked(() => messages);
+    const sent = f.service.delegate(f.parent, {
+      to: 'Bob',
+      task: 'run it',
+      check,
+      deadlineMinutes: 10,
+    });
+    if (!sent.ok) throw new Error(sent.error);
+    await vi.advanceTimersByTimeAsync(5);
+    const child = f.store.get(sent.delegationId)!.childConversationId;
+    f.persist(child);
+    messages = [output('a', 'XYZ_PASS')];
+    await vi.advanceTimersByTimeAsync(5);
+    expect(f.store.get(sent.delegationId)).toMatchObject({ state: 'failed', failure: 'timeout' });
+    const retried = await f.service.retry(sent.delegationId);
+    if (!retried.ok) throw new Error(retried.error);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(f.retries).toEqual([child]);
+    f.finish(child);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(f.store.get(retried.delegationId)).toMatchObject({ state: 'completed' });
+    f.service.dispose();
+  });
+});
+
+describe('retry resumes from the breakpoint', () => {
+  const tasks = (f: ReturnType<typeof fixture>) =>
+    f.prompts.filter((p) => p.text.includes('<delegation-task'));
+
+  it('continues a timed-out delegation in its original child session with a fresh timer and the board task re-linked', async () => {
+    const f = fixture();
+    f.service.dispose();
+    const TASK = '55555555-5555-4555-8555-555555555555';
+    const board = { gate: vi.fn(() => ({ ok: true, taskId: TASK }) as const), sync: vi.fn() };
+    const service = new DelegationService({ ...f.deps, tasks: board });
+    const sent = service.delegate(f.parent, {
+      to: 'Bob',
+      task: 'long work',
+      taskId: '#1',
+      deadlineMinutes: 10,
+    });
+    if (!sent.ok) throw new Error(sent.error);
+    await vi.advanceTimersByTimeAsync(0);
+    const child = f.store.get(sent.delegationId)!.childConversationId;
+    f.persist(child);
+    await vi.advanceTimersByTimeAsync(10);
+    expect(f.store.get(sent.delegationId)).toMatchObject({ state: 'failed', failure: 'timeout' });
+    const retried = await service.retry(sent.delegationId);
+    if (!retried.ok) throw new Error(retried.error);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(f.store.get(retried.delegationId)).toMatchObject({
+      retryOf: sent.delegationId,
+      childConversationId: child,
+      taskId: TASK,
+      timeoutMinutes: 10,
+      state: 'running',
+    });
+    expect(f.retries).toEqual([child]);
+    expect(tasks(f)).toHaveLength(1);
+    expect(board.sync).toHaveBeenLastCalledWith(
+      expect.objectContaining({ id: retried.delegationId, taskId: TASK, state: 'running' })
+    );
+    await vi.advanceTimersByTimeAsync(9);
+    expect(f.store.get(retried.delegationId)?.state).toBe('running');
+    f.finish(child);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(f.store.get(retried.delegationId)?.state).toBe('completed');
+    expect(f.store.get(sent.delegationId)?.state).toBe('failed');
+    service.dispose();
+  });
+
+  it('continues a delegation interrupted by a restart', async () => {
+    const f = fixture();
+    const sent = f.service.delegate(f.parent, { to: 'Bob', task: 'work' });
+    if (!sent.ok) throw new Error(sent.error);
+    await vi.advanceTimersByTimeAsync(0);
+    const child = f.store.get(sent.delegationId)!.childConversationId;
+    f.persist(child);
+    f.service.dispose();
+    f.host.observe({ type: 'worker-exited' });
+    const restarted = new DelegationService(f.deps);
+    expect(f.store.get(sent.delegationId)).toMatchObject({ failure: 'interrupted' });
+    const retried = await restarted.retry(sent.delegationId);
+    if (!retried.ok) throw new Error(retried.error);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(f.store.get(retried.delegationId)).toMatchObject({
+      childConversationId: child,
+      state: 'running',
+    });
+    expect(f.retries).toEqual([child]);
+    expect(tasks(f)).toHaveLength(1);
+    restarted.dispose();
+  });
+
+  it('starts over in a new child session when the original never ran, lost its file, or fails to restore', async () => {
+    const f = fixture();
+    const fresh = async (prepare: (child: string) => void) => {
+      const sent = f.service.delegate(f.parent, { to: 'Bob', task: 'work' });
+      if (!sent.ok) throw new Error(sent.error);
+      await vi.advanceTimersByTimeAsync(0);
+      const child = f.store.get(sent.delegationId)!.childConversationId;
+      prepare(child);
+      f.service.cancel(sent.delegationId);
+      await vi.advanceTimersByTimeAsync(0);
+      const retried = await f.service.retry(sent.delegationId, 'resume');
+      if (!retried.ok) throw new Error(retried.error);
+      await vi.advanceTimersByTimeAsync(0);
+      const next = f.store.get(retried.delegationId)!;
+      expect(next.childConversationId).not.toBe(child);
+      expect(next.state).toBe('running');
+      expect(tasks(f).at(-1)).toMatchObject({
+        id: next.childConversationId,
+        deliveryId: next.id,
+      });
+      f.service.cancel(next.id);
+    };
+    await fresh(() => {});
+    await fresh((child) => {
+      f.persist(child);
+      rmSync(f.deps.authority.conversation(child)!.sessionFile!);
+    });
+    await fresh((child) => {
+      f.persist(child);
+      f.badSpawn.add(child);
+    });
+    expect(f.retries).toEqual([]);
+    f.service.dispose();
+  });
+
+  it('a manually canceled delegation needs an explicit choice between continue and start over', async () => {
+    const f = fixture();
+    const sent = f.service.delegate(f.parent, { to: 'Bob', task: 'work' });
+    if (!sent.ok) throw new Error(sent.error);
+    await vi.advanceTimersByTimeAsync(0);
+    const child = f.store.get(sent.delegationId)!.childConversationId;
+    f.persist(child);
+    f.service.cancel(sent.delegationId);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(await f.service.retry(sent.delegationId)).toMatchObject({ ok: false });
+    expect(f.store.list().some((item) => item.retryOf === sent.delegationId)).toBe(false);
+    const resumed = await f.service.retry(sent.delegationId, 'resume');
+    if (!resumed.ok) throw new Error(resumed.error);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(f.store.get(resumed.delegationId)?.childConversationId).toBe(child);
+    expect(f.retries).toEqual([child]);
+    f.service.cancel(resumed.delegationId);
+    await vi.advanceTimersByTimeAsync(0);
+    const restarted = await f.service.retry(resumed.delegationId, 'restart');
+    if (!restarted.ok) throw new Error(restarted.error);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(f.store.get(restarted.delegationId)?.childConversationId).not.toBe(child);
+    expect(tasks(f)).toHaveLength(2);
+    expect(f.retries).toEqual([child]);
+    f.service.dispose();
+  });
 });
 
 it('rejects delegating back up the chain to a member who delegated to you', async () => {
@@ -597,26 +809,27 @@ it('retries only failed / canceled / interrupted records, links retryOf, and ref
   const sent = f.service.delegate(f.parent, { to: 'Bob', task: 'one' });
   if (!sent.ok) throw new Error(sent.error);
   await vi.advanceTimersByTimeAsync(0);
-  expect(f.service.retry(sent.delegationId)).toMatchObject({ ok: false });
+  expect(await f.service.retry(sent.delegationId)).toMatchObject({ ok: false });
   f.finish(f.store.get(sent.delegationId)!.childConversationId);
   await vi.advanceTimersByTimeAsync(0);
   expect(f.store.get(sent.delegationId)?.state).toBe('completed');
-  expect(f.service.retry(sent.delegationId)).toMatchObject({ ok: false });
-  expect(f.service.retry('missing')).toMatchObject({ ok: false });
+  expect(await f.service.retry(sent.delegationId)).toMatchObject({ ok: false });
+  expect(await f.service.retry('missing')).toMatchObject({ ok: false });
 
   const failed = f.service.delegate(f.parent, { to: 'Bob', task: 'two' });
   if (!failed.ok) throw new Error(failed.error);
   f.service.cancel(failed.delegationId);
-  const retried = f.service.retry(failed.delegationId);
+  expect(await f.service.retry(failed.delegationId)).toMatchObject({ ok: false });
+  const retried = await f.service.retry(failed.delegationId, 'restart');
   if (!retried.ok) throw new Error(retried.error);
   expect(f.store.get(retried.delegationId)).toMatchObject({ retryOf: failed.delegationId });
   expect(f.store.get(retried.delegationId)).not.toHaveProperty('batchId');
-  expect(f.service.retry(failed.delegationId)).toEqual({
+  expect(await f.service.retry(failed.delegationId, 'restart')).toEqual({
     ok: false,
     error: 'This delegation has already been retried.',
   });
   f.service.cancel(retried.delegationId);
-  const chained = f.service.retry(retried.delegationId);
+  const chained = await f.service.retry(retried.delegationId, 'restart');
   if (!chained.ok) throw new Error(chained.error);
   expect(f.store.get(chained.delegationId)?.retryOf).toBe(retried.delegationId);
   f.service.dispose();
@@ -626,7 +839,7 @@ it('retries only failed / canceled / interrupted records, links retryOf, and ref
     state: 'failed',
     failure: 'interrupted',
   });
-  const resumed = restarted.retry(chained.delegationId);
+  const resumed = await restarted.retry(chained.delegationId);
   expect(resumed.ok && f.store.get(resumed.delegationId)?.retryOf).toBe(chained.delegationId);
   restarted.dispose();
 });
@@ -638,7 +851,7 @@ it('retry is bound by the per-parent concurrency cap', async () => {
   f.service.cancel(first.delegationId);
   for (const task of ['two', 'three', 'four'])
     expect(f.service.delegate(f.parent, { to: 'Bob', task }).ok).toBe(true);
-  expect(f.service.retry(first.delegationId)).toMatchObject({ ok: false });
+  expect(await f.service.retry(first.delegationId, 'restart')).toMatchObject({ ok: false });
   expect(f.store.list().some((item) => item.retryOf === first.delegationId)).toBe(false);
   f.service.dispose();
 });

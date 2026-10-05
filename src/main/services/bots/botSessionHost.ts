@@ -1043,14 +1043,20 @@ export class BotSessionHost {
     return undefined;
   }
 
-  /** 回退 / 重试的公共前置：会话空闲、可用，且已在 worker 里（冷会话只恢复不 prompt） */
-  private async controllable(conversationId: string): Promise<Delivery | Fail> {
+  /** 回退 / 重试的公共前置：会话空闲、可用，且已在 worker 里（冷会话只恢复不 prompt）；delegation 只认已登记的委派子会话 */
+  private async controllable(conversationId: string, delegation = false): Promise<Delivery | Fail> {
     if (this.disposed) return { ok: false, error: 'disabled' };
     const binding = this.binding(conversationId);
-    if (!binding?.chatId || binding.delegationId) return { ok: false, error: 'not-bot-session' };
+    if (
+      !binding ||
+      (delegation
+        ? !binding.delegationId || !this.independentSpecs.has(conversationId)
+        : !binding.chatId || binding.delegationId)
+    )
+      return { ok: false, error: 'not-bot-session' };
     if (this.isBusy(conversationId)) return { ok: false, error: 'session-busy' };
     const delivery: Delivery = {
-      chatId: binding.chatId,
+      chatId: binding.chatId ?? '',
       botId: binding.botId,
       conversationId,
       text: '',
@@ -1081,14 +1087,17 @@ export class BotSessionHost {
     });
   }
 
-  /** 私聊重试：像一次投递那样占用回合（新 turnKey、计入并发、正常结算） */
-  retryConversation(conversationId: string): Promise<BotDeliverResult> {
+  /** 私聊 / 委派续跑：像一次投递那样占用回合（新 turnKey、计入并发、正常结算） */
+  retryConversation(
+    conversationId: string,
+    options: { delegation?: boolean } = {}
+  ): Promise<BotDeliverResult> {
     return this.withLock(conversationId, async (): Promise<BotDeliverResult> => {
       if (this.runningCount() >= this.maxRunning) return { ok: false, error: 'session-busy' };
-      const ready = await this.controllable(conversationId);
+      const ready = await this.controllable(conversationId, options.delegation);
       if ('ok' in ready) return ready;
       if (!this.deps.runtime.retry) return { ok: false, error: 'unsupported' };
-      if (await this.overBudget(ready.botId, ready.chatId))
+      if (await this.overBudget(ready.botId, ready.chatId || null))
         return { ok: false, error: BOT_BUDGET_ERROR };
       const slot = { sawRunning: false };
       this.slots.set(conversationId, slot);

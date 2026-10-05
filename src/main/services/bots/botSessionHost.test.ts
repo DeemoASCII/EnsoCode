@@ -1415,4 +1415,42 @@ describe('BotSessionHost 私聊回退与重试', () => {
     });
     expect(host.isBusy(session.conversationId)).toBe(false);
   });
+
+  it('委派子会话只在显式 delegation 时续跑：冷会话先恢复再 retry，结算带 delegationId', async () => {
+    make();
+    const alice = bot('Alice');
+    const bob = bot('Bob');
+    const chat = direct(alice.id);
+    const parent = host.ensureSession(chat.id, alice.id);
+    if (!parent.ok) throw new Error(parent.error);
+    const projectId = registry.conversation(parent.conversationId)!.projectId;
+    const child = registry.createBotConversation(projectId, {
+      botId: bob.id,
+      chatId: null,
+      delegationId: 'd1',
+    })!;
+    const id = child.conversationId;
+    expect(await host.retryConversation(id, { delegation: true })).toEqual({
+      ok: false,
+      error: 'not-bot-session',
+    });
+    expect(host.registerDelegation(id, bob)).toBe(true);
+    expect(await host.retryConversation(id)).toEqual({ ok: false, error: 'not-bot-session' });
+    expect(await host.retryConversation(parent.conversationId, { delegation: true })).toEqual({
+      ok: false,
+      error: 'not-bot-session',
+    });
+    const finished: BotTurnFinished[] = [];
+    host.onTurnFinished((event) => finished.push(event));
+    expect(await host.retryConversation(id, { delegation: true })).toEqual({
+      ok: true,
+      conversationId: id,
+    });
+    expect(control.spawns.map((spec) => spec.conversationId)).toEqual([id]);
+    expect(control.prompts).toEqual([]);
+    expect(control.retries).toEqual([id]);
+    host.observe(ev({ type: 'status', status: 'running' }, id));
+    host.observe(ev({ type: 'turn-completed', turnId: 't' }, id));
+    expect(finished.at(-1)).toMatchObject({ conversationId: id, ok: true, delegationId: 'd1' });
+  });
 });

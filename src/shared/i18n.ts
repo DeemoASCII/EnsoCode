@@ -2273,6 +2273,8 @@ export const zhTranslations: Record<string, string> = {
   Canceled: '已取消',
   'No process recorded.': '没有记录到过程。',
   'View process': '查看过程',
+  Continue: '继续',
+  'Start over': '重新开始',
   '{{n}} steps': '{{n}} 步',
   'Could not locate this reply; showing the latest turn.': '未定位到这条回复，显示最近一轮。',
   'No tool calls in this turn.': '这一轮没有工具调用。',

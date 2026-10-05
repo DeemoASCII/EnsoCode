@@ -40,10 +40,16 @@ export function isRetried(item: Delegation, delegations: readonly Delegation[]):
   return delegations.some((other) => other.retryOf === item.id);
 }
 
-export function delegationActions(state: DelegationState): { cancel: boolean; retry: boolean } {
+/** 失败的从断点重试；手动取消的由用户在「继续」「重新开始」之间选 */
+export function delegationActions(state: DelegationState): {
+  cancel: boolean;
+  retry: boolean;
+  resumeOrRestart: boolean;
+} {
   return {
     cancel: isActiveDelegation(state),
-    retry: state === 'failed' || state === 'canceled',
+    retry: state === 'failed',
+    resumeOrRestart: state === 'canceled',
   };
 }
 

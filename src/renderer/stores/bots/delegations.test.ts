@@ -111,12 +111,13 @@ describe('openTarget', () => {
 });
 
 describe('delegationActions', () => {
-  it('排队/进行中可取消，失败/取消可重试，完成都不可', () => {
-    expect(delegationActions('queued')).toEqual({ cancel: true, retry: false });
-    expect(delegationActions('running')).toEqual({ cancel: true, retry: false });
-    expect(delegationActions('failed')).toEqual({ cancel: false, retry: true });
-    expect(delegationActions('canceled')).toEqual({ cancel: false, retry: true });
-    expect(delegationActions('completed')).toEqual({ cancel: false, retry: false });
+  it('排队/进行中可取消，失败给重试，手动取消让用户选继续或重新开始，完成都不可', () => {
+    const none = { cancel: false, retry: false, resumeOrRestart: false };
+    expect(delegationActions('queued')).toEqual({ ...none, cancel: true });
+    expect(delegationActions('running')).toEqual({ ...none, cancel: true });
+    expect(delegationActions('failed')).toEqual({ ...none, retry: true });
+    expect(delegationActions('canceled')).toEqual({ ...none, resumeOrRestart: true });
+    expect(delegationActions('completed')).toEqual(none);
   });
 });
 

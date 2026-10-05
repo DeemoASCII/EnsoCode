@@ -1169,8 +1169,8 @@ const electronAPI = {
       ipcRenderer.invoke(IPC_CHANNELS.BOT_DELEGATIONS_LIST, request),
     cancelDelegation: (id: string): Promise<BotActionResult> =>
       ipcRenderer.invoke(IPC_CHANNELS.BOT_DELEGATION_CANCEL, { id }),
-    retryDelegation: (id: string): Promise<BotDelegationRetryResult> =>
-      ipcRenderer.invoke(IPC_CHANNELS.BOT_DELEGATION_RETRY, { id }),
+    retryDelegation: (id: string, mode?: 'resume' | 'restart'): Promise<BotDelegationRetryResult> =>
+      ipcRenderer.invoke(IPC_CHANNELS.BOT_DELEGATION_RETRY, mode ? { id, mode } : { id }),
     routines: {
       list: (request: { botId?: string } = {}): Promise<BotRoutinesResult> =>
         ipcRenderer.invoke(IPC_CHANNELS.BOT_ROUTINES_LIST, request),

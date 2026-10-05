@@ -86,8 +86,8 @@ export function cancelDelegation(id: string, t: TFunction): void {
   });
 }
 
-export function retryDelegation(id: string, t: TFunction): void {
-  void window.electronAPI.bots.retryDelegation(id).then((result) => {
+export function retryDelegation(id: string, t: TFunction, mode?: 'resume' | 'restart'): void {
+  void window.electronAPI.bots.retryDelegation(id, mode).then((result) => {
     if (!result.ok)
       addToast({ type: 'error', title: t('Retry failed'), description: result.error });
     else if (result.warning) addToast({ type: 'warning', title: result.warning });
@@ -185,6 +185,24 @@ export function DelegationCard({
             <Button size="xs" variant="outline" onClick={() => retryDelegation(record.id, t)}>
               {t('Retry')}
             </Button>
+          )}
+          {actions.resumeOrRestart && !retried && (
+            <>
+              <Button
+                size="xs"
+                variant="outline"
+                onClick={() => retryDelegation(record.id, t, 'resume')}
+              >
+                {t('Continue')}
+              </Button>
+              <Button
+                size="xs"
+                variant="outline"
+                onClick={() => retryDelegation(record.id, t, 'restart')}
+              >
+                {t('Start over')}
+              </Button>
+            </>
           )}
         </div>
       )}

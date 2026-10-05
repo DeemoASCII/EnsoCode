@@ -1011,7 +1011,12 @@ export function registerBotHandlers(): void {
   });
   handle(IPC_CHANNELS.BOT_DELEGATION_RETRY, 'write', (_sender, request, { delegations }) => {
     const input = objectInput(request);
-    return input && isBotId(input.id) ? delegations.retry(input.id) : INVALID;
+    const mode = input?.mode;
+    return input &&
+      isBotId(input.id) &&
+      (mode === undefined || mode === 'resume' || mode === 'restart')
+      ? delegations.retry(input.id, mode)
+      : INVALID;
   });
   handle(
     IPC_CHANNELS.BOT_ROUTINES_LIST,
