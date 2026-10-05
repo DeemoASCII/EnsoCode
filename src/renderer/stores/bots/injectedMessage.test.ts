@@ -124,6 +124,47 @@ describe('parseBotInjectedMessage', () => {
 });
 
 describe('lead injection followed by group catch-up', () => {
+  it('hides the post-compaction group-state block and lifts the routing note out of the instruction', () => {
+    expect(
+      parseBotInjectedMessage(
+        [
+          '<group-state>\n成员：A &amp; B\n</group-state>',
+          '<group-message from="用户" role="人类" seq="59">两个都要</group-message>',
+          '<routing-note>这是执行类请求：先动手完成，再简要汇报。</routing-note>',
+        ].join('\n')
+      )
+    ).toEqual({
+      kind: 'group',
+      messages: [{ from: '用户', text: '两个都要' }],
+      instruction: '',
+      note: '这是执行类请求：先动手完成，再简要汇报。',
+    });
+  });
+  it('turns appended chat references into titles instead of raw blocks', () => {
+    expect(
+      parseBotInjectedMessage(
+        '<group-message from="用户" seq="3">看下 @x</group-message>\n<chat-reference id="c9" title="旧群" kind="group">\nintro\nA: hi\n</chat-reference>'
+      )
+    ).toEqual({
+      kind: 'group',
+      messages: [{ from: '用户', text: '看下 @x' }],
+      instruction: '',
+      refs: [{ id: 'c9', title: '旧群' }],
+    });
+  });
+  it('attaches group messages after a lead even when preceded by group-state', () => {
+    expect(
+      parseBotInjectedMessage(
+        '<delegation-result id="d" from="J" status="completed">ok</delegation-result>\n<group-state>\ns\n</group-state>\n<group-message from="A" seq="1">hi</group-message>\n<routing-note>n</routing-note>'
+      )
+    ).toEqual({
+      kind: 'delegation-result',
+      from: 'J',
+      status: 'completed',
+      text: 'ok',
+      group: [{ from: 'A', text: 'hi' }],
+    });
+  });
   it('keeps the delegation result card and attaches the unseen group messages', () => {
     expect(
       parseBotInjectedMessage(

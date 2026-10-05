@@ -2134,6 +2134,7 @@ export const zhTranslations: Record<string, string> = {
   'Unavailable chat': '不可用的聊天',
   'Direct chat': '私聊',
   'Referenced chat': '引用的聊天',
+  'Dispatch hint: {{note}}': '分派提示：{{note}}',
   'The referenced chat no longer exists.': '引用的聊天已不存在。',
   'A chat cannot reference itself.': '不能引用当前聊天本身。',
   "The file is not inside this chat's workspace.": '文件不在该聊天的工作区内。',

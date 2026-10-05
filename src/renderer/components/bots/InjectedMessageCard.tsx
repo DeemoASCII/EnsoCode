@@ -79,6 +79,25 @@ export function InjectedMessageCard({ message }: { message: BotInjectedMessage }
           <p className="mt-1 whitespace-pre-wrap break-words">{message.instruction}</p>
         </details>
       )}
+      {message.kind === 'group' && !!message.refs?.length && (
+        <div className="mt-1.5 flex flex-wrap gap-1.5">
+          {message.refs.map((ref) => (
+            <span
+              key={ref.id}
+              title={t('Referenced chat')}
+              className="inline-flex h-6 max-w-56 items-center gap-1 rounded-md bg-muted px-1.5 text-xs"
+            >
+              <MessagesSquare className="h-3 w-3 shrink-0" />
+              <span className="min-w-0 truncate">{ref.title}</span>
+            </span>
+          ))}
+        </div>
+      )}
+      {message.kind === 'group' && message.note && (
+        <p className="mt-1.5 text-xs text-muted-foreground">
+          {t('Dispatch hint: {{note}}', { note: message.note })}
+        </p>
+      )}
       {message.kind !== 'group' && !!message.group?.length && (
         <details className="mt-1.5 text-xs text-muted-foreground">
           <summary className="cursor-pointer">

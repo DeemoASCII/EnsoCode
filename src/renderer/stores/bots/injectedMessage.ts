@@ -1,3 +1,4 @@
+import { splitChatReferences } from '@shared/bots/composerRefs';
 import { stripBotNotesUpdate } from '@shared/bots/notes';
 
 type GroupMessages = { from: string; text: string }[];
@@ -8,9 +9,15 @@ type LeadMessage =
   | { kind: 'delegation-result'; from: string; status: string; text: string }
   | { kind: 'delegation-results'; results: { from: string; status: string; text: string }[] };
 
-/** group：群聊里委派结果 / 例行任务后面补上的、该成员还没看过的群消息 */
+/** group：群聊里委派结果 / 例行任务后面补上的、该成员还没看过的群消息；note 为分派提示，refs 为附带的 @聊天 */
 export type BotInjectedMessage =
-  | { kind: 'group'; messages: GroupMessages; instruction: string }
+  | {
+      kind: 'group';
+      messages: GroupMessages;
+      instruction: string;
+      note?: string;
+      refs?: { id: string; title: string }[];
+    }
   | (LeadMessage & { group?: GroupMessages });
 
 const entities: Record<string, string> = {
@@ -37,7 +44,9 @@ export function parseBotInjectedMessage(text: string): BotInjectedMessage | null
   const source = stripBotNotesUpdate(text).trim();
   const whole = parseSource(source);
   if (whole || source.startsWith('<group') || source.startsWith('（')) return whole;
-  for (const split of source.matchAll(/\n(?=<group-info>|<group-message |（省略了 \d+ 条)/g)) {
+  for (const split of source.matchAll(
+    /\n(?=<group-info>|<group-state>|<group-message |（省略了 \d+ 条)/g
+  )) {
     const lead = parseSource(source.slice(0, split.index).trim());
     const tail = parseSource(source.slice(split.index).trim());
     if (lead && lead.kind !== 'group' && tail?.kind === 'group')
@@ -50,10 +59,13 @@ function parseSource(source: string): BotInjectedMessage | null {
   const omittedPattern = /^（省略了 \d+ 条更早的消息）\s*/;
   if (
     source.startsWith('<group-info>') ||
+    source.startsWith('<group-state>') ||
     source.startsWith('<group-message ') ||
     omittedPattern.test(source)
   ) {
-    let rest = source.replace(/^<group-info>[\s\S]*?<\/group-info>\s*/, '');
+    let rest = source
+      .replace(/^<group-info>[\s\S]*?<\/group-info>\s*/, '')
+      .replace(/^<group-state>[\s\S]*?<\/group-state>\s*/, '');
     const omitted = omittedPattern.exec(rest)?.[0].trim();
     rest = rest.replace(omittedPattern, '');
     const messages: { from: string; text: string }[] = [];
@@ -65,13 +77,17 @@ function parseSource(source: string): BotInjectedMessage | null {
       messages.push({ from: attrs.from, text: decode(match[2].trim()) });
       rest = rest.slice(match[0].length);
     }
-    return messages.length
-      ? {
-          kind: 'group',
-          messages,
-          instruction: decode([omitted, rest.trim()].filter(Boolean).join('\n')),
-        }
-      : null;
+    if (!messages.length) return null;
+    const note = /\n*<routing-note>([\s\S]*?)<\/routing-note>\s*$/.exec(rest);
+    if (note) rest = rest.slice(0, note.index);
+    const { body, refs } = splitChatReferences(rest);
+    return {
+      kind: 'group',
+      messages,
+      instruction: decode([omitted, body.trim()].filter(Boolean).join('\n')),
+      ...(note ? { note: decode(note[1].trim()) } : {}),
+      ...(refs.length ? { refs } : {}),
+    };
   }
   const batch = /^<delegation-results(\s[^>]*)?>([\s\S]*)<\/delegation-results>$/.exec(source);
   if (batch) {
