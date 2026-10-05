@@ -798,6 +798,7 @@ export function App() {
           deviceReadOnly={deviceReadOnly}
           readOnlyRejected={readOnlyRejected}
           onOpenDrawer={openDrawer}
+          voice={voice}
           onLoadOlder={() => {
             const beforeSeq = timelines[chat.id]?.entries[0]?.seq;
             const key = `${chat.id}:${beforeSeq}`;
