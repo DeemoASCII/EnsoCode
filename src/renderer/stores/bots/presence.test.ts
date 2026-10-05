@@ -3,13 +3,18 @@ import type { Delegation } from '@shared/types/bot';
 import type { BotQueueItem, BotSilence } from '@shared/types/botIpc';
 import { describe, expect, it } from 'vitest';
 import {
+  busyMembers,
+  busyNote,
   heldBrowserTab,
   lastHumanAt,
+  memberPresence,
   memberSources,
+  type PresenceContext,
   type PresenceInput,
   type PresenceSession,
   parseClaimWait,
   presenceOf,
+  presenceTarget,
 } from './presence';
 
 const user: ProjectedMessage = { role: 'user', content: [{ type: 'text', text: 'go' }] };
@@ -258,5 +263,92 @@ describe('heldBrowserTab', () => {
   it('ignores tabs of other chats and members holding nothing', () => {
     expect(heldBrowserTab(['own', 'child'], holders, ['t1'])).toBeUndefined();
     expect(heldBrowserTab(['own'], holders, ['t1', 't2'])).toBeUndefined();
+  });
+});
+
+describe('忙碌条', () => {
+  const ctx = (patch: Partial<PresenceContext> = {}): PresenceContext => ({
+    chat: {
+      id: 'chat1',
+      sessions: { b1: { conversationId: 'c1' }, b2: { conversationId: 'c2' } },
+    },
+    delegations: [],
+    sessions: {},
+    queue: [],
+    silences: [],
+    clearedAt: 0,
+    holders: {},
+    tabIds: [],
+    ...patch,
+  });
+
+  it('只列非闲成员（想/干/等你/卡住），按成员顺序；做完与闲不列', () => {
+    const done = delegation({ id: 'd', targetBotId: 'b3', state: 'completed', finishedAt: 200 });
+    const waiting = delegation({ id: 'w', targetBotId: 'b4', childConversationId: 'k4' });
+    const list = busyMembers(
+      ['b4', 'b1', 'b2', 'b3'],
+      ctx({
+        delegations: [done, waiting],
+        sessions: {
+          c1: session({ messages: [user, typing] }),
+          k4: session({ pendingApprovals: [approval] }),
+        },
+      })
+    );
+    expect(list.map((item) => [item.botId, item.info.state])).toEqual([
+      ['b4', 'wait'],
+      ['b1', 'work'],
+    ]);
+  });
+
+  it('全部空闲时为空', () => {
+    expect(busyMembers(['b1', 'b2'], ctx())).toEqual([]);
+  });
+
+  it('带上成员占用的浏览器标签', () => {
+    const info = memberPresence(
+      'b1',
+      ctx({
+        sessions: { c1: session() },
+        holders: { t1: { conversationId: 'c1', name: 'Jason' } },
+        tabIds: ['t1'],
+      })
+    );
+    expect(info).toMatchObject({ state: 'think', browserTab: 't1' });
+  });
+
+  it('短说明：委派在跑时取任务首个非空行，否则没有', () => {
+    const running = presenceOf(
+      input({ delegation: delegation({ task: '\n  浏览器标签页锁 \n细节…' }) })
+    );
+    expect(busyNote(running)).toBe('浏览器标签页锁');
+    const failed = presenceOf(
+      input({ delegation: delegation({ state: 'failed', finishedAt: 200 }), clearedAt: 100 })
+    );
+    expect(failed.state).toBe('stuck');
+    expect(busyNote(failed)).toBeUndefined();
+    expect(busyNote(presenceOf(input({ sessions: { c1: session() } })))).toBeUndefined();
+  });
+
+  it('点击目标：等你 → 对应审批会话；其余 → 决定状态的会话', () => {
+    const wait = presenceOf(
+      input({
+        conversationIds: ['c1', 'child'],
+        sessions: { c1: session(), child: session({ pendingApprovals: [approval] }) },
+      })
+    );
+    expect(presenceTarget(wait)).toEqual({ kind: 'pending', conversationId: 'child' });
+    const work = presenceOf(
+      input({
+        conversationIds: ['c1', 'child'],
+        sessions: { c1: session(), child: session({ messages: [user, typing] }) },
+      })
+    );
+    expect(presenceTarget(work)).toEqual({ kind: 'live', conversationId: 'child' });
+    const queuedDelegation = presenceOf(
+      input({ conversationIds: [], delegation: delegation({ state: 'queued' }) })
+    );
+    expect(presenceTarget(queuedDelegation)).toEqual({ kind: 'live', conversationId: 'child' });
+    expect(presenceTarget(presenceOf(input()))).toBeUndefined();
   });
 });

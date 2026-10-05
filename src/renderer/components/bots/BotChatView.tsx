@@ -36,6 +36,7 @@ import {
   type SkillOption,
 } from './BotComposer';
 import { BotLiveStatus } from './BotLiveStatus';
+import { MemberBusyBar } from './BotPresence';
 import { BotProfilePanel } from './BotProfilePanel';
 import { chatErrorText, chatTitle } from './botText';
 import { DelegationCard } from './DelegationCard';
@@ -364,6 +365,14 @@ export function BotChatView({ chat }: { chat: BotChat }) {
               />
             )}
             <PendingBars items={pending} bots={byId} showNames={chat.kind === 'group'} />
+            {chat.kind === 'group' && (
+              <MemberBusyBar
+                chatId={chat.id}
+                memberIds={chat.members}
+                bots={byId}
+                onOpenLive={(id, botId) => setLive({ id, botId })}
+              />
+            )}
             <BotComposer
               key={chat.id}
               chatId={chat.id}

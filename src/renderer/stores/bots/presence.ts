@@ -21,6 +21,8 @@ export interface PresenceInfo {
   /** 卡住且是静默：最后一次输出时间 */
   quietSince?: number;
   delegation?: Delegation;
+  /** 决定该状态的会话（成员会话或委派子会话） */
+  conversationId?: string;
 }
 
 export interface PresenceSession extends LiveSession {
@@ -53,6 +55,15 @@ export function parseClaimWait(text: string): PresenceWait | undefined {
 const RANK: Record<Presence, number> = { idle: 0, done: 1, think: 2, work: 3, stuck: 4, wait: 5 };
 
 function sessionPresence(
+  conversationId: string,
+  session: PresenceSession | undefined,
+  input: PresenceInput
+): PresenceInfo | undefined {
+  const info = sessionState(conversationId, session, input);
+  return info && { ...info, conversationId };
+}
+
+function sessionState(
   conversationId: string,
   session: PresenceSession | undefined,
   { queue, silences }: PresenceInput
@@ -101,6 +112,11 @@ export function presenceOf(input: PresenceInput): PresenceInfo {
     ...(best?.wait ? { wait: best.wait } : {}),
     ...(best?.quietSince !== undefined ? { quietSince: best.quietSince } : {}),
     ...(delegation && state !== 'idle' ? { delegation } : {}),
+    ...(best
+      ? { conversationId: best.conversationId }
+      : delegation && state !== 'idle'
+        ? { conversationId: delegation.childConversationId }
+        : {}),
   };
 }
 
@@ -139,4 +155,54 @@ export function memberSources(
     conversationIds: [...(own ? [own] : []), ...active.map((item) => item.childConversationId)],
     ...(delegation ? { delegation } : {}),
   };
+}
+
+export type MemberPresence = PresenceInfo & { browserTab?: string };
+
+/** 计算成员状态所需的聊天快照（均来自现有 store，不另设状态源） */
+export interface PresenceContext extends Omit<PresenceInput, 'conversationIds' | 'delegation'> {
+  chat: { id: string; sessions: Readonly<Record<string, { conversationId: string }>> };
+  delegations: readonly Delegation[];
+  holders: Readonly<Record<string, BrowserTabHolder | null | undefined>>;
+  tabIds: readonly string[];
+}
+
+export function memberPresence(botId: string, ctx: PresenceContext): MemberPresence {
+  const sources = memberSources(botId, ctx.chat, ctx.delegations);
+  const browserTab = heldBrowserTab(sources.conversationIds, ctx.holders, ctx.tabIds);
+  return { ...presenceOf({ ...ctx, ...sources }), ...(browserTab ? { browserTab } : {}) };
+}
+
+const BUSY: ReadonlySet<Presence> = new Set(['think', 'work', 'wait', 'stuck']);
+
+/** 输入框上方忙碌条：非闲成员（想 / 干 / 等你 / 卡住），按成员顺序 */
+export function busyMembers(
+  botIds: readonly string[],
+  ctx: PresenceContext
+): { botId: string; info: MemberPresence }[] {
+  return botIds
+    .map((botId) => ({ botId, info: memberPresence(botId, ctx) }))
+    .filter((item) => BUSY.has(item.info.state));
+}
+
+/** 委派在跑时的短说明：任务首个非空行 */
+export function busyNote(info: PresenceInfo): string | undefined {
+  const record = info.delegation;
+  if (!record || !isActiveDelegation(record.state)) return undefined;
+  return record.task
+    .split('\n')
+    .map((line) => line.trim())
+    .find(Boolean);
+}
+
+/** 点击成员：等你 → 对应审批 / 提问；其余 → 打开决定状态的会话 */
+export function presenceTarget(
+  info: PresenceInfo
+): { kind: 'pending' | 'live'; conversationId: string } | undefined {
+  const wait = info.wait;
+  if (wait && 'conversationId' in wait)
+    return { kind: 'pending', conversationId: wait.conversationId };
+  return info.state !== 'idle' && info.conversationId
+    ? { kind: 'live', conversationId: info.conversationId }
+    : undefined;
 }
