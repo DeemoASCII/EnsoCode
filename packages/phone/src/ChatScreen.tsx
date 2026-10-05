@@ -44,6 +44,8 @@ interface Props {
   /** 工具执行目录：项目内绝对路径在时间线里收成相对路径 */
   cwd?: string;
   view: SessionView | null;
+  /** 本机时钟 − host 时钟（审批 / 提问卡剩余时间） */
+  clockOffset?: number;
   connState: ConnState;
   stateLabel: string;
   /** 订阅会话同步中：标题旁状态灯用 amber pulse */
@@ -427,8 +429,16 @@ export function ChatScreen(props: Props) {
                 </p>
               ) : (
                 <>
-                  <ApprovalBar approvals={view?.approvals ?? []} onRespond={props.onApproval} />
-                  <AskBar asks={view?.asks ?? []} onAnswer={props.onAsk} />
+                  <ApprovalBar
+                    approvals={view?.approvals ?? []}
+                    onRespond={props.onApproval}
+                    clockOffset={props.clockOffset}
+                  />
+                  <AskBar
+                    asks={view?.asks ?? []}
+                    onAnswer={props.onAsk}
+                    clockOffset={props.clockOffset}
+                  />
                 </>
               )}
               {!readOnly && (

@@ -47,6 +47,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock('electron', () => ({
   app: { getPath: vi.fn(() => '/tmp') },
   BrowserWindow: { getAllWindows: vi.fn(() => []) },
+  powerMonitor: { on: vi.fn() },
   ipcMain: {
     handle: vi.fn((channel: string, handler: (...args: unknown[]) => unknown) => {
       mocks.handlers.set(channel, handler);

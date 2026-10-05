@@ -1,5 +1,5 @@
 import type { PairBotActivity, PairBotActivityStep, PairBotMember } from '@enso/pair';
-import { Check, ChevronRight, Loader2, Slash, X } from 'lucide-react';
+import { Check, ChevronRight, Clock, Loader2, Slash, X } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { cn } from '@/lib/utils';
 import { BotAvatar } from './BotAvatar';
@@ -17,6 +17,7 @@ function StepIcon({ status }: { status: PairBotActivityStep['status'] }) {
   if (status === 'running') return <Loader2 className="h-3 w-3 shrink-0 animate-spin text-brand" />;
   if (status === 'done') return <Check className="h-3 w-3 shrink-0 text-muted-foreground" />;
   if (status === 'denied') return <Slash className="h-3 w-3 shrink-0 text-muted-foreground" />;
+  if (status === 'timeout') return <Clock className="h-3 w-3 shrink-0 text-warning" />;
   return <X className="h-3 w-3 shrink-0 text-destructive" />;
 }
 
@@ -76,6 +77,11 @@ export function BotActivityRow({ item, bots, clockOffset, onOpen }: Props) {
             <span className="min-w-0 flex-1 truncate font-mono text-muted-foreground">
               {step.detail}
             </span>
+            {step.status === 'timeout' && (
+              <span className="shrink-0 text-warning">
+                {step.name === 'ask_user' ? '已超时未回答' : '已超时拒绝'}
+              </span>
+            )}
             <span className="shrink-0 text-muted-foreground tabular-nums">
               {step.durationMs !== undefined
                 ? formatElapsed(step.durationMs)

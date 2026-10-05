@@ -5,6 +5,7 @@ import { useEffect, useState } from 'react';
 import { useI18n } from '@/i18n';
 import { protectedActionLabel } from '@/lib/protectedAction';
 import { toolLabel } from '@/lib/toolLabels';
+import { RequestCountdown, useRemainingMs } from './RequestCountdown';
 import { codeToHtml } from './snippetHighlighter';
 
 const KIND_ICONS = {
@@ -19,6 +20,8 @@ interface ApprovalBarProps {
   onRespond: (requestId: string, decision: ApprovalDecision) => void;
   /** Enso capability approvals are one-shot and must never expose allowSession. */
   allowSession?: boolean;
+  /** 本机时钟 − host 时钟（手机伴侣显示剩余时间用） */
+  clockOffset?: number;
 }
 
 /** 审批详情:command 走 shell 语法高亮,其余(文件路径/MCP 参数)素文本。
@@ -52,14 +55,24 @@ function SummaryView({ kind, summary }: { kind: ApprovalKind; summary: string })
   );
 }
 /** composer 上方的审批条（ref-chat-a 形态）：只渲染队首，>1 显示 1/N；summary 全文可滚动 */
-export function ApprovalBar({ approvals, onRespond, allowSession = true }: ApprovalBarProps) {
+export function ApprovalBar({
+  approvals,
+  onRespond,
+  allowSession = true,
+  clockOffset,
+}: ApprovalBarProps) {
   const { t } = useI18n();
   const [responding, setResponding] = useState<string | null>(null);
   const active = approvals[0];
+  const remainingMs = useRemainingMs(
+    active?.phase === 'reviewing' ? undefined : active?.expiresAt,
+    clockOffset
+  );
   if (!active) return null;
   const Icon = KIND_ICONS[active.kind] ?? ShieldAlert;
   const reviewing = active.phase === 'reviewing';
-  const disabled = responding === active.requestId;
+  const disabled =
+    responding === active.requestId || (remainingMs !== undefined && remainingMs <= 0);
   const respond = (decision: ApprovalDecision) => {
     setResponding(active.requestId);
     onRespond(active.requestId, decision);
@@ -85,11 +98,14 @@ export function ApprovalBar({ approvals, onRespond, allowSession = true }: Appro
             {protectedActionLabel(active.protected, t)}
           </span>
         )}
-        {approvals.length > 1 && (
-          <span className="ml-auto shrink-0 text-[10px] text-muted-foreground tabular-nums">
-            1/{approvals.length}
-          </span>
-        )}
+        <span className="ml-auto flex shrink-0 items-center gap-2">
+          <RequestCountdown remainingMs={remainingMs} expiredLabel="Timed out · denied" />
+          {approvals.length > 1 && (
+            <span className="text-[10px] text-muted-foreground tabular-nums">
+              1/{approvals.length}
+            </span>
+          )}
+        </span>
       </div>
       {active.summary && <SummaryView kind={active.kind} summary={active.summary} />}
       {!reviewing && (

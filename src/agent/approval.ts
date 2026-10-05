@@ -1,4 +1,5 @@
 import type { ToolDefinition } from '@earendil-works/pi-coding-agent';
+import { APPROVAL_TIMEOUT_ERROR } from '@shared/humanRequestTimeout';
 import type {
   ApprovalDecision,
   ApprovalKind,
@@ -9,9 +10,11 @@ import type {
 import { classifyProtectedTool } from './protectedActions';
 import { extractWriteTargetPaths } from './writeScope';
 
+type ApprovalResult = 'allow' | 'deny' | 'block' | 'cancel' | 'timeout';
+
 interface PendingApproval {
   info: ApprovalRequestInfo;
-  settle(result: 'allow' | 'deny' | 'block' | 'cancel'): void;
+  settle(result: ApprovalResult): void;
 }
 
 export type ApprovalReviewFn = (
@@ -23,6 +26,8 @@ export interface ApprovalGateOptions {
   review?: ApprovalReviewFn;
   /** 受保护动作底线：开启时对外发送 / 删除 / 付款 / 部署 / 密钥类动作无视档位与会话白名单，强制真人确认 */
   protectedFloor?: boolean;
+  /** 等真人处理的时限：真人阶段的请求带 expiresAt，由 Main 到期发 request-timeout */
+  humanTimeoutMs?: number;
 }
 
 /**
@@ -45,6 +50,10 @@ export class ApprovalGate {
     return this.options?.protectedFloor === true;
   }
 
+  get humanTimeoutMs(): number | undefined {
+    return this.options?.humanTimeoutMs;
+  }
+
   needsApproval(kind: ApprovalKind, tool: string): boolean {
     if (this.mode === 'full') return false;
     if (this.mode === 'auto-edits' && (kind === 'file-edit' || kind === 'file-write')) return false;
@@ -60,9 +69,9 @@ export class ApprovalGate {
     toolCallId?: string,
     filePaths?: string[],
     protectedCategory?: ProtectedActionCategory
-  ): Promise<'allow' | 'deny' | 'block' | 'cancel'> {
+  ): Promise<ApprovalResult> {
     const requestId = `apr-${++this.counter}-${Date.now()}`;
-    const info: ApprovalRequestInfo = {
+    let info: ApprovalRequestInfo = {
       requestId,
       tool,
       kind,
@@ -73,7 +82,7 @@ export class ApprovalGate {
     };
     return new Promise((resolve) => {
       let settled = false;
-      const settle = (result: 'allow' | 'deny' | 'block' | 'cancel') => {
+      const settle = (result: ApprovalResult) => {
         if (settled) return;
         settled = true;
         this.pending.delete(requestId);
@@ -82,6 +91,12 @@ export class ApprovalGate {
         resolve(result);
       };
       const onAbort = () => settle('cancel');
+      const askHuman = () => {
+        const timeoutMs = this.options?.humanTimeoutMs;
+        if (timeoutMs) info = { ...info, expiresAt: Date.now() + timeoutMs };
+        this.pending.set(requestId, { info, settle });
+        this.onRequest(info);
+      };
       this.pending.set(requestId, { info, settle });
       signal?.addEventListener('abort', onAbort, { once: true });
       if (signal?.aborted) {
@@ -92,7 +107,7 @@ export class ApprovalGate {
       const review =
         this.mode === 'assistant' && !protectedCategory ? this.options?.review : undefined;
       if (!review) {
-        this.onRequest(info);
+        askHuman();
         return;
       }
       this.onRequest({ ...info, phase: 'reviewing' });
@@ -108,11 +123,10 @@ export class ApprovalGate {
             settle('block');
             return;
           }
-          this.pending.set(requestId, { info, settle });
-          this.onRequest(info);
+          askHuman();
         })
         .catch(() => {
-          if (!settled) this.onRequest(info);
+          if (!settled) askHuman();
         });
     });
   }
@@ -125,6 +139,11 @@ export class ApprovalGate {
       this.sessionAllowed.add(entry.info.tool);
     }
     entry.settle(decision === 'deny' ? 'deny' : 'allow');
+  }
+
+  /** Main 判定等人超时：按超时拒绝（区别于用户主动拒绝） */
+  expire(requestId: string): void {
+    this.pending.get(requestId)?.settle('timeout');
   }
 
   /** abort / 会话终止：全部按取消收尾 */
@@ -152,10 +171,11 @@ export function summarizeApproval(kind: ApprovalKind, params: unknown, toolName 
   }
 }
 
-function throwUnlessAllowed(result: 'allow' | 'deny' | 'block' | 'cancel'): void {
+export function throwUnlessAllowed(result: ApprovalResult): void {
   if (result === 'block') throw new Error('Assistant approval blocked this operation');
   if (result === 'deny') throw new Error('User denied this operation');
   if (result === 'cancel') throw new Error('Approval cancelled');
+  if (result === 'timeout') throw new Error(APPROVAL_TIMEOUT_ERROR);
 }
 
 /** 给工具包一道审批门：deny/cancel 抛错（pi 转 isError 工具结果，轮继续） */

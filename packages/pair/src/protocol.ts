@@ -402,7 +402,7 @@ export interface PairBotActivityStep {
   name: string;
   /** 参数单行摘要（≤80 字） */
   detail: string;
-  status: 'running' | 'done' | 'error' | 'denied';
+  status: 'running' | 'done' | 'error' | 'denied' | 'timeout';
   durationMs?: number;
   /** 运行中步骤的开始时刻（host 时钟） */
   startedAt?: number;

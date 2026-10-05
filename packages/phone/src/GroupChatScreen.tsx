@@ -313,12 +313,14 @@ export function GroupChatScreen(props: Props) {
                 <p className="text-muted-foreground text-xs">{bots.get(botId)?.name ?? '成员'}</p>
                 <ApprovalBar
                   approvals={view.approvals}
+                  clockOffset={props.clockOffset}
                   onRespond={(requestId, decision) =>
                     props.onApproval(sessionId, requestId, decision)
                   }
                 />
                 <AskBar
                   asks={view.asks}
+                  clockOffset={props.clockOffset}
                   onAnswer={(requestId, answer) => props.onAsk(sessionId, requestId, answer)}
                 />
               </div>

@@ -225,3 +225,20 @@ describe('lastHumanAt', () => {
     ).toBe(10);
   });
 });
+
+describe('presence 审批超时', () => {
+  const pending = { requestId: 'r1', tool: 'bash', kind: 'command' as const, summary: 'ls' };
+  const timedOut: ProjectedMessage = {
+    role: 'toolResult',
+    toolCallId: 't1',
+    isError: true,
+    content: [{ type: 'text', text: '审批超时（10 分钟未处理）: auto-denied' }],
+  };
+
+  it('等审批时是等你；超时收尾（卡片移除）后退出等你', () => {
+    const waiting = session({ messages: [user, call('t1', 'bash')], pendingApprovals: [pending] });
+    expect(presenceOf(input({ sessions: { c1: waiting } })).state).toBe('wait');
+    const after = session({ messages: [user, call('t1', 'bash'), timedOut] });
+    expect(presenceOf(input({ sessions: { c1: after } })).state).toBe('think');
+  });
+});

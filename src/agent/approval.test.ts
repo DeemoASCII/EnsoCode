@@ -409,3 +409,73 @@ describe('受保护动作底线', () => {
     expect(read.execute).toHaveBeenCalledTimes(2);
   });
 });
+
+describe('ApprovalGate 等人超时', () => {
+  const tool = (gate: ApprovalGate) =>
+    withApproval(gate, 'command', {
+      name: 'bash',
+      label: 'Bash',
+      description: '',
+      parameters: {} as never,
+      execute: vi.fn(),
+    });
+
+  it('开启时真人阶段的审批带 expiresAt；expire 后按「审批超时」拒绝且发出 resolved', async () => {
+    const infos: ApprovalRequestInfo[] = [];
+    const resolved: string[] = [];
+    const gate = new ApprovalGate(
+      'supervised',
+      (info) => infos.push(info),
+      (id) => resolved.push(id),
+      { humanTimeoutMs: 600_000 }
+    );
+    const before = Date.now();
+    const run = tool(gate).execute('c1', { command: 'ls' }, undefined, undefined, {} as never);
+    await Promise.resolve();
+    expect(infos[0].expiresAt).toBeGreaterThanOrEqual(before + 600_000);
+    expect(gate.snapshot()[0].expiresAt).toBe(infos[0].expiresAt);
+    gate.expire(infos[0].requestId);
+    await expect(run).rejects.toThrow(/^审批超时（10 分钟未处理）/);
+    expect(resolved).toEqual([infos[0].requestId]);
+    gate.expire(infos[0].requestId);
+    expect(resolved).toHaveLength(1);
+  });
+
+  it('超时拒绝与用户主动拒绝文案不同', async () => {
+    const gate = new ApprovalGate(
+      'supervised',
+      (info) => gate.respond(info.requestId, 'deny'),
+      () => undefined
+    );
+    await expect(
+      tool(gate).execute('c1', { command: 'ls' }, undefined, undefined, {} as never)
+    ).rejects.toThrow('User denied this operation');
+  });
+
+  it('代审阶段不带 expiresAt，转真人后才开始计时；未开启时不带', async () => {
+    const infos: ApprovalRequestInfo[] = [];
+    const gate = new ApprovalGate(
+      'assistant',
+      (info) => infos.push(info),
+      () => undefined,
+      {
+        humanTimeoutMs: 600_000,
+        review: async () => ({ decision: 'ask_user' }),
+      }
+    );
+    void gate.ask('bash', 'command', 'ls', undefined);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(infos[0]).toMatchObject({ phase: 'reviewing' });
+    expect(infos[0].expiresAt).toBeUndefined();
+    expect(infos[1].expiresAt).toBeTypeOf('number');
+
+    const plain = new ApprovalGate(
+      'supervised',
+      (info) => infos.push(info),
+      () => undefined
+    );
+    void plain.ask('bash', 'command', 'ls', undefined);
+    expect(infos[2].expiresAt).toBeUndefined();
+    expect(plain.humanTimeoutMs).toBeUndefined();
+  });
+});

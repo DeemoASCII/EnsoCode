@@ -791,6 +791,7 @@ export function App() {
     return (
       <ChatScreen
         sessionId={subscribedId ?? `bot-chat:${chat.id}`}
+        clockOffset={botActivity.offset}
         title={process ? `${member?.name ?? '成员'} · 过程` : (member?.name ?? chat.title)}
         projectName={process ? chat.title : (member?.title ?? '')}
         view={subscribedId ? view : EMPTY_VIEW}

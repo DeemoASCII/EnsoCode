@@ -7,7 +7,7 @@ import {
   SEND_IMAGE_PER_REPLY,
   sendImageItems,
 } from '@shared/bots/sendImage';
-import type { ApprovalGate } from '../approval';
+import { type ApprovalGate, throwUnlessAllowed } from '../approval';
 import type { DelegationOp } from './delegation';
 import type { MemoryInvoker } from './memory';
 
@@ -92,16 +92,15 @@ export type ConfirmOutsideImage = (
 export function confirmOutsideImage(gate: ApprovalGate): ConfirmOutsideImage {
   return async (file, signal, toolCallId) => {
     if (!gate.needsApproval('command', 'send_image')) return;
-    const result = await gate.ask(
-      'send_image',
-      'command',
-      `Send image from outside the workspace: ${file}`,
-      signal,
-      toolCallId
+    throwUnlessAllowed(
+      await gate.ask(
+        'send_image',
+        'command',
+        `Send image from outside the workspace: ${file}`,
+        signal,
+        toolCallId
+      )
     );
-    if (result === 'block') throw new Error('Assistant approval blocked this operation');
-    if (result === 'deny') throw new Error('User denied this operation');
-    if (result === 'cancel') throw new Error('Approval cancelled');
   };
 }
 

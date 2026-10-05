@@ -18,6 +18,7 @@ const STEP_LABELS: Record<LiveStep['status'], string> = {
   done: 'Done',
   error: 'Error',
   denied: 'Denied',
+  timeout: 'Timed out · denied',
 };
 
 const STEP_TONES: Record<LiveStep['status'], string> = {
@@ -25,6 +26,7 @@ const STEP_TONES: Record<LiveStep['status'], string> = {
   done: 'text-success',
   error: 'text-destructive',
   denied: 'text-warning',
+  timeout: 'text-warning',
 };
 
 const duration = (ms: number) =>
@@ -90,7 +92,11 @@ export function BotLiveStatus({
                 </span>
                 {step.detail && <span className="truncate font-mono">{step.detail}</span>}
                 <span className={cn('shrink-0', STEP_TONES[step.status])}>
-                  {t(STEP_LABELS[step.status])}
+                  {t(
+                    step.status === 'timeout' && step.name === 'ask_user'
+                      ? 'Timed out · no answer'
+                      : STEP_LABELS[step.status]
+                  )}
                 </span>
                 {ms !== undefined && <span className="shrink-0 tabular-nums">{duration(ms)}</span>}
               </div>

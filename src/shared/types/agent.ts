@@ -203,6 +203,8 @@ export interface ApprovalRequestInfo {
   phase?: 'reviewing';
   /** 命中受保护动作底线的类别；此类审批只能单次放行 */
   protected?: ProtectedActionCategory;
+  /** 等人处理的截止时间（ms）；到期由 Main 按超时拒绝 */
+  expiresAt?: number;
 }
 
 /** agent 向用户的提问（ask_user 工具,阻塞等答复） */
@@ -211,6 +213,8 @@ export interface AskRequestInfo {
   question: string;
   /** 可选快捷选项（用户也可自由输入） */
   options?: string[];
+  /** 等人回答的截止时间（ms）；到期由 Main 按未回答处理 */
+  expiresAt?: number;
 }
 
 /** 审批决策 */
@@ -1110,6 +1114,12 @@ export type AgentCommand =
       identity: SessionIdentity;
       requestId: string;
       decision: ApprovalDecision;
+    }
+  | {
+      type: 'request-timeout';
+      identity: SessionIdentity;
+      kind: 'approval' | 'ask';
+      requestId: string;
     }
   | { type: 'set-approval-mode'; identity: SessionIdentity; mode: ApprovalMode }
   | { type: 'set-plan-mode'; identity: SessionIdentity; active: boolean }
@@ -3042,6 +3052,13 @@ export function parseAgentCommand(value: unknown): AgentCommand | null {
           value.decision === 'deny')
         ? (value as unknown as AgentCommand)
         : null;
+    case 'request-timeout':
+      return hasExactKeys(value, ['type', 'identity', 'kind', 'requestId']) &&
+        parseAnySessionIdentity(value.identity) &&
+        (value.kind === 'approval' || value.kind === 'ask') &&
+        isNonEmptyString(value.requestId)
+        ? (value as unknown as AgentCommand)
+        : null;
     case 'set-approval-mode':
       return hasExactKeys(value, ['type', 'identity', 'mode']) &&
         parseAnySessionIdentity(value.identity) &&
@@ -3268,6 +3285,9 @@ function parseLifecycleEvent(value: Record<string, unknown>): AgentWorkerEvent |
 }
 
 /** 收窄 worker → Main/Renderer 统一事件；缺 generation 的旧事件拒绝。 */
+const isOptionalTimestamp = (value: unknown): boolean =>
+  value === undefined || (typeof value === 'number' && Number.isFinite(value));
+
 export function parseAgentWorkerEvent(value: unknown): AgentWorkerEvent | null {
   if (!isRecord(value) || !isNonEmptyString(value.type)) return null;
   if (
@@ -3548,7 +3568,8 @@ export function parseAgentWorkerEvent(value: unknown): AgentWorkerEvent | null {
           (Array.isArray(value.request.filePaths) &&
             value.request.filePaths.every(isNonEmptyString))) &&
         (value.request.protected === undefined ||
-          (PROTECTED_ACTION_CATEGORIES as readonly unknown[]).includes(value.request.protected))
+          (PROTECTED_ACTION_CATEGORIES as readonly unknown[]).includes(value.request.protected)) &&
+        isOptionalTimestamp(value.request.expiresAt)
         ? (value as unknown as AgentWorkerEvent)
         : null;
     case 'approval-resolved':
@@ -3557,7 +3578,8 @@ export function parseAgentWorkerEvent(value: unknown): AgentWorkerEvent | null {
     case 'ask-request':
       return isRecord(value.ask) &&
         isNonEmptyString(value.ask.requestId) &&
-        isNonEmptyString(value.ask.question)
+        isNonEmptyString(value.ask.question) &&
+        isOptionalTimestamp(value.ask.expiresAt)
         ? (value as unknown as AgentWorkerEvent)
         : null;
     case 'subagent-update':

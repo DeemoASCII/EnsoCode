@@ -72,3 +72,21 @@ describe('liveActivity', () => {
     expect(liveActivity(session(done, { retry }), false)?.state).toBe('retrying');
   });
 });
+
+describe('liveActivity 等人超时', () => {
+  it('审批 / 提问超时的工具结果记为 timeout，不当成用户拒绝', () => {
+    const activity = liveActivity(
+      session([
+        user(),
+        call('a', 'bash', { command: 'ls' }),
+        result('a', '审批超时（10 分钟未处理）: auto-denied', true),
+        call('b', 'ask_user', { question: 'q' }),
+        result('b', '提问超时（10 分钟未回答）: no answer', true),
+        call('c', 'bash', { command: 'rm x' }),
+        result('c', 'User denied this operation', true),
+      ]),
+      false
+    );
+    expect(activity?.steps.map((step) => step.status)).toEqual(['timeout', 'timeout', 'denied']);
+  });
+});

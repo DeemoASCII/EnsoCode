@@ -1,3 +1,4 @@
+import { isHumanRequestTimeout } from '../humanRequestTimeout';
 import type { ProjectedMessage } from '../types/agent';
 
 export type LiveState = 'queued' | 'thinking' | 'typing' | 'tool' | 'retrying';
@@ -6,7 +7,7 @@ export interface LiveStep {
   id: string;
   name: string;
   detail: string;
-  status: 'running' | 'done' | 'error' | 'denied';
+  status: 'running' | 'done' | 'error' | 'denied' | 'timeout';
   durationMs?: number;
   startedAt?: number;
 }
@@ -83,7 +84,9 @@ export function liveActivity(
             ? 'done'
             : textOf(done) === DENIED
               ? 'denied'
-              : 'error',
+              : isHumanRequestTimeout(textOf(done))
+                ? 'timeout'
+                : 'error',
         ...(done?.toolDurationMs !== undefined ? { durationMs: done.toolDurationMs } : {}),
         ...(!done && startedAt !== undefined ? { startedAt } : {}),
       });

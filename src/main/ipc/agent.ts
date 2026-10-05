@@ -43,7 +43,7 @@ import {
   parseParentModelSelectionRequest,
   parseParentSourceBindingRequest,
 } from '@shared/types/mentions';
-import { app, ipcMain, type WebContents, webContents } from 'electron';
+import { app, ipcMain, powerMonitor, type WebContents, webContents } from 'electron';
 import { EnsoSafeJournal } from '../../agent/ensoSafeJournal';
 import { titleSummaryTimeoutMs } from '../../agent/titleSummary';
 import { ActiveConversationRegistry } from '../services/activeConversationRegistry';
@@ -96,6 +96,7 @@ import {
 } from '../services/agentHost';
 import { validateAgentRun } from '../services/agentRunValidation';
 import { AgentService } from '../services/agentService';
+import { HumanRequestTimeouts } from '../services/bots/humanRequestTimeouts';
 import { pickBrowserFileRoot, setBrowserFileRootResolver } from '../services/browserFileRoot';
 import { browserHost } from '../services/browserHost';
 import { chatModelsRoot } from '../services/chatModels';
@@ -986,6 +987,15 @@ export function registerAgentHandlers(): void {
     },
   });
 
+  const humanTimeouts = new HumanRequestTimeouts({
+    now: Date.now,
+    expire: (identity, kind, requestId) => {
+      sendAgentCommand({ type: 'request-timeout', identity, kind, requestId });
+    },
+  });
+  setInterval(() => humanTimeouts.check(), 1000).unref();
+  powerMonitor.on('resume', () => humanTimeouts.check());
+
   setAgentEventListener((workerEvent) => {
     // MCP 旁路事件不属于任何会话：只转发到独立通道 / 落 token，不进 dispatch 与会话广播
     if (workerEvent.type === 'mcp-status') {
@@ -1020,6 +1030,7 @@ export function registerAgentHandlers(): void {
     dispatchService?.observe(workerEvent);
     agentService?.observe(workerEvent);
     botWorkerObserver?.(workerEvent);
+    humanTimeouts.observe(workerEvent);
     if (workerEvent.type === 'turn-completed' || workerEvent.type === 'turn-failed') {
       const file = agentSessionIndex.sessionFile(workerEvent.identity);
       if (file) {

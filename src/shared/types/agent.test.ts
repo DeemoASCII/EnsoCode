@@ -2279,3 +2279,37 @@ describe('受保护动作底线协议', () => {
     ).toBeNull();
   });
 });
+
+describe('等人超时协议', () => {
+  it('request-timeout 命令只接受 approval / ask 与非空 requestId', () => {
+    const base = { type: 'request-timeout', identity: parent, requestId: 'r1' };
+    expect(parseAgentCommand({ ...base, kind: 'approval' })).toEqual({ ...base, kind: 'approval' });
+    expect(parseAgentCommand({ ...base, kind: 'ask' })).not.toBeNull();
+    expect(parseAgentCommand({ ...base, kind: 'plan' })).toBeNull();
+    expect(parseAgentCommand({ ...base, kind: 'ask', requestId: '' })).toBeNull();
+    expect(parseAgentCommand({ ...base, kind: 'ask', extra: 1 })).toBeNull();
+  });
+
+  it('approval-request / ask-request 的 expiresAt 必须是有限数字', () => {
+    const approval = {
+      type: 'approval-request',
+      identity: parent,
+      seq: 1,
+      request: { requestId: 'r1', tool: 'bash', kind: 'command', summary: 'ls', expiresAt: 5 },
+    };
+    expect(parseAgentWorkerEvent(approval)).toEqual(approval);
+    expect(
+      parseAgentWorkerEvent({ ...approval, request: { ...approval.request, expiresAt: 'x' } })
+    ).toBeNull();
+    const ask = {
+      type: 'ask-request',
+      identity: parent,
+      seq: 2,
+      ask: { requestId: 'q', question: 'q', expiresAt: 5 },
+    };
+    expect(parseAgentWorkerEvent(ask)).toEqual(ask);
+    expect(
+      parseAgentWorkerEvent({ ...ask, ask: { ...ask.ask, expiresAt: Number.NaN } })
+    ).toBeNull();
+  });
+});

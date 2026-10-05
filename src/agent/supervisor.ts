@@ -27,6 +27,7 @@ import {
 } from '@shared/builtinAgents';
 import { WORKSPACE_WRITE_TOOL_ID } from '@shared/childProfileTools';
 import { type CompactStrategy, resolveCompactStrategy } from '@shared/compactStrategy';
+import { HUMAN_REQUEST_TIMEOUT_MS } from '@shared/humanRequestTimeout';
 import { DEFAULT_MAX_ACTIVE_COWORKERS } from '@shared/maxActiveCoworkers';
 import {
   findCatalogModelById,
@@ -1322,6 +1323,13 @@ export class SessionSupervisor {
       case 'approval-respond':
         this.must(command.identity).gate.respond(command.requestId, command.decision);
         return;
+      case 'request-timeout': {
+        const managed = this.sessions.get(command.identity.sessionId);
+        if (!managed || !isSameGeneration(managed.identity, command.identity)) return;
+        if (command.kind === 'approval') managed.gate.expire(command.requestId);
+        else managed.asks.expire(command.requestId);
+        return;
+      }
       case 'set-approval-mode':
         this.must(command.identity).gate.mode = command.mode;
         return;
@@ -1750,6 +1758,7 @@ export class SessionSupervisor {
       {
         review: (info, signal) => this.reviewApproval(info, signal),
         protectedFloor: botMode || protectedActions,
+        ...(botMode ? { humanTimeoutMs: HUMAN_REQUEST_TIMEOUT_MS } : {}),
       }
     );
     const checkpoints = new CheckpointManager(
@@ -2188,7 +2197,7 @@ export class SessionSupervisor {
         return response;
       },
     });
-    const askManager = this.createAskManager(identity);
+    const askManager = this.createAskManager(identity, gate.humanTimeoutMs);
     // 内嵌浏览器：页面活在 Main，worker 只发 browser-invoke 事件。每个父会话一张挂起表。
     const browser = toolEnabled('browser')
       ? new BrowserInvoker(identity, (request) => {
@@ -2415,7 +2424,7 @@ export class SessionSupervisor {
     checkpoints?.cleanupOldSessions();
   }
 
-  private createAskManager(identity: SessionIdentity): AskManager {
+  private createAskManager(identity: SessionIdentity, humanTimeoutMs?: number): AskManager {
     return new AskManager(
       (ask) => {
         const managed = this.sessions.get(identity.sessionId);
@@ -2438,7 +2447,8 @@ export class SessionSupervisor {
             requestId,
           });
         }
-      }
+      },
+      humanTimeoutMs
     );
   }
 
@@ -2492,7 +2502,7 @@ export class SessionSupervisor {
       toolStartAt: new Map(),
       toolDurations: new Map(),
       gate,
-      asks: opts.asks ?? this.createAskManager(identity),
+      asks: opts.asks ?? this.createAskManager(identity, gate.humanTimeoutMs),
       pendingTaskReminders: [],
       roundWaiters: new Set(),
       coworkers: new Map(),
@@ -2632,9 +2642,9 @@ export class SessionSupervisor {
           requestId,
         });
       },
-      { protectedFloor: parent.gate.protectedFloor }
+      { protectedFloor: parent.gate.protectedFloor, humanTimeoutMs: parent.gate.humanTimeoutMs }
     );
-    const askManager = this.createAskManager(identity);
+    const askManager = this.createAskManager(identity, gate.humanTimeoutMs);
     const result = await factory.createChildSession({
       resolved: config,
       identity,
@@ -2763,9 +2773,9 @@ export class SessionSupervisor {
           });
         }
       },
-      { protectedFloor: parent.gate.protectedFloor }
+      { protectedFloor: parent.gate.protectedFloor, humanTimeoutMs: parent.gate.humanTimeoutMs }
     );
-    const askManager = this.createAskManager(identity);
+    const askManager = this.createAskManager(identity, gate.humanTimeoutMs);
     const { session, modelId, toolIds, runawayGuard } = await factory.createChildSession({
       agentType,
       modelOverride,
