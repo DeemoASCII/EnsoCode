@@ -1,8 +1,8 @@
+import { parseBotInjectedMessage } from '@shared/bots/injectedMessage';
 import { stripBotNotesUpdate } from '@shared/bots/notes';
 import type { ApprovalRequestInfo, AskRequestInfo, ProjectedMessage } from '@shared/types/agent';
 import type { BotChat, GroupEntry } from '@shared/types/bot';
 import type { BotQueueItem } from '@shared/types/botIpc';
-import { parseBotInjectedMessage } from './injectedMessage';
 import type { BotSessions } from './projection';
 import { directMarker, readKey } from './unread';
 

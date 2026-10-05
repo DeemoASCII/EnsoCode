@@ -30,6 +30,7 @@ import { TodoBar } from '@/components/chat/TodoBar';
 import { cn } from '@/lib/utils';
 import { buildTimeline } from '@/stores/sessions/timeline';
 import { BotArtifacts } from './BotArtifacts';
+import { phoneChatHost } from './chatHost';
 import type { ConnState, SessionView } from './client';
 import { compressImage } from './image';
 import { appendEchoMessages, type QueueSendEcho } from './queueSendEcho';
@@ -121,10 +122,7 @@ export function ChatScreen(props: Props) {
   const artifactConversationId = props.artifacts?.conversationId;
   const host = useMemo(
     () => ({
-      sessionId,
-      canRewind: !bot && !props.deviceReadOnly,
-      canRetry: !bot && !props.deviceReadOnly,
-      canFork: false,
+      ...phoneChatHost({ sessionId, bot, deviceReadOnly: props.deviceReadOnly }),
       ...(artifactChatId && artifactConversationId
         ? {
             turnFooter: (messageIndex: number) => (

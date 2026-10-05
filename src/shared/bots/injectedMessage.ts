@@ -1,5 +1,5 @@
-import { splitChatReferences } from '@shared/bots/composerRefs';
-import { stripBotNotesUpdate } from '@shared/bots/notes';
+import { splitChatReferences } from './composerRefs';
+import { stripBotNotesUpdate } from './notes';
 
 type GroupMessages = { from: string; text: string }[];
 

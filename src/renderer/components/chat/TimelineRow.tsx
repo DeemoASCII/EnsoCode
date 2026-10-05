@@ -1,4 +1,5 @@
 import { splitChatReferences } from '@shared/bots/composerRefs';
+import { parseBotInjectedMessage } from '@shared/bots/injectedMessage';
 import { stripBotNotesUpdate } from '@shared/bots/notes';
 import { isBtwIsolationPrompt } from '@shared/btw';
 import { type PlanNoteKind, parsePlanMessage, splitPlanPrefix } from '@shared/planMode';
@@ -66,7 +67,6 @@ import { addSidePanelChanges } from '@/lib/sidePanelDock';
 import { stripAnsi } from '@/lib/terminalText';
 import { SUBAGENT_OP_LABEL_KEYS, TOOL_LABEL_KEYS, toolLabel } from '@/lib/toolLabels';
 import { cn } from '@/lib/utils';
-import { parseBotInjectedMessage } from '@/stores/bots/injectedMessage';
 import { useSessionsStore } from '@/stores/sessions';
 import {
   canShowConversationFork,

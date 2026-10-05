@@ -1,6 +1,6 @@
+import type { BotInjectedMessage } from '@shared/bots/injectedMessage';
 import { ClipboardList, Clock, CornerDownRight, MessagesSquare } from 'lucide-react';
 import { useI18n } from '@/i18n';
-import type { BotInjectedMessage } from '@/stores/bots/injectedMessage';
 
 export function InjectedMessageCard({ message }: { message: BotInjectedMessage }) {
   const { t } = useI18n();
