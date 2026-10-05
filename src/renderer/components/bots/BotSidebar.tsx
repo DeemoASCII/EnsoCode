@@ -50,7 +50,7 @@ import { useI18n } from '@/i18n';
 import { formatRelativeTime } from '@/lib/time';
 import { cn } from '@/lib/utils';
 import { useBotPendingCount, useBotsStore } from '@/stores/bots';
-import { pendingOwners } from '@/stores/bots/delegations';
+import { isActiveDelegation, pendingOwners } from '@/stores/bots/delegations';
 import {
   type ChatSummary,
   chatSummary,
@@ -115,16 +115,34 @@ export function BotSidebar({
     () => pendingItems(sessions, pendingOwners(chats, delegations)),
     [sessions, chats, delegations]
   );
+  const delegated = useMemo(() => {
+    const chatIds = new Set<string>();
+    const botIds = new Set<string>();
+    for (const item of delegations) {
+      if (!isActiveDelegation(item.state)) continue;
+      if (item.chatId) chatIds.add(item.chatId);
+      botIds.add(item.targetBotId);
+    }
+    return { chatIds, botIds };
+  }, [delegations]);
   const rows = useMemo(
     () =>
-      chats.map((chat) => ({
-        chat,
-        summary: {
-          ...chatSummary(chat, { sessions, timeline: timelines[chat.id], queue, names }),
-          pending: pending.filter((item) => item.chatId === chat.id).length,
-        },
-      })),
-    [chats, sessions, timelines, queue, names, pending]
+      chats.map((chat) => {
+        const summary = chatSummary(chat, { sessions, timeline: timelines[chat.id], queue, names });
+        return {
+          chat,
+          summary: {
+            ...summary,
+            running:
+              summary.running ||
+              (chat.kind === 'group'
+                ? delegated.chatIds.has(chat.id)
+                : delegated.botIds.has(chat.members[0])),
+            pending: pending.filter((item) => item.chatId === chat.id).length,
+          },
+        };
+      }),
+    [chats, sessions, timelines, queue, names, pending, delegated]
   );
   const live = rows.filter((row) => !row.chat.archivedAt);
   const groups = sortChats(
@@ -312,10 +330,12 @@ export function BotSidebar({
             <ChatRow
               {...dragProps(row?.chat, pinnedDirects)}
               active={Boolean(row && activeChatId === row.chat.id)}
-              avatar={<BotAvatar bot={bot} busy={row?.summary.running} />}
+              avatar={
+                <BotAvatar bot={bot} busy={row?.summary.running || delegated.botIds.has(bot.id)} />
+              }
               title={bot.name}
               pinned={row?.chat.pinned}
-              meta={status(row?.summary)}
+              meta={delegated.botIds.has(bot.id) ? t('Working') : status(row?.summary)}
               preview={row?.summary.preview || bot.title || bot.scope}
               unread={Boolean(
                 row &&
