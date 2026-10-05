@@ -570,7 +570,6 @@ describe('bots IPC', () => {
       Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
       Buffer.from('pixels'),
     ]).toString('base64');
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     expect(
       await call(IPC_CHANNELS.BOT_SEND, {
         chatId,
@@ -581,14 +580,56 @@ describe('bots IPC', () => {
         ],
         deliveryId: 'img',
       })
+    ).toEqual({ ok: false, error: 'image-not-image' });
+    expect(mocks.promptSession).not.toHaveBeenCalled();
+    expect((await call(IPC_CHANNELS.BOT_CHAT_TIMELINE, { chatId })).entries).toEqual([]);
+    expect(
+      await call(IPC_CHANNELS.BOT_SEND, {
+        chatId,
+        text: '看这张',
+        images: [{ data: png, mimeType: 'image/png' }],
+        deliveryId: 'img',
+      })
     ).toEqual({ ok: true });
-    warn.mockRestore();
     const timeline = await call(IPC_CHANNELS.BOT_CHAT_TIMELINE, { chatId });
     const human = (timeline.entries as { kind: string; id: string; images?: string[] }[]).find(
       (entry) => entry.kind === 'human'
     );
     expect(human?.images).toHaveLength(1);
     const mediaId = human!.images![0];
+    const media = await import('../services/bots/media');
+    const store = vi.spyOn(media, 'storeMedia').mockReturnValue({ ok: false, error: 'quota' });
+    expect(
+      await call(IPC_CHANNELS.BOT_SEND, {
+        chatId,
+        text: 'duplicate',
+        images: [{ data: png, mimeType: 'image/png' }],
+        deliveryId: 'img',
+      })
+    ).toMatchObject({ ok: true, duplicate: true });
+    expect(store).not.toHaveBeenCalled();
+    const calls = mocks.promptSession.mock.calls.length;
+    expect(
+      await call(IPC_CHANNELS.BOT_SEND, {
+        chatId,
+        text: 'full',
+        images: [{ data: png, mimeType: 'image/png' }],
+        deliveryId: 'new',
+      })
+    ).toEqual({ ok: false, error: 'image-quota' });
+    expect(mocks.promptSession).toHaveBeenCalledTimes(calls);
+    store.mockImplementation(() => {
+      throw new Error('disk full');
+    });
+    expect(
+      await call(IPC_CHANNELS.BOT_SEND, {
+        chatId,
+        text: 'disk full',
+        images: [{ data: png, mimeType: 'image/png' }],
+        deliveryId: 'new',
+      })
+    ).toEqual({ ok: false, error: 'image-storage' });
+    store.mockRestore();
     expect(existsSync(join(mocks.root, 'bot-chats', chatId, 'media', mediaId))).toBe(true);
     expect(await call(IPC_CHANNELS.BOT_ARTIFACTS_LIST, { chatId, entryId: human!.id })).toEqual({
       ok: true,

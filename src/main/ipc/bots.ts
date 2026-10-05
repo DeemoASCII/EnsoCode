@@ -816,25 +816,25 @@ function assistantCompleter(maxTokens: number): AbilityCompleter {
   };
 }
 
-/** 群时间线只存正文：随消息的图另存一份到聊天 media，条目记 id；存不下的只发给成员 */
+/** 附件必须先存下，任何一张失败都拒绝发送，不能只让成员看到而丢掉时间线附件。 */
 function keepGroupImages(
   chats: BotChatStore,
   chatId: string,
   images: readonly AttachedImage[] | undefined
-): string[] | undefined {
+): { ok: true; ids: string[] } | { ok: false; error: string } {
   const ids: string[] = [];
   for (const image of images ?? []) {
     try {
       const stored = storeMedia(chats.mediaDir(chatId), Buffer.from(image.data, 'base64'), {
         compress: compressImage,
       });
-      if (stored.ok && !ids.includes(stored.mediaId)) ids.push(stored.mediaId);
-      else if (!stored.ok) console.warn('[bots] group image not kept', stored.error);
-    } catch (error) {
-      console.warn('[bots] group image not kept', error);
+      if (!stored.ok) return { ok: false, error: `image-${stored.error}` };
+      if (!ids.includes(stored.mediaId)) ids.push(stored.mediaId);
+    } catch {
+      return { ok: false, error: 'image-storage' };
     }
   }
-  return ids.length ? ids : undefined;
+  return { ok: true, ids };
 }
 
 /** 桌面 BOT_SEND 与手机 bot-send 共用 */
@@ -865,13 +865,11 @@ export async function sendBotMessage(
           }
         : undefined;
     if (!groupSender) return { ok: false, error: 'group-not-ready' };
-    return groupSender(
-      chat,
-      input.text,
-      options,
-      refs,
-      keepGroupImages(chats, chat.id, input.images)
-    );
+    if (input.deliveryId && chats.hasEntry(chat.id, `human:${input.deliveryId}`))
+      return { ok: true, duplicate: true };
+    const images = keepGroupImages(chats, chat.id, input.images);
+    if (!images.ok) return images;
+    return groupSender(chat, input.text, options, refs, images.ids);
   }
   const text = await composerRefs.expandDirect(chat, input);
   return host.deliver(chat.id, chat.members[0], text, options);

@@ -5,6 +5,14 @@ export const SUBAGENT_MODELS_CONFIGURE_PROMPT =
   'Configure "Let the agent pick subagent models" for me. How it is used: when the main agent dispatches a subagent or coworker (built-in types: scout for read-only recon, reviewer for code review, tester for writing tests, worker for implementation), it reads each entry\'s description from the tool\'s model parameter to choose a model per subtask — so descriptions are decision rules, not marketing copy. Steps: 1) read the current entries and toggle state; 2) list providers with valid credentials and their enabled models, never invent models; 3) pick 2–4 models that cover: a cheap, fast, long-context model for recon / reading / summarizing; a strong reasoning model for review, architecture and hard debugging; a reliable coding model for implementation; 4) add what is missing, fix duplicates or unusable entries, then enable the toggle; 5) each description is one short sentence in my interface language: when to use it, relative cost / speed, one caveat. Finish by listing the final entries with the reason for each.';
 
 export const zhTranslations: Record<string, string> = {
+  'Chat image storage is full (200MiB). Message not sent.':
+    '群图片空间已满（200MiB），这条消息未发送。',
+  'An image is still over 10MiB after compression. Message not sent.':
+    '图片压缩后仍超过 10MiB，这条消息未发送。',
+  'An attachment is not a supported image. Message not sent.':
+    '附件不是支持的图片格式，这条消息未发送。',
+  'Could not save the images. Message not sent. Please try again.':
+    '图片保存失败，这条消息未发送，请重试。',
   'Add to favorites': '添加收藏',
   Appearance: '外观',
   'Bold font weight': '粗体字重',

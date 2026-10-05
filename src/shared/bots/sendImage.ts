@@ -2,6 +2,21 @@
 export const SEND_IMAGE_PER_REPLY = 4;
 export const SEND_IMAGE_CAPTION_MAX = 200;
 
+export function imageSendErrorText(error: string): string | undefined {
+  switch (error) {
+    case 'image-quota':
+      return 'Chat image storage is full (200MiB). Message not sent.';
+    case 'image-too-large':
+      return 'An image is still over 10MiB after compression. Message not sent.';
+    case 'image-not-image':
+      return 'An attachment is not a supported image. Message not sent.';
+    case 'image-storage':
+      return 'Could not save the images. Message not sent. Please try again.';
+    default:
+      return undefined;
+  }
+}
+
 /** upload：人在群聊里随消息发的图（不出现在 send_image 结果里） */
 export type BotMediaSource = 'file' | 'web' | 'desktop' | 'upload';
 export type BotMediaError = 'too-large' | 'quota';

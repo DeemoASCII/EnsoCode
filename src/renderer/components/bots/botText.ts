@@ -1,3 +1,4 @@
+import { imageSendErrorText } from '@shared/bots/sendImage';
 import type { TeamFileError } from '@shared/bots/team';
 import type { BotChat, BotProfile } from '@shared/types/bot';
 import type { Project } from '@shared/types/project';
@@ -37,6 +38,8 @@ export function botErrorText(reason: string | undefined, error: string, t: TFunc
 }
 
 export function chatErrorText(error: string, t: TFunction): string {
+  const imageError = imageSendErrorText(error);
+  if (imageError) return t(imageError);
   switch (error) {
     case 'chat-archived':
       return t('This chat is archived. Restore it before sending.');
