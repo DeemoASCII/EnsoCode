@@ -1758,7 +1758,7 @@ export class SessionSupervisor {
       {
         review: (info, signal) => this.reviewApproval(info, signal),
         protectedFloor: botMode || protectedActions,
-        ...(botMode ? { humanTimeoutMs: HUMAN_REQUEST_TIMEOUT_MS } : {}),
+        ...(botMode ? { exemptFull: true, humanTimeoutMs: HUMAN_REQUEST_TIMEOUT_MS } : {}),
       }
     );
     const checkpoints = new CheckpointManager(
@@ -2642,7 +2642,7 @@ export class SessionSupervisor {
           requestId,
         });
       },
-      { protectedFloor: parent.gate.protectedFloor, humanTimeoutMs: parent.gate.humanTimeoutMs }
+      parent.gate.floorOptions
     );
     const askManager = this.createAskManager(identity, gate.humanTimeoutMs);
     const result = await factory.createChildSession({
@@ -2773,7 +2773,7 @@ export class SessionSupervisor {
           });
         }
       },
-      { protectedFloor: parent.gate.protectedFloor, humanTimeoutMs: parent.gate.humanTimeoutMs }
+      parent.gate.floorOptions
     );
     const askManager = this.createAskManager(identity, gate.humanTimeoutMs);
     const { session, modelId, toolIds, runawayGuard } = await factory.createChildSession({

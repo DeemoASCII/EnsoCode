@@ -175,30 +175,37 @@ export function ApprovalSelect({
 }) {
   const { t } = useI18n();
   return (
-    <Select
-      items={APPROVAL_MODE_ORDER.map((mode) => ({
-        value: mode,
-        label: t(APPROVAL_MODE_META[mode].labelKey),
-      }))}
-      value={value}
-      onValueChange={(mode) => onChange(mode as ApprovalMode)}
-    >
-      <SelectTrigger className="w-full">
-        <SelectValue />
-      </SelectTrigger>
-      <SelectPopup zIndex={zIndex}>
-        {APPROVAL_MODE_ORDER.map((mode) => (
-          <SelectItem key={mode} value={mode}>
-            <div>
-              <div>{t(APPROVAL_MODE_META[mode].labelKey)}</div>
-              <div className="text-muted-foreground text-xs">
-                {t(APPROVAL_MODE_META[mode].descKey)}
+    <>
+      <Select
+        items={APPROVAL_MODE_ORDER.map((mode) => ({
+          value: mode,
+          label: t(APPROVAL_MODE_META[mode].labelKey),
+        }))}
+        value={value}
+        onValueChange={(mode) => onChange(mode as ApprovalMode)}
+      >
+        <SelectTrigger className="w-full">
+          <SelectValue />
+        </SelectTrigger>
+        <SelectPopup zIndex={zIndex}>
+          {APPROVAL_MODE_ORDER.map((mode) => (
+            <SelectItem key={mode} value={mode}>
+              <div>
+                <div>{t(APPROVAL_MODE_META[mode].labelKey)}</div>
+                <div className="text-muted-foreground text-xs">
+                  {t(APPROVAL_MODE_META[mode].descKey)}
+                </div>
               </div>
-            </div>
-          </SelectItem>
-        ))}
-      </SelectPopup>
-    </Select>
+            </SelectItem>
+          ))}
+        </SelectPopup>
+      </Select>
+      {value === 'full' && (
+        <p className="mt-1 text-muted-foreground text-xs">
+          {t('Protected actions will not ask for confirmation either.')}
+        </p>
+      )}
+    </>
   );
 }
 

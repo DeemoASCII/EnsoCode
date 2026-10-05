@@ -26,6 +26,8 @@ export interface ApprovalGateOptions {
   review?: ApprovalReviewFn;
   /** 受保护动作底线：开启时对外发送 / 删除 / 付款 / 部署 / 密钥类动作无视档位与会话白名单，强制真人确认 */
   protectedFloor?: boolean;
+  /** bot 模式：档位为 full 时底线不生效（完全放行即真放行），按当前档位实时判断 */
+  exemptFull?: boolean;
   /** 等真人处理的时限：真人阶段的请求带 expiresAt，由 Main 到期发 request-timeout */
   humanTimeoutMs?: number;
 }
@@ -47,7 +49,20 @@ export class ApprovalGate {
   ) {}
 
   get protectedFloor(): boolean {
-    return this.options?.protectedFloor === true;
+    if (this.options?.protectedFloor !== true) return false;
+    return !(this.options.exemptFull === true && this.mode === 'full');
+  }
+
+  /** 子会话沿用底线配置，再按自身档位判断 */
+  get floorOptions(): Pick<
+    ApprovalGateOptions,
+    'protectedFloor' | 'exemptFull' | 'humanTimeoutMs'
+  > {
+    return {
+      protectedFloor: this.options?.protectedFloor === true,
+      exemptFull: this.options?.exemptFull === true,
+      humanTimeoutMs: this.options?.humanTimeoutMs,
+    };
   }
 
   get humanTimeoutMs(): number | undefined {

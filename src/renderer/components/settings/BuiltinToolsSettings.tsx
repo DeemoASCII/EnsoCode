@@ -348,7 +348,7 @@ export function BuiltinToolsSettings() {
           icon={ShieldAlert}
           title={t('Protected action confirmation')}
           description={t(
-            'Even in full-access mode, ask before external sends, deletions, payments, deployments and secret-file access. Always on for Bot members. Takes effect on new conversations.'
+            'Even in full-access mode, ask before external sends, deletions, payments, deployments and secret-file access. Always on for Bot members not set to Full access. Takes effect on new conversations.'
           )}
           control={
             <Switch checked={protectedActionsInCode} onCheckedChange={setProtectedActionsInCode} />

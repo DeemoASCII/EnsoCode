@@ -134,8 +134,9 @@ export const zhTranslations: Record<string, string> = {
   'Compress supported command output before it enters the model context. Takes effect on new conversations.':
     '在受支持的命令输出进入模型上下文前进行压缩。新会话生效。',
   'Protected action confirmation': '受保护操作确认',
-  'Even in full-access mode, ask before external sends, deletions, payments, deployments and secret-file access. Always on for Bot members. Takes effect on new conversations.':
-    '即使在完全放行模式下，对外发送、删除、付款、部署和访问密钥文件前也要求确认。Bot 成员始终开启。新会话生效。',
+  'Even in full-access mode, ask before external sends, deletions, payments, deployments and secret-file access. Always on for Bot members not set to Full access. Takes effect on new conversations.':
+    '即使在完全放行模式下，对外发送、删除、付款、部署和访问密钥文件前也要求确认。非完全放行的 Bot 成员始终开启。新会话生效。',
+  'Protected actions will not ask for confirmation either.': '受保护操作也不再询问。',
   'Protected: external send': '受保护：对外发送',
   'Protected: delete': '受保护：删除',
   'Protected: payment': '受保护：付款',
