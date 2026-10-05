@@ -32,7 +32,7 @@ import { buildTimeline } from '@/stores/sessions/timeline';
 import { BotArtifacts } from './BotArtifacts';
 import { phoneChatHost } from './chatHost';
 import type { ConnState, SessionView } from './client';
-import { compressImage } from './image';
+import { compressWithin, imageBudget } from './image';
 import { appendEchoMessages, type QueueSendEcho } from './queueSendEcho';
 import { readOnlyBanner } from './readOnly';
 import { SessionStatsLine } from './SessionStatsLine';
@@ -245,9 +245,10 @@ export function ChatScreen(props: Props) {
 
   const send = async (text: string, images: AttachedImage[]) => {
     // 手机拍照动辄数 MB，压到单帧上限内再发
+    const budget = imageBudget(images.length);
     const compressed: AttachedImage[] = [];
     for (const image of images) {
-      compressed.push(await compressImageIfNeeded(image));
+      compressed.push(await compressImageIfNeeded(image, budget));
     }
     props.onSend(text, compressed);
     timelineRef.current?.scrollToBottom();
@@ -491,9 +492,9 @@ function tabClass(active: boolean): string {
   );
 }
 
-/** Composer 已把图片读成 base64，这里只在超限时再压一轮 */
-async function compressImageIfNeeded(image: AttachedImage): Promise<AttachedImage> {
-  if (image.data.length * 0.75 <= 700_000) return image;
+/** Composer 已把图片读成 base64，这里只在超出本张预算（整帧按张数均分）时再压一轮 */
+async function compressImageIfNeeded(image: AttachedImage, budget: number): Promise<AttachedImage> {
+  if (image.data.length * 0.75 <= budget) return image;
   const blob = await (await fetch(`data:${image.mimeType};base64,${image.data}`)).blob();
-  return compressImage(new File([blob], 'image', { type: image.mimeType }));
+  return compressWithin(new File([blob], 'image', { type: image.mimeType }), budget);
 }

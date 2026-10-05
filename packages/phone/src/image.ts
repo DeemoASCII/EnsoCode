@@ -30,16 +30,21 @@ export async function compressImage(
   throw new Error('图片太大，请换一张更小的图');
 }
 
-/** 一次发多张时整帧仍须在中继上限内：按张数均分预算，压不下再缩小长边 */
-export async function compressImages(files: readonly File[]): Promise<AttachedImage[]> {
-  const budget = Math.floor(MAX_BYTES / Math.max(1, files.length));
-  const out: AttachedImage[] = [];
-  for (const file of files) {
-    try {
-      out.push(await compressImage(file, budget));
-    } catch {
-      out.push(await compressImage(file, budget, 1024));
-    }
+/** 一次发多张时整帧仍须在中继上限内：每张的预算 */
+export const imageBudget = (count: number): number => Math.floor(MAX_BYTES / Math.max(1, count));
+
+/** 压到预算内，压不下再缩小长边 */
+export async function compressWithin(file: File, budget: number): Promise<AttachedImage> {
+  try {
+    return await compressImage(file, budget);
+  } catch {
+    return compressImage(file, budget, 1024);
   }
+}
+
+export async function compressImages(files: readonly File[]): Promise<AttachedImage[]> {
+  const budget = imageBudget(files.length);
+  const out: AttachedImage[] = [];
+  for (const file of files) out.push(await compressWithin(file, budget));
   return out;
 }
