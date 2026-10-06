@@ -25,6 +25,8 @@ import {
   Laptop,
   MessageSquarePlus,
   Palette,
+  PanelLeftClose,
+  PanelLeftOpen,
   Pencil,
   Pin,
   Plus,
@@ -84,6 +86,10 @@ interface Props {
   open: boolean;
   /** 大屏横屏：左栏常驻布局，不渲染遮罩、无关闭按钮，onClose 由调用方保持空操作 */
   docked?: boolean;
+  /** 当前窗口满足常驻条件：显示 常驻/折叠 切换入口 */
+  pinnable?: boolean;
+  /** 切换 常驻/折叠；调用方负责持久化 */
+  onTogglePinned?(): void;
   projects: ProjectEntry[];
   groups?: ProjectGroupEntry[];
   catalog: CatalogEntry[];
@@ -121,6 +127,8 @@ interface Props {
 export function SessionDrawer({
   open,
   docked = false,
+  pinnable = false,
+  onTogglePinned,
   projects,
   groups = [],
   catalog,
@@ -284,14 +292,38 @@ export function SessionDrawer({
           ) : (
             <span className="font-medium text-sm">项目</span>
           )}
-          {!docked && (
-            <button
-              type="button"
-              onClick={onClose}
-              className="rounded-md p-1 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-            >
-              <X className="h-4 w-4" />
-            </button>
+          {docked ? (
+            pinnable && onTogglePinned ? (
+              <button
+                type="button"
+                onClick={onTogglePinned}
+                aria-label="收起侧栏"
+                className="rounded-md p-1 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+              >
+                <PanelLeftClose className="h-4 w-4" />
+              </button>
+            ) : null
+          ) : (
+            <span className="flex items-center">
+              {pinnable && onTogglePinned && (
+                <button
+                  type="button"
+                  onClick={onTogglePinned}
+                  aria-label="固定侧栏"
+                  className="rounded-md p-1 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                >
+                  <PanelLeftOpen className="h-4 w-4" />
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={onClose}
+                aria-label="关闭侧栏"
+                className="rounded-md p-1 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </span>
           )}
         </div>
         {!botActive && groups.length > 0 && (

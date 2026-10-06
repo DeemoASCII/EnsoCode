@@ -86,6 +86,7 @@ const STATE_LABEL: Record<ConnState, string> = {
 };
 
 const PUSH_ENABLED_KEY = 'enso-phone-push';
+const SIDEBAR_PINNED_KEY = 'enso-phone-sidebar-pinned';
 
 /** 私聊尚无会话（从未发过消息）时的空视图 */
 const EMPTY_VIEW = emptyGuestView();
@@ -139,6 +140,17 @@ export function App() {
   const [drawerOpen, setDrawerOpen] = useState(false);
   // iPad 横屏等宽窗口：会话列表常驻左栏，不走浮层抽屉、也不自动收起
   const wide = useMediaQuery(WIDE_LAYOUT_QUERY);
+  // 宽屏下用户可选侧栏常驻/折叠（折叠后走浮层抽屉）；选择持久化，默认常驻
+  const [sidebarPinned, setSidebarPinned] = useState(
+    () => localStorage.getItem(SIDEBAR_PINNED_KEY) !== 'off'
+  );
+  const docked = wide && sidebarPinned;
+  const toggleSidebarPinned = () => {
+    setSidebarPinned((prev) => {
+      localStorage.setItem(SIDEBAR_PINNED_KEY, prev ? 'off' : 'on');
+      return !prev;
+    });
+  };
   const [composing, setComposing] = useState(false);
   /** 从抽屉项目旁进入时预填；顶栏新建为 null */
   const [composeProjectId, setComposeProjectId] = useState<string | null>(null);
@@ -759,7 +771,13 @@ export function App() {
 
   // 宽屏常驻左栏下「关掉抽屉」是空操作；窄屏照旧收起。直接查 matchMedia，闭包里也拿得到旋转后的最新值
   const closeDrawer = () => {
-    if (!window.matchMedia(WIDE_LAYOUT_QUERY).matches) setDrawerOpen(false);
+    // 常驻左栏下「关掉抽屉」是空操作；折叠或窄屏照旧收起
+    if (
+      localStorage.getItem(SIDEBAR_PINNED_KEY) === 'off' ||
+      !window.matchMedia(WIDE_LAYOUT_QUERY).matches
+    ) {
+      setDrawerOpen(false);
+    }
   };
 
   const openDrawer = () => {
@@ -808,7 +826,7 @@ export function App() {
           deviceReadOnly={deviceReadOnly}
           readOnlyRejected={readOnlyRejected}
           onOpenDrawer={openDrawer}
-          drawerDocked={wide}
+          drawerDocked={docked}
           voice={voice}
           onLoadOlder={() => {
             const beforeSeq = timelines[chat.id]?.entries[0]?.seq;
@@ -869,7 +887,7 @@ export function App() {
         stateLabel={connectionLabel}
         syncing={syncing && Boolean(subscribedId)}
         onOpenDrawer={openDrawer}
-        drawerDocked={wide}
+        drawerDocked={docked}
         onNewSession={() => {}}
         canCreate={false}
         hasOlder={Boolean(
@@ -938,8 +956,10 @@ export function App() {
   return (
     <div className="flex h-full min-h-0">
       <SessionDrawer
-        open={wide || drawerOpen}
-        docked={wide}
+        open={docked || drawerOpen}
+        docked={docked}
+        pinnable={wide}
+        onTogglePinned={toggleSidebarPinned}
         projects={projects}
         groups={projectGroups}
         catalog={catalog}
@@ -1027,7 +1047,7 @@ export function App() {
             stateLabel={connectionLabel}
             syncing={syncing && Boolean(activeId)}
             onOpenDrawer={openDrawer}
-            drawerDocked={wide}
+            drawerDocked={docked}
             onNewSession={() => {
               setComposeProjectId(null);
               setComposing(true);
