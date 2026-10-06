@@ -14,7 +14,7 @@ import {
 import { parseCompactCommand } from '@shared/compactCommand';
 import { emptyGuestView } from '@shared/pair/guestProjection';
 import type { AttachedImage } from '@shared/types/agent';
-import { Smartphone } from 'lucide-react';
+import { PanelLeft, Smartphone } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { applyAppBadge, attentionBadgeCount } from './attentionBadge';
@@ -1026,12 +1026,33 @@ export function App() {
         }
       />
       <div className="flex h-full min-w-0 flex-1 flex-col">
+        {wide && !docked && !drawerOpen && (
+          // 宽屏折叠态的展开入口：左缘中部把手，不与各屏头部按钮冲突，任何界面都能唤回侧栏
+          <button
+            type="button"
+            onClick={openDrawer}
+            aria-label="打开会话列表"
+            className="fixed top-1/2 left-0 z-40 flex h-16 w-6 -translate-y-1/2 items-center justify-center rounded-r-lg border border-l-0 bg-background/90 text-muted-foreground shadow-sm backdrop-blur transition-colors hover:bg-accent hover:text-foreground"
+          >
+            <PanelLeft className="h-4.5 w-4.5" />
+          </button>
+        )}
         {botChat ? (
           <BotArtifactsContext.Provider value={{ port: artifactsPort, online: state === 'online' }}>
             {renderBotScreen(botChat)}
           </BotArtifactsContext.Provider>
         ) : botChatId ? (
-          <div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center">
+          <div className="relative flex h-full flex-col items-center justify-center gap-3 px-6 text-center">
+            {!docked && (
+              <button
+                type="button"
+                onClick={openDrawer}
+                aria-label="打开会话列表"
+                className="absolute top-2 left-2 flex h-9 w-9 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+              >
+                <PanelLeft className="h-4.5 w-4.5" />
+              </button>
+            )}
             <p>{botChatsReady ? '该 Bot 聊天已不存在或不可用' : '正在恢复 Bot 聊天…'}</p>
             <p className="text-muted-foreground text-sm">{connectionLabel}</p>
             <Button onClick={openDrawer}>选择聊天</Button>
