@@ -82,6 +82,8 @@ const PUSH_ERROR_TEXT: Record<PushFailureReason, string> = {
 
 interface Props {
   open: boolean;
+  /** 大屏横屏：左栏常驻布局，不渲染遮罩、无关闭按钮，onClose 由调用方保持空操作 */
+  docked?: boolean;
   projects: ProjectEntry[];
   groups?: ProjectGroupEntry[];
   catalog: CatalogEntry[];
@@ -118,6 +120,7 @@ interface Props {
 
 export function SessionDrawer({
   open,
+  docked = false,
   projects,
   groups = [],
   catalog,
@@ -228,21 +231,28 @@ export function SessionDrawer({
 
   return (
     <>
-      <button
-        type="button"
-        aria-label="关闭侧栏"
-        onClick={onClose}
-        // 关闭后要 visibility:hidden 而非只透明：iOS standalone 的状态栏底色采样页面顶边，
-        // 仅改 opacity 不触发重采，会把遮罩色（黑 40% 叠白 = #999）卡在状态栏直到重开
-        className={cn(
-          'fixed inset-0 z-40 bg-black/40 transition-[opacity,visibility] duration-200',
-          open ? 'visible opacity-100' : 'invisible pointer-events-none opacity-0'
-        )}
-      />
+      {!docked && (
+        <button
+          type="button"
+          aria-label="关闭侧栏"
+          onClick={onClose}
+          // 关闭后要 visibility:hidden 而非只透明：iOS standalone 的状态栏底色采样页面顶边，
+          // 仅改 opacity 不触发重采，会把遮罩色（黑 40% 叠白 = #999）卡在状态栏直到重开
+          className={cn(
+            'fixed inset-0 z-40 bg-black/40 transition-[opacity,visibility] duration-200',
+            open ? 'visible opacity-100' : 'invisible pointer-events-none opacity-0'
+          )}
+        />
+      )}
       <aside
         className={cn(
-          'fixed inset-y-0 left-0 z-50 flex w-[82vw] max-w-xs flex-col border-r bg-background transition-transform duration-200',
-          open ? 'translate-x-0' : '-translate-x-full'
+          'flex shrink-0 flex-col border-r bg-background',
+          docked
+            ? 'relative h-full w-72'
+            : cn(
+                'fixed inset-y-0 left-0 z-50 w-[82vw] max-w-xs transition-transform duration-200',
+                open ? 'translate-x-0' : '-translate-x-full'
+              )
         )}
       >
         <div
@@ -274,13 +284,15 @@ export function SessionDrawer({
           ) : (
             <span className="font-medium text-sm">项目</span>
           )}
-          <button
-            type="button"
-            onClick={onClose}
-            className="rounded-md p-1 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-          >
-            <X className="h-4 w-4" />
-          </button>
+          {!docked && (
+            <button
+              type="button"
+              onClick={onClose}
+              className="rounded-md p-1 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          )}
         </div>
         {!botActive && groups.length > 0 && (
           <div className="shrink-0 border-b px-3 pb-2">

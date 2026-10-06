@@ -56,6 +56,8 @@ interface Props {
   /** 有写操作刚被桌面以只读拦下 */
   readOnlyRejected?: boolean;
   onOpenDrawer(): void;
+  /** 大屏横屏侧栏已常驻：左上不再显示抽屉入口 */
+  drawerDocked?: boolean;
   onLoadOlder(): void;
   onJumpLatest?(): void;
   historyLoading?: boolean;
@@ -341,14 +343,18 @@ export function GroupChatScreen(props: Props) {
   return (
     <div className="phone-chat-root flex h-full min-h-0 flex-col">
       <header className="flex shrink-0 items-center gap-1 border-b bg-background px-2 py-2 pt-safe">
-        <button
-          type="button"
-          onClick={props.onOpenDrawer}
-          aria-label="打开会话列表"
-          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-        >
-          <PanelLeft className="h-4.5 w-4.5" />
-        </button>
+        {!props.drawerDocked ? (
+          <button
+            type="button"
+            onClick={props.onOpenDrawer}
+            aria-label="打开会话列表"
+            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+          >
+            <PanelLeft className="h-4.5 w-4.5" />
+          </button>
+        ) : (
+          <span className="h-9 w-9 shrink-0" />
+        )}
         <div className="min-w-0 flex-1 text-center">
           <p className="truncate font-medium text-sm">{chat.title || '群聊'}</p>
           <p className="truncate text-[11px] text-muted-foreground">

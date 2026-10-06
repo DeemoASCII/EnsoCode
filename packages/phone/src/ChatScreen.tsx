@@ -53,6 +53,8 @@ interface Props {
   syncing?: boolean;
   canCreate: boolean;
   onOpenDrawer(): void;
+  /** 大屏横屏侧栏已常驻：左上不再显示抽屉入口（bot.onBack 仍优先显示返回） */
+  drawerDocked?: boolean;
   onNewSession(): void;
   /** 当前模型标签；undefined = 子会话或目录未含模型信息，不显示切换入口 */
   modelLabel?: string;
@@ -258,18 +260,22 @@ export function ChatScreen(props: Props) {
     <ChatHostContext.Provider value={host}>
       <div className="phone-chat-root flex h-full min-h-0 flex-col">
         <header className="flex shrink-0 items-center gap-1 border-b bg-background px-2 py-2 pt-safe">
-          <button
-            type="button"
-            onClick={bot?.onBack ?? props.onOpenDrawer}
-            aria-label={bot?.onBack ? '返回群聊' : '打开会话列表'}
-            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-          >
-            {bot?.onBack ? (
-              <ChevronLeft className="h-4.5 w-4.5" />
-            ) : (
-              <PanelLeft className="h-4.5 w-4.5" />
-            )}
-          </button>
+          {bot?.onBack || !props.drawerDocked ? (
+            <button
+              type="button"
+              onClick={bot?.onBack ?? props.onOpenDrawer}
+              aria-label={bot?.onBack ? '返回群聊' : '打开会话列表'}
+              className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+            >
+              {bot?.onBack ? (
+                <ChevronLeft className="h-4.5 w-4.5" />
+              ) : (
+                <PanelLeft className="h-4.5 w-4.5" />
+              )}
+            </button>
+          ) : (
+            <span className="h-9 w-9 shrink-0" />
+          )}
           <div className="min-w-0 flex-1 text-center">
             <p className="flex min-w-0 items-center justify-center gap-1.5">
               {props.connState !== 'host-offline' && props.connState !== 'unauthorized' && (

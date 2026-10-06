@@ -29,6 +29,7 @@ import { formatOnlineConnectionLabel } from './connectionLabel';
 import { pickActive, removeDevice, renameDevice, upsertDevice } from './deviceList';
 import { GroupChatScreen, type MemberPending } from './GroupChatScreen';
 import { parseSessionFromSearch, parseSessionId, takeStashedSessionId } from './launchSession';
+import { useMediaQuery, WIDE_LAYOUT_QUERY } from './media';
 import { NewSessionSheet } from './NewSessionSheet';
 import { OutboxBar } from './OutboxBar';
 import { PairScreen } from './PairScreen';
@@ -136,6 +137,8 @@ export function App() {
   /** 马上发送：本地乐观上墙，等权威 user 消息到达再收掉 */
   const [queueEchoes, setQueueEchoes] = useState<QueueSendEcho[]>([]);
   const [drawerOpen, setDrawerOpen] = useState(false);
+  // iPad 横屏等宽窗口：会话列表常驻左栏，不走浮层抽屉、也不自动收起
+  const wide = useMediaQuery(WIDE_LAYOUT_QUERY);
   const [composing, setComposing] = useState(false);
   /** 从抽屉项目旁进入时预填；顶栏新建为 null */
   const [composeProjectId, setComposeProjectId] = useState<string | null>(null);
@@ -217,6 +220,7 @@ export function App() {
   const vapidKeyRef = useRef<string | null>(null);
 
   // SW 常驻注册（通知点击路由依赖它）+ 监听点击通知的切会话消息
+  // biome-ignore lint/correctness/useExhaustiveDependencies: SW 消息路由注册一次；内部判定用最新状态
   useEffect(() => {
     void registerServiceWorker();
     if (!('serviceWorker' in navigator)) return;
@@ -236,7 +240,7 @@ export function App() {
         setBotChatId(null);
         setActiveId(sessionId);
       }
-      setDrawerOpen(false);
+      closeDrawer();
     };
     navigator.serviceWorker.addEventListener('message', onMessage);
     return () => navigator.serviceWorker.removeEventListener('message', onMessage);
@@ -261,6 +265,7 @@ export function App() {
     };
   }, [catalog, state]);
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: 恢复会话按 urlSession 变化触发；closeDrawer 内自查最新布局
   useEffect(() => {
     if (urlSession) {
       void takeStashedSessionId();
@@ -271,7 +276,7 @@ export function App() {
       setBotChatId(null);
       setProcessId(null);
       setActiveId(id);
-      setDrawerOpen(false);
+      closeDrawer();
     });
   }, [urlSession]);
 
@@ -684,7 +689,7 @@ export function App() {
     // 旧连接状态不属于新桌面：乐观置回连接中，避免闪现 unauthorized/host-offline 旧屏
     setState('connecting');
     resetHostState(loadLastView(pairId));
-    setDrawerOpen(false);
+    closeDrawer();
   };
 
   const addDevice = (d: PairedDevice) => {
@@ -713,7 +718,7 @@ export function App() {
       setActiveDeviceId(fallback?.pairId ?? null);
       if (fallback) setState('connecting');
       resetHostState(loadLastView(fallback?.pairId ?? null));
-      if (!fallback) setDrawerOpen(false);
+      if (!fallback) closeDrawer();
     }
   };
 
@@ -751,6 +756,11 @@ export function App() {
   }
 
   const send = (command: Parameters<PairClient['send']>[0]) => clientRef.current?.send(command);
+
+  // 宽屏常驻左栏下「关掉抽屉」是空操作；窄屏照旧收起。直接查 matchMedia，闭包里也拿得到旋转后的最新值
+  const closeDrawer = () => {
+    if (!window.matchMedia(WIDE_LAYOUT_QUERY).matches) setDrawerOpen(false);
+  };
 
   const openDrawer = () => {
     setBotSegment(botEnabled && botChatId !== null);
@@ -798,6 +808,7 @@ export function App() {
           deviceReadOnly={deviceReadOnly}
           readOnlyRejected={readOnlyRejected}
           onOpenDrawer={openDrawer}
+          drawerDocked={wide}
           voice={voice}
           onLoadOlder={() => {
             const beforeSeq = timelines[chat.id]?.entries[0]?.seq;
@@ -858,6 +869,7 @@ export function App() {
         stateLabel={connectionLabel}
         syncing={syncing && Boolean(subscribedId)}
         onOpenDrawer={openDrawer}
+        drawerDocked={wide}
         onNewSession={() => {}}
         canCreate={false}
         hasOlder={Boolean(
@@ -924,92 +936,10 @@ export function App() {
   };
 
   return (
-    <>
-      {botChat ? (
-        <BotArtifactsContext.Provider value={{ port: artifactsPort, online: state === 'online' }}>
-          {renderBotScreen(botChat)}
-        </BotArtifactsContext.Provider>
-      ) : botChatId ? (
-        <div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center">
-          <p>{botChatsReady ? '该 Bot 聊天已不存在或不可用' : '正在恢复 Bot 聊天…'}</p>
-          <p className="text-muted-foreground text-sm">{connectionLabel}</p>
-          <Button onClick={openDrawer}>选择聊天</Button>
-        </div>
-      ) : (
-        <ChatScreen
-          sessionId={activeId}
-          title={entry?.title || (activeId ? '会话' : 'EnsoCode')}
-          projectName={entry?.projectName ?? ''}
-          cwd={entry?.cwd}
-          view={view}
-          connState={state}
-          stateLabel={connectionLabel}
-          syncing={syncing && Boolean(activeId)}
-          onOpenDrawer={openDrawer}
-          onNewSession={() => {
-            setComposeProjectId(null);
-            setComposing(true);
-          }}
-          canCreate={state === 'online' && projects.length > 0 && !deviceReadOnly}
-          modelLabel={state === 'online' ? modelLabel : undefined}
-          onOpenConfig={() => setConfigOpen(true)}
-          tabGroup={tabGroup}
-          onSelectTab={setActiveId}
-          hasOlder={Boolean(
-            activeId && view && view.messages.size > 0 && Math.min(...view.messages.keys()) > 0
-          )}
-          historyLoading={Boolean(activeId && historyPending.has(activeId))}
-          onLoadOlder={() => activeId && clientRef.current?.requestHistory(activeId)}
-          voice={voice}
-          queued={withoutQueuedIds(entry?.queued, queueEchoes, activeId ?? '')}
-          echoes={queueEchoes}
-          goal={entry?.goal}
-          context={entry?.context}
-          usageTotals={entry?.usageTotals}
-          slashCommands={entry?.slashCommands}
-          deviceReadOnly={deviceReadOnly}
-          readOnlyRejected={readOnlyRejected}
-          onSend={(text, images) => {
-            if (!activeId) return;
-            const compact = parseCompactCommand(text);
-            if (compact) {
-              send({
-                type: 'compact',
-                sessionId: activeId,
-                ...(compact.instructions ? { instructions: compact.instructions } : {}),
-              });
-              return;
-            }
-            const goalMatch = /^\/goal(?:\s+([\s\S]+))?$/.exec(text.trim());
-            if (goalMatch) {
-              const arg = goalMatch[1]?.trim();
-              if (!arg) return;
-              if (arg === 'clear') send({ type: 'goal-clear', sessionId: activeId });
-              else if (arg === 'pause') send({ type: 'goal-pause', sessionId: activeId });
-              else if (arg === 'resume') send({ type: 'goal-resume', sessionId: activeId });
-              else send({ type: 'goal-set', sessionId: activeId, text: arg });
-              return;
-            }
-            // 与桌面同语义：轮次进行中先入队（可编辑/删除/立即发送/打断并发送）
-            send({
-              type: view?.status === 'running' ? 'enqueue' : 'prompt',
-              sessionId: activeId,
-              text,
-              ...(images.length ? { images } : {}),
-            });
-          }}
-          onAbort={() => activeId && send({ type: 'abort', sessionId: activeId })}
-          onApproval={(requestId, decision) =>
-            activeId && send({ type: 'approval-respond', sessionId: activeId, requestId, decision })
-          }
-          onAsk={(requestId, answer) =>
-            activeId && send({ type: 'ask-respond', sessionId: activeId, requestId, answer })
-          }
-        />
-      )}
-
+    <div className="flex h-full min-h-0">
       <SessionDrawer
-        open={drawerOpen}
+        open={wide || drawerOpen}
+        docked={wide}
         projects={projects}
         groups={projectGroups}
         catalog={catalog}
@@ -1020,15 +950,15 @@ export function App() {
         activeDevicePairId={device.pairId}
         connected={state === 'online'}
         connectionLabel={connectionLabel}
-        onClose={() => setDrawerOpen(false)}
+        onClose={() => closeDrawer()}
         onSelect={(id) => {
           setBotChatId(null);
           setProcessId(null);
           setActiveId(id);
-          setDrawerOpen(false);
+          closeDrawer();
         }}
         onNewConversation={(projectId) => {
-          setDrawerOpen(false);
+          closeDrawer();
           setComposeProjectId(projectId);
           setComposing(true);
         }}
@@ -1040,7 +970,7 @@ export function App() {
         onTogglePush={(next) => void togglePush(next)}
         onSwitchDevice={switchDevice}
         onAddDevice={() => {
-          setDrawerOpen(false);
+          closeDrawer();
           setAdding(true);
         }}
         onRenameDevice={handleRename}
@@ -1067,7 +997,7 @@ export function App() {
                       setBotChatId(chatId);
                       setProcessId(null);
                       setBotNotice(null);
-                      setDrawerOpen(false);
+                      closeDrawer();
                     }}
                   />
                 ),
@@ -1075,48 +1005,134 @@ export function App() {
             : undefined
         }
       />
+      <div className="flex h-full min-w-0 flex-1 flex-col">
+        {botChat ? (
+          <BotArtifactsContext.Provider value={{ port: artifactsPort, online: state === 'online' }}>
+            {renderBotScreen(botChat)}
+          </BotArtifactsContext.Provider>
+        ) : botChatId ? (
+          <div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center">
+            <p>{botChatsReady ? '该 Bot 聊天已不存在或不可用' : '正在恢复 Bot 聊天…'}</p>
+            <p className="text-muted-foreground text-sm">{connectionLabel}</p>
+            <Button onClick={openDrawer}>选择聊天</Button>
+          </div>
+        ) : (
+          <ChatScreen
+            sessionId={activeId}
+            title={entry?.title || (activeId ? '会话' : 'EnsoCode')}
+            projectName={entry?.projectName ?? ''}
+            cwd={entry?.cwd}
+            view={view}
+            connState={state}
+            stateLabel={connectionLabel}
+            syncing={syncing && Boolean(activeId)}
+            onOpenDrawer={openDrawer}
+            drawerDocked={wide}
+            onNewSession={() => {
+              setComposeProjectId(null);
+              setComposing(true);
+            }}
+            canCreate={state === 'online' && projects.length > 0 && !deviceReadOnly}
+            modelLabel={state === 'online' ? modelLabel : undefined}
+            onOpenConfig={() => setConfigOpen(true)}
+            tabGroup={tabGroup}
+            onSelectTab={setActiveId}
+            hasOlder={Boolean(
+              activeId && view && view.messages.size > 0 && Math.min(...view.messages.keys()) > 0
+            )}
+            historyLoading={Boolean(activeId && historyPending.has(activeId))}
+            onLoadOlder={() => activeId && clientRef.current?.requestHistory(activeId)}
+            voice={voice}
+            queued={withoutQueuedIds(entry?.queued, queueEchoes, activeId ?? '')}
+            echoes={queueEchoes}
+            goal={entry?.goal}
+            context={entry?.context}
+            usageTotals={entry?.usageTotals}
+            slashCommands={entry?.slashCommands}
+            deviceReadOnly={deviceReadOnly}
+            readOnlyRejected={readOnlyRejected}
+            onSend={(text, images) => {
+              if (!activeId) return;
+              const compact = parseCompactCommand(text);
+              if (compact) {
+                send({
+                  type: 'compact',
+                  sessionId: activeId,
+                  ...(compact.instructions ? { instructions: compact.instructions } : {}),
+                });
+                return;
+              }
+              const goalMatch = /^\/goal(?:\s+([\s\S]+))?$/.exec(text.trim());
+              if (goalMatch) {
+                const arg = goalMatch[1]?.trim();
+                if (!arg) return;
+                if (arg === 'clear') send({ type: 'goal-clear', sessionId: activeId });
+                else if (arg === 'pause') send({ type: 'goal-pause', sessionId: activeId });
+                else if (arg === 'resume') send({ type: 'goal-resume', sessionId: activeId });
+                else send({ type: 'goal-set', sessionId: activeId, text: arg });
+                return;
+              }
+              // 与桌面同语义：轮次进行中先入队（可编辑/删除/立即发送/打断并发送）
+              send({
+                type: view?.status === 'running' ? 'enqueue' : 'prompt',
+                sessionId: activeId,
+                text,
+                ...(images.length ? { images } : {}),
+              });
+            }}
+            onAbort={() => activeId && send({ type: 'abort', sessionId: activeId })}
+            onApproval={(requestId, decision) =>
+              activeId &&
+              send({ type: 'approval-respond', sessionId: activeId, requestId, decision })
+            }
+            onAsk={(requestId, answer) =>
+              activeId && send({ type: 'ask-respond', sessionId: activeId, requestId, answer })
+            }
+          />
+        )}
 
-      <NewSessionSheet
-        open={composing && !deviceReadOnly}
-        projects={projects}
-        providers={providers}
-        preferredProjectId={composeProjectId}
-        onClose={() => {
-          setComposing(false);
-          setComposeProjectId(null);
-        }}
-        onCreate={(req) => {
-          const sessionId = crypto.randomUUID();
-          send({ type: 'spawn', sessionId, ...req });
-          freshIdsRef.current.add(sessionId);
-          setComposing(false);
-          setComposeProjectId(null);
-          setBotChatId(null);
-          setProcessId(null);
-          setActiveId(sessionId);
-        }}
-      />
-
-      {configurable && activeId && !deviceReadOnly && (
-        <SessionConfigSheet
-          open={configOpen}
+        <NewSessionSheet
+          open={composing && !deviceReadOnly}
+          projects={projects}
           providers={providers}
-          config={{
-            providerId: entry.providerId,
-            modelId: entry.modelId,
-            reasoningEnabled: entry.reasoningEnabled,
-            thinkingLevel: entry.thinkingLevel,
+          preferredProjectId={composeProjectId}
+          onClose={() => {
+            setComposing(false);
+            setComposeProjectId(null);
           }}
-          onClose={() => setConfigOpen(false)}
-          onSetModel={(providerId, modelId) =>
-            send({ type: 'set-model', sessionId: activeId, providerId, modelId })
-          }
-          onSetReasoning={(enabled) =>
-            send({ type: 'set-reasoning', sessionId: activeId, enabled })
-          }
-          onSetThinking={(level) => send({ type: 'set-thinking', sessionId: activeId, level })}
+          onCreate={(req) => {
+            const sessionId = crypto.randomUUID();
+            send({ type: 'spawn', sessionId, ...req });
+            freshIdsRef.current.add(sessionId);
+            setComposing(false);
+            setComposeProjectId(null);
+            setBotChatId(null);
+            setProcessId(null);
+            setActiveId(sessionId);
+          }}
         />
-      )}
-    </>
+
+        {configurable && activeId && !deviceReadOnly && (
+          <SessionConfigSheet
+            open={configOpen}
+            providers={providers}
+            config={{
+              providerId: entry.providerId,
+              modelId: entry.modelId,
+              reasoningEnabled: entry.reasoningEnabled,
+              thinkingLevel: entry.thinkingLevel,
+            }}
+            onClose={() => setConfigOpen(false)}
+            onSetModel={(providerId, modelId) =>
+              send({ type: 'set-model', sessionId: activeId, providerId, modelId })
+            }
+            onSetReasoning={(enabled) =>
+              send({ type: 'set-reasoning', sessionId: activeId, enabled })
+            }
+            onSetThinking={(level) => send({ type: 'set-thinking', sessionId: activeId, level })}
+          />
+        )}
+      </div>
+    </div>
   );
 }
