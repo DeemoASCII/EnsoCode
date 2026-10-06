@@ -541,7 +541,8 @@ export function GroupChatScreen(props: Props) {
               <ImagePlus className="h-4.5 w-4.5" />
             </button>
             {props.voice && (
-              <span className="flex h-8 w-8 shrink-0 items-center justify-center [&>div>button]:h-8 [&>div>button]:w-8 [&>div>button]:rounded-full">
+              // 录音中按钮展开成电平条＋停止＋取消，宽度自适应，不固定 8 宽以免压住输入框
+              <span className="flex h-8 shrink-0 items-center justify-center [&>div>button]:h-8 [&>div>button]:min-w-8 [&>div>button]:rounded-full">
                 <VoiceInputButton
                   startSession={props.voice}
                   disabled={sending}
