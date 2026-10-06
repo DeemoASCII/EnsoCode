@@ -17,5 +17,7 @@ export function useMediaQuery(query: string): boolean {
   );
 }
 
-/** iPad 横屏 / 宽窗口：会话列表停靠在左侧常驻，不再盖浮层抽屉 */
-export const WIDE_LAYOUT_QUERY = '(min-width: 900px) and (orientation: landscape)';
+// iPad 横屏 / 宽窗口：会话列表停靠在左侧常驻，不再盖浮层抽屉。
+// 只用宽度阈值：orientation 在 iPad standalone PWA 启动时会先报 portrait 再纠正，
+// 会造成常驻栏闪一下又消失；手机/平板竖屏宽都 <900px，不会误命中
+export const WIDE_LAYOUT_QUERY = '(min-width: 900px)';
