@@ -16,6 +16,13 @@ describe('nativeSearchKindFor', () => {
     expect(nativeSearchKindFor('google-antigravity', '')).toBe('antigravity');
   });
 
+  it('antigravity provider 注册进 pi runtime 后模型带 -cca 后缀的 api 标识（ANTIGRAVITY_API_ID）', () => {
+    // pi composeModelProvider.extensionModelFromDefinition 会用 provider config 的 api 给模型盖戳，
+    // worker modelRegistry 里 Antigravity 模型的 api 实际是 'google-antigravity-cca'；
+    // 分类器必须认这个 id，否则链首候选被「no native web search support」静默跳过、请求都发不出去。
+    expect(nativeSearchKindFor('google-antigravity-cca', '')).toBe('antigravity');
+  });
+
   it('openai-completions 仅官方 xAI 主机走 responses；中转与未知 api 无原生能力', () => {
     expect(nativeSearchKindFor('openai-completions', 'https://api.x.ai/v1')).toBe('responses');
     expect(nativeSearchKindFor('openai-completions', 'https://api.x.ai.evil.com')).toBeUndefined();

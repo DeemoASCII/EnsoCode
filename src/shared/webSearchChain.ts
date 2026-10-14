@@ -45,6 +45,11 @@ export function nativeSearchKindFor(api: string, baseUrl: string): NativeSearchK
     case 'google-generative-ai':
       return 'gemini';
     case 'google-antigravity':
+    // antigravity.ts 的 ANTIGRAVITY_API_ID：provider 注册进 pi runtime 后，
+    // composeModelProvider 会用 config.api 给每个模型盖戳，registry 里 Antigravity
+    // 模型实际携带的是带 -cca 后缀的 id。漏认会被「no native web search support」
+    // 静默跳过——请求都发不出去。
+    case 'google-antigravity-cca':
       return 'antigravity';
     case 'openai-completions':
       // cli-chat-proxy.grok.com 与其它中转不走这条路径

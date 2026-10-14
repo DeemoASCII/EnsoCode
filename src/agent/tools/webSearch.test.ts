@@ -637,4 +637,26 @@ describe('antigravity grounding 搜索', () => {
     expect(notes.join('\n')).toMatch(/过期|expired/i);
     expect(fetch).toHaveBeenCalledTimes(1);
   });
+
+  it('registry 物化的 Antigravity 候选（api=google-antigravity-cca）被识别为原生搜索', async () => {
+    // 回归：worker modelRegistry 里 Antigravity 模型经 pi composeModelProvider 盖戳后
+    // api = 'google-antigravity-cca'（ANTIGRAVITY_API_ID），不是裸 'google-antigravity'。
+    // 分类器认不出时候选被「no native web search support」跳过，请求根本发不出去。
+    const registryModel: SearchModel = {
+      provider: 'google-antigravity',
+      api: 'google-antigravity-cca',
+      baseUrl: 'https://daily-cloudcode-pa.googleapis.com/',
+      id: 'gemini-3.8-flash-high',
+    };
+    const fetch = vi.fn(async () => agSse());
+    const { outcome, notes } = await webSearch(
+      'node',
+      { candidates: [registryModel], auth: agAuth },
+      { fetch, unsupported: new Set() }
+    );
+    expect(outcome).toMatchObject({ source: 'antigravity', answer: 'AG answer.' });
+    expect(notes.join('\n')).not.toMatch(/no native web search support/);
+    const url = urlOf(fetch.mock.calls[0]);
+    expect(url).toMatch(/cloudcode-pa.*\/v1internal:streamGenerateContent\?alt=sse/);
+  });
 });
