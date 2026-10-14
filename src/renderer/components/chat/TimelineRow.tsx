@@ -2,6 +2,7 @@ import { splitChatReferences } from '@shared/bots/composerRefs';
 import { parseBotInjectedMessage } from '@shared/bots/injectedMessage';
 import { stripBotNotesUpdate } from '@shared/bots/notes';
 import { isBtwIsolationPrompt } from '@shared/btw';
+import { toLocalImageUrl } from '@shared/localImage';
 import { type PlanNoteKind, parsePlanMessage, splitPlanPrefix } from '@shared/planMode';
 import type {
   AgentRunProgress,
@@ -182,6 +183,7 @@ function itemEqual(prev: TimelineRowProps, next: TimelineRowProps): boolean {
         a.edits === b.edits &&
         a.writeContent === b.writeContent &&
         a.fileChanges === b.fileChanges &&
+        a.imagePath === b.imagePath &&
         a.todos === b.todos &&
         a.durationMs === b.durationMs &&
         a.startedAt === b.startedAt &&
@@ -1795,6 +1797,22 @@ function SandboxOutput({
   );
 }
 
+/** read 图片：按原文件渲染，限制最大边，点开看全图。加载失败时退回文本详情 */
+export function ReadImagePreview({ path, fallback }: { path: string; fallback: ReactNode }) {
+  const [failed, setFailed] = useState(false);
+  if (failed) return fallback;
+  return (
+    <div data-slot="read-image" className="w-full min-w-0 px-3 py-3">
+      <ZoomableImage
+        src={toLocalImageUrl(path)}
+        onError={() => setFailed(true)}
+        frameClassName="block w-full"
+        className="mx-auto block max-h-80 max-w-full rounded-md bg-muted/40 object-contain"
+      />
+    </div>
+  );
+}
+
 /** 单行工具摘要：状态点/图标 + 工具名 + 参数摘要；edit 展开为 diff,write 展开为写入内容,其余为输出 */
 function ToolRow({ item }: { item: Extract<TimelineItem, { kind: 'tool' }> }) {
   const { t } = useI18n();
@@ -1808,6 +1826,7 @@ function ToolRow({ item }: { item: Extract<TimelineItem, { kind: 'tool' }> }) {
   const sandbox = item.sandbox ?? null;
   // 消息类工具展开显示发出的正文（投递回执已在 timeline 剥掉）；出错时只显示错误输出
   const sentMessage = item.state === 'error' ? null : item.sentMessage;
+  const hasImage = Boolean(item.imagePath) && item.state !== 'error';
   const labelKey = TOOL_LABEL_KEYS[item.name];
   const mcp = parseMcpToolName(item.name);
   // 子代理按 id 指代的操作：动作词在前，长标题截断时动作仍可见
@@ -1823,11 +1842,12 @@ function ToolRow({ item }: { item: Extract<TimelineItem, { kind: 'tool' }> }) {
   const hasBody = Boolean(item.output || item.source || sentMessage || item.ask);
   // 子代理等待行：运行中可展开看在等的子代理各自在干什么
   const waitProgress = item.state === 'running' && item.waiting === 'subagent' && !host;
-  const expandable = hasDiff || hasWrite || hasFileChanges || hasBody || waitProgress;
+  const expandable = hasDiff || hasWrite || hasFileChanges || hasBody || waitProgress || hasImage;
   // edit 的 diff 与 write 的内容只在本轮直播（running）且开启 expandLiveEdits 时默认展开；
   // 历史会话挂载时全部折叠——否则切会话时视口内成排 FileDiff 同步解析+高亮，
   // 主线程阻塞几秒白屏
-  const autoExpand = expandLiveEdits && (hasDiff || hasWrite) && item.state === 'running';
+  const autoExpand =
+    expandLiveEdits && (hasDiff || hasWrite || hasImage) && item.state === 'running';
   const [expanded, setExpanded] = useState(autoExpand);
   const memoryHits =
     expanded && item.name === 'memory_search' ? parseMemorySearchHits(item.output) : null;
@@ -1993,12 +2013,18 @@ function ToolRow({ item }: { item: Extract<TimelineItem, { kind: 'tool' }> }) {
               <ReadFileView path={item.summary} contents={item.writeContent} />
             </ToolContentScroller>
           )}
-          {!hasDiff && !hasWrite && !hasFileChanges && hasBody && (
+          {!hasDiff && !hasWrite && !hasFileChanges && (hasBody || hasImage) && (
             <ToolContentScroller follow={item.state === 'running'}>
               {isSandboxTool(item.name) ? (
                 <SandboxOutput source={item.source} output={item.output} view={sandbox} />
               ) : item.name === 'bash' ? (
                 <TerminalOutput command={item.summary} output={item.output ?? ''} />
+              ) : item.name === 'read' && hasImage && item.imagePath ? (
+                <ReadImagePreview
+                  key={item.imagePath}
+                  path={item.imagePath}
+                  fallback={<ReadFileView path={item.summary} contents={item.output ?? ''} />}
+                />
               ) : item.name === 'read' ? (
                 <ReadFileView path={item.summary} contents={item.output ?? ''} />
               ) : item.name === 'subagent' &&

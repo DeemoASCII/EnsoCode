@@ -1,3 +1,4 @@
+import { IMAGE_EXTENSIONS, mediaExtension } from '@shared/localImage';
 import { firstProgram, isReadOnlyCommand } from '@shared/readOnlyCommand';
 import type { RtkToolStats } from '@shared/rtk';
 import { nestedToolCallParent } from '@shared/toolCallId';
@@ -63,6 +64,8 @@ export type TimelineItem =
       summary: string;
       output: string | null;
       state: 'running' | 'reviewing' | 'ok' | 'error';
+      /** read 到图片时的绝对路径，展开后按原文件渲染（含 svg / 动图）；其它缺省 */
+      imagePath?: string;
       /** edit 工具的替换块，用于渲染 diff；非 edit 为 null */
       edits: EditBlock[] | null;
       /** write 工具写入的文件内容,展开即可查看;非 write 为 null */
@@ -237,6 +240,38 @@ export function toProjectRelativePath(value: string, cwd?: string): string {
   const prefix = root.endsWith('/') ? root : `${root}/`;
   if (posixValue.startsWith(prefix)) return posixValue.slice(prefix.length);
   return posixValue === value ? value : posixValue;
+}
+
+const IMAGE_EXTENSION_SET = new Set<string>(IMAGE_EXTENSIONS);
+
+function isAbsolutePath(value: string): boolean {
+  return value.startsWith('/') || /^[A-Za-z]:[\\/]/.test(value);
+}
+
+/**
+ * read 的目标若是图片，返回可交给 local-image:// 的绝对路径。
+ * 用原文件而不是工具结果里的文本/缩放后的附件，svg 和动图才能原样播放。
+ * 相对路径没有 cwd 时无法定位，返回 null。
+ */
+export function readImagePreviewPath(args: unknown, cwd?: string): string | null {
+  if (!args || typeof args !== 'object') return null;
+  const record = args as Record<string, unknown>;
+  let raw = '';
+  for (const key of ['path', 'file_path'] as const) {
+    const value = record[key];
+    if (typeof value === 'string' && value) {
+      raw = value;
+      break;
+    }
+  }
+  if (!raw) return null;
+  if (!IMAGE_EXTENSION_SET.has(mediaExtension(raw))) return null;
+  // UNC 会让主进程去连网络共享，不拿来做预览
+  if (raw.startsWith('\\\\') || raw.startsWith('//')) return null;
+  if (isAbsolutePath(raw)) return raw;
+  if (!cwd) return null;
+  const sep = cwd.includes('\\') && !cwd.includes('/') ? '\\' : '/';
+  return `${cwd.replace(/[\\/]+$/, '')}${sep}${raw.replace(/^[\\/]+/, '')}`;
 }
 
 function hashlinePathFromInput(input: unknown): string | undefined {
@@ -1106,6 +1141,10 @@ function buildMessageTimeline(
           const live = !result && running && messageIndex === lastTurnIndex;
           const liveCommand = live && (part.name === 'bash' || part.name === 'powershell');
           const waiting = live ? blockingWaitKind(part.name, part.arguments) : null;
+          const imagePath =
+            part.name === 'read' && !result?.isError
+              ? readImagePreviewPath(part.arguments, cwd)
+              : null;
           items.push({
             kind: 'tool',
             key,
@@ -1125,6 +1164,7 @@ function buildMessageTimeline(
             source: execSource,
             output: sent ? stripDeliveryReceipt(output) : asked ? asked.output : output,
             nestedPending: nestedPendingCount(part.id, pendingApprovals) || undefined,
+            ...(imagePath ? { imagePath } : {}),
             ...(sandboxTool ? { sandbox: sandboxView } : {}),
             state: result
               ? result.isError || sandboxView?.status === 'failed'
@@ -1731,7 +1771,7 @@ export function foldTimeline(
       continue;
     }
     const liveSegment = !compact && running && lastUserIndex >= 0 && i > lastUserIndex;
-    // 钉住的行不进组：edit 的 diff、write 的内容、todo 清单是核心产物。
+    // 钉住的行不进组：edit 的 diff、write 的内容、图片预览、todo 清单是核心产物。
     // compact 下 running 只读行进组（避免完成后从平铺跳进组头抽动）；
     // 非 compact 仍把 running 钉在组外，方便看此刻在跑什么。
     const pinned = (s: TimelineItem): boolean => {
@@ -1740,6 +1780,7 @@ export function foldTimeline(
         s.edits !== null ||
         s.writeContent ||
         s.fileChanges?.length ||
+        (s.imagePath && s.state !== 'error') ||
         s.name === 'todo' ||
         s.name === 'submit_plan'
       )

@@ -6,10 +6,13 @@ import { Z_INDEX } from '@/lib/z-index';
 interface ZoomableImageProps {
   src: string;
   className?: string;
+  /** 点击区域；需要把图片限制在父级宽度内时传 `block w-full` */
+  frameClassName?: string;
+  onError?: () => void;
 }
 
 /** 消息里的图片：点击全屏预览，点遮罩或 Esc 关闭 */
-export function ZoomableImage({ src, className }: ZoomableImageProps) {
+export function ZoomableImage({ src, className, frameClassName, onError }: ZoomableImageProps) {
   const [open, setOpen] = useState(false);
   useOverlayGuard(open);
 
@@ -24,8 +27,12 @@ export function ZoomableImage({ src, className }: ZoomableImageProps) {
 
   return (
     <>
-      <button type="button" onClick={() => setOpen(true)} className="cursor-zoom-in">
-        <img src={src} alt="" className={className} />
+      <button
+        type="button"
+        onClick={() => setOpen(true)}
+        className={cn('cursor-zoom-in', frameClassName)}
+      >
+        <img src={src} alt="" className={className} onError={onError} />
       </button>
       {open && (
         <button

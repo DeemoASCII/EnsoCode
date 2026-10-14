@@ -9,6 +9,7 @@ import {
   historyPageChrome,
   parseSandboxOutput,
   patchStreamingTimeline,
+  readImagePreviewPath,
   shouldAutoExpandAppliedFileChanges,
   shouldPrefetchOlderHistory,
   shouldShowToolOutputAfterFileChanges,
@@ -811,6 +812,74 @@ describe('buildTimeline', () => {
       output: 'file body',
       state: 'ok',
     });
+  });
+
+  it('read 图片（含 svg / 动图）把可预览的绝对路径带到工具行，文本和失败不带', () => {
+    expect(readImagePreviewPath({ path: '/tmp/a.png' })).toBe('/tmp/a.png');
+    expect(readImagePreviewPath({ path: '/tmp/icon.svg' })).toBe('/tmp/icon.svg');
+    expect(readImagePreviewPath({ path: '/tmp/anim.gif' })).toBe('/tmp/anim.gif');
+    expect(readImagePreviewPath({ path: '/tmp/anim.webp' })).toBe('/tmp/anim.webp');
+    expect(readImagePreviewPath({ path: 'assets/logo.svg' }, '/proj')).toBe(
+      '/proj/assets/logo.svg'
+    );
+    expect(readImagePreviewPath({ path: 'a.ts' }, '/proj')).toBeNull();
+    expect(readImagePreviewPath({ path: 'a.png' })).toBeNull();
+    expect(readImagePreviewPath({})).toBeNull();
+    expect(readImagePreviewPath({ path: 'C:\\a\\b.png' })).toBe('C:\\a\\b.png');
+    expect(readImagePreviewPath({ path: 'x.png' }, 'C:\\proj')).toBe('C:\\proj\\x.png');
+    expect(readImagePreviewPath({ path: '\\\\server\\share\\a.png' })).toBeNull();
+    expect(readImagePreviewPath({ path: '//server/share/a.png' })).toBeNull();
+    expect(readImagePreviewPath({ path: 1, file_path: '/tmp/a.webp' })).toBe('/tmp/a.webp');
+
+    const image = buildTimeline(
+      [
+        user('看图'),
+        {
+          role: 'assistant',
+          content: [{ type: 'toolCall', id: 'img', name: 'read', arguments: { path: 'shot.png' } }],
+        },
+        {
+          role: 'toolResult',
+          toolCallId: 'img',
+          toolName: 'read',
+          isError: false,
+          content: [{ type: 'text', text: 'Read image file [image/png]' }],
+        },
+      ],
+      false,
+      [],
+      '/proj'
+    );
+    expect(image[1]).toMatchObject({
+      kind: 'tool',
+      name: 'read',
+      imagePath: '/proj/shot.png',
+      output: 'Read image file [image/png]',
+    });
+
+    const failed = buildTimeline(
+      [
+        user('看图'),
+        {
+          role: 'assistant',
+          content: [
+            { type: 'toolCall', id: 'bad', name: 'read', arguments: { path: '/tmp/missing.png' } },
+          ],
+        },
+        {
+          role: 'toolResult',
+          toolCallId: 'bad',
+          toolName: 'read',
+          isError: true,
+          content: [{ type: 'text', text: 'ENOENT' }],
+        },
+      ],
+      false,
+      [],
+      '/proj'
+    );
+    expect(failed[1]).toMatchObject({ kind: 'tool', state: 'error' });
+    expect(failed[1]).not.toHaveProperty('imagePath');
   });
 
   it('把 toolResult 的 RTK 元数据完整带到对应工具行', () => {
@@ -2068,6 +2137,64 @@ describe('foldTimeline', () => {
     expect(group.stats).toEqual({ commands: 0, reads: 2, searches: 2, others: 0 });
     const expanded = foldTimeline(items, true, new Set([group.key]), { compact: true });
     expect(expanded.map((i) => i.key)).toEqual(['u0', group.key, 'a1', 'a2', 'a3', 'r']);
+  });
+
+  it('compact：图片 read 像文件改动一样留在组外，普通 read 仍进组', () => {
+    const image = {
+      ...toolItem('img', 'read'),
+      state: 'running',
+      imagePath: '/tmp/a.png',
+    } as TimelineItem;
+    const items = [
+      userItem('u0'),
+      toolItem('a1', 'read'),
+      toolItem('a2', 'grep'),
+      toolItem('a3', 'ls'),
+      image,
+    ];
+    const folded = foldTimeline(items, true, new Set(), { compact: true });
+    expect(folded.map((item) => item.kind)).toEqual(['user', 'tool-group', 'tool']);
+    expect(folded[2]).toMatchObject({ key: 'img', kind: 'tool' });
+    const done = foldTimeline(
+      [
+        userItem('u0'),
+        toolItem('a1', 'read'),
+        toolItem('a2', 'grep'),
+        toolItem('a3', 'read'),
+        { ...toolItem('img', 'read'), imagePath: '/tmp/a.png' } as TimelineItem,
+      ],
+      false,
+      new Set(),
+      { compact: true }
+    );
+    expect(done.map((item) => (item.kind === 'tool' ? item.key : item.kind))).toEqual([
+      'user',
+      'tool-group',
+      'img',
+    ]);
+  });
+
+  it('失败的图片 read 不钉在组外', () => {
+    const failed = {
+      ...toolItem('img', 'read'),
+      state: 'error',
+      imagePath: '/tmp/a.png',
+    } as TimelineItem;
+    const folded = foldTimeline(
+      [
+        userItem('u0'),
+        toolItem('a1', 'read'),
+        toolItem('a2', 'grep'),
+        toolItem('a3', 'ls'),
+        failed,
+      ],
+      false,
+      new Set(),
+      { compact: true }
+    );
+    expect(folded.map((item) => item.kind)).toEqual(['user', 'tool-group']);
+    const group = folded[1] as Extract<TimelineItem, { kind: 'tool-group' }>;
+    expect(group.children.map((item) => item.key)).toContain('img');
   });
 
   it('compact 关时 running 最后一轮仍平铺', () => {
